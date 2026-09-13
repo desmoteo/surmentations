@@ -327,6 +327,211 @@ flowchart LR
     P6 -.-> P7["Backlog (post-v1)"]
 ```
 
+## 5b. Physical-realism overhaul (2026-09-11)
+
+Feedback that the rendered results still looked unconvincing triggered a
+research pass (Codrops/Heartfelt rain-on-glass lineage, Garg & Nayar rain
+photometry, Koschmieder/Sakaridis fog, Hullin flare, Unreal/Unity dirt
+masks) and a substantial rewrite. The findings that mattered were mostly
+*physics errors*, not tuning:
+
+**Cross-cutting**
+
+- **Linear-light compositing** (`utils/photometry.py`). Scattering, flare and
+  bloom all add radiance, which only adds linearly; doing it on sRGB values
+  lifts mid-tones far too much. This alone was a large part of the "flat
+  white wash" look. Every atmosphere/lens effect now de-gammas, works in
+  linear light and re-encodes.
+- **Depth was being converted wrongly.** Depth Anything emits *disparity*
+  (~1/depth); the code did a **linear flip** (`1 - disparity`), which
+  compresses the far field so badly that everything past the mid-ground
+  collapses into one depth band — fog could then only ever be a flat wash.
+  Now reciprocated: `depth = 1/(disparity + offset)`. On the reference photo
+  this moved mean relative depth from 0.70 to 0.25, i.e. the scene is
+  correctly mostly *near* with a genuinely distant horizon.
+- **Resolution-independent sizing.** Size-like parameters are now fractions
+  of the image diagonal rather than pixels, since a given physical feature
+  subtends a fixed fraction of the field of view. Defaults tuned at one
+  resolution no longer break at another.
+
+**Water droplets** (the user's main reference: Codrops RainEffect /
+"Heartfelt"). Rewritten around three things that were backwards or missing:
+
+- The drop images an **inverted, demagnified** picture of the whole scene
+  (a droplet is a ~2R-focal-length lens), not a slightly warped copy of what
+  sits behind it.
+- **Focus was inverted.** A camera that resolves drops is focused on the
+  glass, so the *background* is out of focus and the *drops* are sharp. The
+  previous version blurred the drop interiors and kept the world sharp.
+- **The glass itself was missing**: real panes are fogged with thousands of
+  tiny droplets, big drops leave **trails** of shrinking remnants, and those
+  trails **wipe the mist clean** behind them. Added all three.
+- Non-overlap is still enforced, now across trail droplets too, with the
+  placement footprint inflated for gravity elongation (verified 0 violations
+  across seeds).
+
+**Rain.** Streak alpha was 10-50x too high. Garg & Nayar give
+`alpha = tau/T = drop_diameter/streak_length` (scale-invariant, so usable
+directly in pixels) — a few percent, not 30-60%. Streaks now take their
+radiance from the scene's **sky** rather than being white, which makes them
+contrast-dependent for free (invisible against bright sky, obvious against
+dark foliage). Also: beaded intensity profile from drop oscillation, near
+streaks **wider and dimmer** through defocus (was: brighter), and an
+auto-exposure renormalisation.
+
+Two real bugs found by measuring rather than eyeballing:
+- Streaks were drawn straight onto a shared layer with `cv2.line`, which
+  **overwrites**. In a dense field each streak erased its predecessors,
+  usually replacing them with a dimmer modulated value — the accumulated
+  rain collapsed to ~1/15 of what was drawn. Now rendered per-streak into a
+  local patch and alpha-composited.
+- A directional motion blur was applied *on top of* streaks that are already
+  motion smears, dividing their alpha by the kernel length.
+
+**Fog.** Wavelength-dependent extinction (`beta ~ lambda^-gamma`: thin haze
+goes cool/blue, dense fog stays neutral), forward-scatter blur (fog is a
+low-pass filter, not only a blend), and a sky cap so the sky keeps its
+gradient instead of collapsing to flat airlight.
+
+**Snow.** Added the atmospheric veil (the single strongest "it is snowing"
+cue; snow scatters ~7x rain at equal rate), sky-radiance compositing, and
+bokeh that is an **image of the aperture** — polygonal from the blade count,
+bright-rimmed from spherical aberration, and clipped into cat's-eye lemons
+off-axis by optical vignetting.
+
+**Dirt.** Was "paint a translucent brown blob". Dirt does not tint, it
+**scatters**: it now modulates a bright-pass of the scene through a wide
+heavy-tailed PSF, so it is near-invisible in flat light and blazes when
+backlit (verified by test), plus local contrast loss, wipe arcs and
+coffee-ring water spots.
+
+Still outstanding from the research: Hullin-style polygonal ghosts with
+per-ghost coating tints and FFT starbursts for the flare (only the
+linear-light fix landed), height-stratified fog, and Garg & Nayar's measured
+streak database.
+
+### Throughput benchmark (scripts/benchmark.py)
+
+Added a benchmark that times each transform split into parameter sampling
+(where depth estimation lands) and rendering, at several resolutions, and
+reports the depth-conditioned transforms both cold and with depth already
+cached. The split matters because depth is shared per `SharedDepthProvider`
+and keyed on array identity, so naively timing one array repeatedly reports a
+depth cost of ~zero.
+
+It immediately found two performance defects, both fixed:
+
+- **Dirt cost ~0.9 s/image at 1024px.** Its scatter PSF's widest Gaussian
+  reached sigma ~300px, so OpenCV built a **1825x1825 kernel**. A blur that
+  wide cannot carry detail finer than its own scale, so it is now computed on
+  a downsampled copy and scaled back: 946 ms -> 115 ms, and the golden-image
+  test still passes, confirming the result is visually identical.
+- **Rain streak patches were ~5x oversized.** The per-streak bounding box
+  reserved the streak's whole *length* as horizontal extent, when a
+  near-vertical streak needs only a few pixels of width plus the bend. Now
+  projected per axis: 567 ms -> 332 ms at 1024px.
+
+Remaining: rain is still the slowest at ~2.5 img/s at 1024px, dominated by a
+Python loop over thousands of streaks each issuing several OpenCV calls.
+Batching that is the obvious next optimisation if it becomes a bottleneck.
+
+### Fourth review pass — condensation and streak variety
+
+The transform's target is a **surveillance camera focused metres away**, not
+the Codrops demo's camera focused on the pane, and that distinction settles
+both remaining complaints:
+
+- **Mist was drawn as discrete droplets, which is impossible in this use
+  case.** A condensation film's droplets are orders of magnitude smaller
+  than the circle of confusion of a far-focused lens, so they can *never*
+  resolve as specks — only as a milky veil. Rendering them individually is
+  what made the spray look like uniform dots glued to the picture. Replaced
+  with a *coverage* field: low-frequency value noise thresholded into
+  irregular patches (condensation nucleates where the glass is coldest, so
+  it forms in patches with clear glass between), which then drives a lerp
+  toward a blurred, desaturated, brightened version of the scene. Patchy and
+  milky rather than granular and even, and the tracks wiped by sliding drops
+  still read because coverage goes to zero along them.
+- **Rain streaks were too uniform.** Length, width and — critically —
+  *defocus* are now drawn per streak rather than once per call, so a
+  near-focus drop lands as a thin, bright, crisp stroke and an off-focus one
+  as a wide, dim, soft smear. The first attempt added an independent blur on
+  top of the existing circle-of-confusion term, which double-counted the
+  same defocus and washed the field out; driving width, alpha *and* edge
+  softness from one per-streak `coc` fixes that and is what the physics
+  actually says.
+
+### Third review pass — INRIA cross-check and lens rework
+
+Cross-checked the rain photometry against the INRIA/astra-vision
+`rain-rendering` code (Tremblay et al.). It **confirms the model**: their
+drop radiance is `0.94 * avg_fov_lum + 0.06 * ambient_lum` (the same
+refraction/reflection split used here), and their blend weight is
+`length_opacity = d_avg / (length + d_avg)` — i.e. exactly the
+diameter-over-length alpha used in `streak_alpha`, just written with the
+`+d_avg` term that matters only when the streak is nearly as short as the
+drop is wide. Their defocus step also pads the drop with a
+`10*c` border *before* blurring, which is precisely the bug fixed below.
+
+- **Droplet border artifacts.** The defocus blur ran on a tight bounding
+  box, so the spread was truncated at the patch rectangle and every drop
+  near an edge picked up a hard rectangular cut. Now padded by `3*sigma`
+  (replicate for colour, zero for alpha) before blurring.
+- **Mist/spray was haze, not spray.** Blur-plus-lift can only ever produce
+  fog. The mist is now a *height field* whose gradient is used as a surface
+  normal to displace the sampling position — the Heartfelt/Codrops
+  normal-map trick — so each speck refracts like the tiny lens it is. That
+  gives the granular sparkle of real spray, and because the tracks wiped by
+  sliding drops have zero displacement, they finally read as clean.
+- **Soil was blowing out.** The dirt used an unbounded additive bright-pass
+  bloom, which *creates* light: over bright sky it saturated into flat white
+  discs that looked like lens flare. Replaced with an energy-conserving lerp
+  toward a normalised heavy-tailed scatter PSF, with highlights weighted up
+  *inside* the scattered term. Same "invisible in flat light, awful when
+  backlit" behaviour, but it physically cannot blow out.
+- **Flare ghosts are now aperture images.** Polygonal (one side per blade),
+  with a Fresnel-style bright rim and two damped inward ripples, drawn
+  per-channel at slightly different scales for the coating's wavelength-
+  dependent reflectance (chromatic fringing), at ~28% intensity since each
+  bounce loses all but a couple of percent. The crude two-line cross was
+  replaced by a real starburst with N spikes for an even blade count and 2N
+  for an odd one.
+- **Test gap closed.** Albumentations only *warns* about unknown constructor
+  arguments, so a preset naming a renamed parameter silently fell back to
+  defaults while the preset test still passed. The test now promotes that
+  warning to an error.
+
+### Second review pass (same day)
+
+Reviewing the rendered examples caught a **variable-shadowing bug that had
+silently broken rain entirely**: inside the per-streak loop the drop's width
+was assigned to a local named `width`, clobbering the *image* width, so from
+the second streak onward positions were drawn from `x ~ U(0, 13px)`. Every
+streak piled into a white band on the left edge and the rest of the frame
+got no rain at all. Renamed to `drop_width`. Worth remembering that the
+symptom looked like a *tuning* problem ("rain too faint"), and two rounds of
+parameter tuning went into it before measuring the actual streak coordinates
+showed the real cause.
+
+Also corrected in this pass:
+
+- **Snow flakes were sized from the scene depth map.** A falling flake is in
+  the air *in front of* the scene, so its distance is unrelated to whatever
+  is behind it; tying the two made flakes look pasted onto surfaces (big
+  over the near road, tiny over the distant sky). Each flake now samples its
+  own distance from a volume-uniform distribution — `d = (1 + u*(ratio^3-1))^(1/3)`,
+  size ~ 1/d — which yields the many-tiny-few-huge field real snowfall has.
+  Two tests now pin this: sizes follow the volume distribution, and flake
+  size is statistically independent of the depth behind it.
+- **Droplet focus model flipped to the camera case.** The Codrops look
+  (focused *on the glass*, background blurred) is right for an artistic
+  rain-on-window shot but wrong for a dashcam or surveillance camera, which
+  focuses on the distance: the scene stays sharp and the drops — sitting on
+  the front element — go soft. `background_blur_range` now defaults to 0 and
+  a new `droplet_defocus_range` softens the drops instead. The mist was also
+  changed from a whitening wash to a local scattering texture, so the tracks
+  wiped clean by sliding drops actually read.
+
 ## 6. Backlog (post-v1, documented not built)
 
 - **Optical/sensor artifacts**: chromatic aberration, vignetting, lens
@@ -375,18 +580,57 @@ flowchart LR
       contact-line darkening, gravity streaks
   - [x] unit tests (UV lookup in-bounds, alpha range)
   - [x] visual regression goldens
-  - [ ] qualitative comparison pass (needs a reference droplet-photo set —
-        deferred, not automatable without external data)
+  - [x] qualitative comparison pass — vs. a real CC-licensed condensation
+        macro photo (Wikimedia Commons). Framing doesn't match 1:1 (dense
+        macro condensation vs. our sparser lens droplets), but the optical
+        characteristics do: visible refraction/inversion of the background
+        through each droplet, a specular highlight, and rim darkening are
+        all present in both. Good match on rendering physics.
   - [x] doc sample images
+  - [x] **Realism pass (2026-09-11)**, prompted by comparing against the
+        team's earlier raindrop-on-lens generator
+        (github.com/waterviewsrl/weathermentations, itself derived from
+        Chia-Tse Chang's ROLE — github.com/ricky40403/ROLE): droplets now
+        (1) never overlap — positions are rejection-sampled against every
+        already-placed droplet's footprint with a mandatory gap, degrading
+        to fewer-than-requested droplets rather than allowing a collision
+        (verified: 0 overlap violations across 10 seeds at 40 droplets/call,
+        and a 60-on-a-100x100-canvas stress test places what fits without
+        hanging); (2) sample a **pre-blurred** copy of the source for the
+        refracted interior, not the sharp original — a droplet is a small,
+        imperfect lens, so what's visible through it should read as
+        softened; (3) have a stronger, wider contact-line rim so individual
+        droplets read as clearly separate blobs; (4) have a subtle
+        two-harmonic angular radius wobble so outlines aren't perfect
+        circles. The earlier repo's fisheye-warp trick
+        (`cv2.fisheye.undistortImage` on a background crop) was considered
+        but not adopted — our existing per-pixel Snell's-law derivation is
+        already physically grounded and gives comparable "wide, distorted
+        background" results; the blur/rim/non-overlap changes were the
+        higher-value takeaways.
 - [x] `DirtSoil` transform: noise blobs, defocus blur, tint/contrast
       compositing
   - [x] unit tests, goldens, doc images
-  - [ ] qualitative comparison pass (deferred, needs reference photos)
+  - [ ] qualitative comparison pass — **genuine gap**: no open-licensed
+        photo of a dirty/dusty camera lens was findable via web search
+        (results were cleaning how-tos, not photos). Only assessed against
+        photography-literature description of the phenomenon (heavily
+        defocused, low-contrast, semi-opaque smudge, since dirt near the
+        front element falls outside the depth of field) — no visual ground
+        truth was actually checked. Left open; would need a manually-shot
+        or manually-sourced reference to close properly.
 - [x] `SunFlare` transform: veiling glare + halo + ghost chain + optional
       diffraction streaks
   - [x] unit tests (ghost positions on source/center line), goldens,
         doc images
-  - [ ] qualitative comparison pass (deferred, needs reference photos)
+  - [x] qualitative comparison pass — vs. a real sun-flare photo through
+        trees (Wikimedia Commons). Strong structural match: halo ring, a
+        chain of colored ghost circles trailing along the source→center
+        line, and a diffraction cross were all present in both. Real photo
+        had warmer tones and more chromatic variety across ghosts (redder
+        halo, green/white/pink ghosts from stronger chromatic aberration)
+        vs. our cooler, more uniform tinting — a nice-to-have color
+        refinement for backlog, not a structural gap.
 
 ### Phase 2 — Depth pipeline
 - [x] `DepthEstimator` ABC
@@ -410,20 +654,49 @@ flowchart LR
   - [x] goldens (using a deterministic fake depth estimator so the
         compositing-math golden test runs without a GPU)
   - [x] doc images
-  - [ ] qualitative comparison pass vs. RESIDE samples (deferred, needs
-        external data). Spot-checked instead against a real photo (not
-        RESIDE): haze correctly appears only in the farther background,
-        the near subject stays clear.
+  - [x] qualitative comparison pass — RESIDE itself wasn't accessible (no
+        stable direct-download URL without an account/form), so compared
+        against a real foggy-road photo (Wikimedia Commons) instead,
+        rendered on a real clear road photo with matching depth structure
+        (foreground road → mid-ground guardrail/trees → distant mountains)
+        for a fair side-by-side. At the *default* `beta_range` (0.02-0.1)
+        the render under-shoots real fog's density — only mild haze on the
+        distant mountains, most of the frame stays high-contrast. Re-ran at
+        `beta=0.25` (still within the valid (0,2) bound, in severity-5
+        territory) and got a convincingly dense, near-total whiteout closely
+        matching the real photo's character. Verdict: the physical model is
+        correct and reaches realistic density when pushed; the *default*
+        range is deliberately tuned toward mild/diverse haze for
+        augmentation purposes rather than "photogenic dense fog" — a
+        legitimate design choice worth calling out to users, not a defect.
 
 ### Phase 4 — Rain
 - [x] streak rendering (length/width/blur by depth), rain-veil haze layer,
       optional ground-wetness pass (feathered transition, not a hard seam)
   - [x] unit tests (alpha/transmission range, veil monotonicity, zero-density
         identity, feathered-seam check), goldens, doc images
-  - [ ] qualitative comparison pass vs. Rain100/Raindrop samples (deferred,
-        needs external data). Spot-checked instead on a real photo and a
-        synthetic outdoor scene: streaks slant with wind angle, are denser/
-        larger near the camera and fade to haze in the distance.
+  - [x] qualitative comparison pass — Rain100/Raindrop weren't accessible
+        the same way RESIDE wasn't, so compared against a real falling-rain
+        photo (Wikimedia Commons, open garden in heavy rain) on the same
+        clear-road baseline used for fog. At default density (150-400)
+        streaks were correctly denser near the bottom (closer) and sparser
+        toward the top (farther, matching the depth-scaling design) but
+        visibly sparser overall than the real photo's fine, dense texture.
+        At `streak_density=900` (within the valid (0,2000) bound) +
+        `veil_beta=0.03`, the render closely matched the real photo's
+        texture and grayish cast. One real stylization gap noted: our
+        streaks are very straight/regular-looking, while real rain streaks
+        vary more in spacing/curvature from wind turbulence — reasonable v2
+        refinement, not blocking.
+  - [x] **Realism pass (2026-09-11)**: addressed the straight/regular-streak
+        gap directly. Each streak now gets its own random angle deviation
+        from the shared wind angle (`angle_jitter_range`) and a small
+        mid-streak perpendicular bend (`wobble_range`), rendered as a
+        2-segment polyline instead of a single straight `cv2.line` — so a
+        field of streaks no longer reads as a uniform line-hatch pattern.
+        Verified: streak angles are no longer all identical, and every
+        streak's angle stays within the configured jitter bound (unit
+        test); visually confirmed varied slants on the real traffic photo.
   - Bug caught during implementation, worth remembering: using
     `check_range_bounds` (designed for tuples) on a *scalar* float field
     doesn't raise a clean error — Albumentations' validation swallows it as
@@ -440,11 +713,32 @@ flowchart LR
       true physical accumulation model would need)
   - [x] unit tests (depth-scaled flake size, accumulation brightening,
         zero-density/zero-probability identities), goldens, doc images
-  - [ ] qualitative comparison pass (deferred, needs external reference
-        photos). Spot-checked instead on a synthetic outdoor scene: flakes
-        are visibly larger near the bottom (closer) than near the top
-        (farther); ground-accumulation brightening confirmed numerically
-        (a flat mid-gray ground band brightened from 90→175 at 0.5 strength).
+  - [x] qualitative comparison pass — vs. a real falling-snow photo among
+        trees (Wikimedia Commons), on the same clear-road baseline.
+        Confirms the depth-scaling direction is right (flakes visibly
+        larger near the bottom/closer than near the top/farther, matching
+        the earlier unit-test invariant), but real snow photos show much
+        more extreme near-camera bokeh — huge, very soft blurred discs from
+        shallow depth of field — than our render's more restrained
+        size/blur contrast; the ground-accumulation overlay is present but
+        subtle at default strength (confirmed numerically in Phase 5 that
+        it does brighten — 90→175 at 0.5 strength — just visually mild at
+        typical settings). This is, as expected, the furthest from
+        photographic realism of the three atmosphere effects — consistent
+        with the module docstring's own framing of accumulation as an
+        explicit heuristic, not a physical model. Backlog candidate: push
+        near-flake blur/size scaling harder to mimic real bokeh.
+  - [x] **Realism pass (2026-09-11)**: addressed the bokeh gap directly.
+        Flakes are no longer a hard circle + one global blur pass — each is
+        now its own soft radial sprite whose softness *and* translucency
+        (not just radius) scale with ``depth_factor`` via a new
+        `bokeh_strength_range` parameter: near flakes render as large,
+        soft, low-opacity discs (peak alpha and falloff power both
+        decrease with proximity, since defocused light spreads over more
+        area rather than staying solid), far flakes stay tight and crisp.
+        Visually confirmed against the real traffic photo: near-bottom
+        flakes now show the same large soft-disc character as the
+        real falling-snow reference photo used in the qualitative pass.
 
 Reused/promoted during this phase: `_directional_blur_kernel` and the
 feathered-band-blend pattern from rain.py were both needed again for snow,

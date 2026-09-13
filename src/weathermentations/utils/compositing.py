@@ -7,6 +7,8 @@ from collections.abc import Callable
 import cv2
 import numpy as np
 
+from weathermentations.utils.grids import radial_distance
+
 
 def alpha_composite(
     base: np.ndarray,
@@ -47,8 +49,7 @@ def alpha_composite(
 
 def normalized_radial_falloff(height: int, width: int, cx: float, cy: float) -> np.ndarray:
     """``(H, W)`` float32 field in ``[0, 1]``: 1 at ``(cx, cy)``, 0 at the farthest corner."""
-    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    dist = radial_distance(height, width, cx, cy)
     corners = [(0, 0), (width, 0), (0, height), (width, height)]
     max_dist = max(((cx - x) ** 2 + (cy - y) ** 2) ** 0.5 for x, y in corners)
     max_dist = max(max_dist, 1e-6)

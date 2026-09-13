@@ -49,23 +49,41 @@ def test_zero_density_no_accumulation_is_identity(
         p=1.0,
         flake_density_range=(0, 0),
         accumulation_probability=0.0,
+        veil_beta_range=(0.0, 0.0),
     )
     out = t(image=scene)["image"]
     np.testing.assert_allclose(out.astype(np.float32), scene.astype(np.float32), atol=1.0)
 
 
-def test_flake_size_scales_with_depth(provider: SharedDepthProvider, scene: np.ndarray) -> None:
-    """Nearer flakes (small relative_depth, i.e. top of a _LinearDepthEstimator's
-    output... wait: here row 0 has depth=0 (nearest) so flakes placed there
-    should render *larger* than flakes placed near the bottom (depth=1,
-    farthest)."""
-    t = RandomSnow(depth_provider=provider, p=1.0, flake_size_range=(10.0, 10.0))
+def test_flake_sizes_follow_a_volume_distribution(
+    provider: SharedDepthProvider, scene: np.ndarray
+) -> None:
+    """Flakes hang in the air in front of the scene, so their sizes come from
+    a volume-uniform distance distribution: mostly small/distant with a few
+    large near ones. The median must sit well below the maximum."""
+    t = RandomSnow(depth_provider=provider, p=1.0, flake_density_range=(2000, 2000))
     params = t.get_params_dependent_on_data({"shape": scene.shape}, {"image": scene})
-    flakes = params["flakes"]
-    near_sizes = [size for x, y, size in flakes if y < scene.shape[0] * 0.1]
-    far_sizes = [size for x, y, size in flakes if y > scene.shape[0] * 0.9]
-    assert near_sizes and far_sizes
-    assert np.mean(near_sizes) > np.mean(far_sizes)
+    sizes = np.array([size for _x, _y, size, _near in params["flakes"]])
+    assert np.median(sizes) < 0.35 * sizes.max()
+
+
+def test_flake_size_is_independent_of_scene_depth(
+    provider: SharedDepthProvider, scene: np.ndarray
+) -> None:
+    """A flake's size must not track the depth of whatever is *behind* it —
+    tying the two together makes flakes look pasted onto surfaces. With a
+    depth map that ramps top-to-bottom, flake size must show no such ramp."""
+    t = RandomSnow(depth_provider=provider, p=1.0, flake_density_range=(3000, 3000))
+    t.set_random_seed(0)
+    params = t.get_params_dependent_on_data({"shape": scene.shape}, {"image": scene})
+    ys = np.array([y for _x, y, _size, _near in params["flakes"]])
+    sizes = np.array([size for _x, _y, size, _near in params["flakes"]])
+
+    top = sizes[ys < scene.shape[0] * 0.25]
+    bottom = sizes[ys > scene.shape[0] * 0.75]
+    assert len(top) > 50 and len(bottom) > 50
+    # Same underlying distribution, so the medians must be close.
+    assert abs(np.median(top) - np.median(bottom)) < 0.25 * np.median(sizes)
 
 
 def test_accumulation_brightens_ground_band(
@@ -78,6 +96,7 @@ def test_accumulation_brightens_ground_band(
         accumulation_probability=1.0,
         accumulation_strength_range=(0.5, 0.5),
         accumulation_band_fraction=0.2,
+        veil_beta_range=(0.0, 0.0),
     )
     out = t(image=scene)["image"].astype(np.float32)
     original_mean = scene.astype(np.float32).mean()
@@ -93,8 +112,11 @@ def test_accumulation_never_fires_when_probability_zero(
         p=1.0,
         flake_density_range=(0, 0),
         accumulation_probability=0.0,
+        veil_beta_range=(0.0, 0.0),
     )
     for seed in range(10):
         t.set_random_seed(seed)
         out = t(image=scene)["image"]
-        np.testing.assert_array_equal(out, scene)
+        # Not bit-exact: compositing happens in linear light, and the
+        # sRGB -> linear -> sRGB round trip costs up to one 8-bit level.
+        np.testing.assert_allclose(out.astype(np.float32), scene.astype(np.float32), atol=1.0)

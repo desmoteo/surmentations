@@ -9,6 +9,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from tqdm import tqdm
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.rain import RandomRain
@@ -18,50 +19,50 @@ from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, SunFlare, WaterDroplets
 
 OUT_DIR = Path(__file__).parent / "examples"
+REFERENCE_IMAGE = OUT_DIR / "reference.webp"
 
 
-def _base_scene(height: int = 300, width: int = 400) -> np.ndarray:
-    """A simple synthetic scene (sky gradient + ground + a building) for consistent previews."""
-    img = np.zeros((height, width, 3), dtype=np.uint8)
-    for y in range(height):
-        t = y / height
-        img[y, :] = (
-            np.array([135, 180, 235]) * (1 - t) + np.array([230, 220, 200]) * t
-        ).astype(np.uint8)
-    ground_y = int(height * 0.65)
-    img[ground_y:, :] = np.array([90, 110, 70], dtype=np.uint8)
-    cv2.rectangle(img, (60, int(height * 0.35)), (180, ground_y), (150, 140, 130), -1)
-    cv2.rectangle(img, (220, int(height * 0.45)), (320, ground_y), (120, 110, 100), -1)
-    return img
+def _base_scene(max_dim: int = 640) -> np.ndarray:
+    """Real reference photo (docs/examples/reference.webp), downscaled and in RGB.
+
+    A real highway/traffic scene with genuine depth structure (near road ->
+    mid-ground cars/guardrail -> distant buildings/skyline), which is what the
+    depth-conditioned effects (fog/rain/snow) actually need to look
+    convincing, unlike a flat synthetic scene.
+    """
+    img_bgr = cv2.imread(str(REFERENCE_IMAGE))
+    if img_bgr is None:
+        raise FileNotFoundError(f"Could not read reference image at {REFERENCE_IMAGE}")
+    height, width = img_bgr.shape[:2]
+    scale = max_dim / max(height, width)
+    img_bgr = cv2.resize(img_bgr, (int(width * scale), int(height * scale)))
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     scene = _base_scene()
-    cv2.imwrite(str(OUT_DIR / "00_base_scene.png"), scene)
+    cv2.imwrite(str(OUT_DIR / "00_base_scene.png"), cv2.cvtColor(scene, cv2.COLOR_RGB2BGR))
 
     depth_provider = SharedDepthProvider(DepthAnythingV2Estimator())
     transforms = {
         "water_droplets": WaterDroplets(p=1.0),
         "dirt_soil": DirtSoil(p=1.0),
-        "sun_flare_fixed": SunFlare(p=1.0, flare_position=(0.8, 0.15)),
-        "fog": RandomFog(depth_provider=depth_provider, p=1.0, depth_scale=10.0),
-        "rain": RandomRain(
-            depth_provider=depth_provider, p=1.0, streak_density_range=(250, 250)
-        ),
+        "sun_flare_fixed": SunFlare(p=1.0, flare_position=None),
+        "fog": RandomFog(depth_provider=depth_provider, p=1.0, depth_scale=60.0),
+        "rain": RandomRain(depth_provider=depth_provider, p=1.0),
         "snow": RandomSnow(
-            depth_provider=depth_provider,
-            p=1.0,
-            flake_density_range=(400, 400),
-            accumulation_probability=1.0,
+            depth_provider=depth_provider, p=1.0, accumulation_probability=1.0
         ),
     }
     rng = np.random.default_rng(42)
-    for name, transform in transforms.items():
-        for i in range(3):
+    # Most of the time here goes into depth estimation, so show progress
+    # rather than appearing to hang.
+    for name, transform in tqdm(transforms.items(), total=len(transforms), desc="effects"):
+        for i in range(5):
             transform.set_random_seed(int(rng.integers(0, 2**31 - 1)))
             out = transform(image=scene)["image"]
-            cv2.imwrite(str(OUT_DIR / f"{name}_{i}.png"), out)
+            cv2.imwrite(str(OUT_DIR / f"{name}_{i}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
 
     print(f"Wrote examples to {OUT_DIR}")
 
