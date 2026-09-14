@@ -63,12 +63,26 @@ raises a `RuntimeError` immediately with an actionable message, rather than
 silently falling back to a CPU path slow enough to blow a training-step
 time budget.
 
+## Parameter conventions
+
+Two rules apply across every transform:
+
+- **Physical `(min, max)` ranges.** Constructors take ranges of physical
+  quantities (fog's extinction coefficient `beta`, a drop's diameter, a
+  lens's aperture blade count), not opaque 0-1 "strength" dials.
+- **Sizes are fractions of the image diagonal, not pixels.** A feature of a
+  given physical size subtends a fixed fraction of the field of view, so
+  this keeps an effect looking the same on a 256px crop and a 4K frame.
+
+Compositing happens in linear light throughout, because scattering, flare
+and bloom add *radiance* — summing them onto gamma-encoded sRGB values is a
+large part of why synthetic weather usually looks like a flat white wash.
+
 ## Severity presets
 
-Every transform's intensity is controlled by physical `(min, max)` ranges
-passed to its constructor. For ImageNet-C-style severity sweeps, unpack a
-preset from `weathermentations.presets.SEVERITY` (levels 1-5) instead of
-picking ranges by hand:
+For ImageNet-C-style severity sweeps, unpack a preset from
+`weathermentations.presets.SEVERITY` (levels 1-5) instead of picking ranges
+by hand:
 
 ```python
 from weathermentations.presets import SEVERITY
@@ -98,6 +112,26 @@ implemented and tested. See [`plan.md`](plan.md)'s implementation checklist
 for what's left (packaging/release) and the documented post-v1 backlog
 (optical/sensor artifacts, low-light/nighttime, condensation/frost/mud,
 compound presets).
+
+## Benchmarking
+
+These transforms run per-sample inside a `DataLoader` worker, so throughput
+matters. `scripts/benchmark.py` reports per-transform cost, split into
+parameter sampling (where depth estimation happens) and rendering:
+
+```bash
+python scripts/benchmark.py                       # 512px and 1024px
+python scripts/benchmark.py --sizes 1024 --csv out.csv
+python scripts/benchmark.py --no-depth            # CPU-only subset
+```
+
+It also reports the depth-conditioned transforms twice — once paying for
+depth per image, once with depth already cached — which is what you get for
+the second and subsequent depth-conditioned transform in a `Compose` that
+shares one `SharedDepthProvider`. On a 1024px frame that sharing is worth
+roughly 85 ms per extra transform, so passing the same provider to all of
+them (rather than constructing one each) is the single biggest throughput
+decision in a pipeline.
 
 ## Development
 

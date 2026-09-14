@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -30,6 +32,11 @@ def scene() -> np.ndarray:
 def test_every_transform_accepts_its_preset_at_every_severity(
     severity: int, scene: np.ndarray
 ) -> None:
+    """Albumentations only *warns* about unknown constructor arguments, so a
+    preset referring to a renamed parameter would silently fall back to
+    defaults. Promote that warning to an error here, or this test passes
+    while the presets quietly do nothing."""
+    warnings.simplefilter("error", UserWarning)
     kwargs_by_name = SEVERITY[severity]
     depth_provider = SharedDepthProvider(_LinearDepthEstimator())
 

@@ -4,6 +4,28 @@ from __future__ import annotations
 
 import numpy as np
 
+from weathermentations.utils.photometry import luminance
+
+
+def sky_radiance_linear(linear_rgb: np.ndarray, percentile: float = 97.0) -> np.ndarray:
+    """Estimate the scene's sky/illuminant radiance from a linear-light image.
+
+    Rain streaks and snowflakes are not white objects — they are lenses and
+    ice crystals lit by, and imaging, the sky. Compositing them toward this
+    colour rather than toward white is what makes them tint with the weather,
+    and it automatically makes them vanish against a bright sky and stand out
+    against dark foliage, which is how real precipitation behaves.
+
+    Returns an ``(C,)`` linear-light colour: the mean of the brightest
+    ``100 - percentile`` percent of pixels by luminance.
+    """
+    luma = luminance(linear_rgb)
+    threshold = float(np.percentile(luma, percentile))
+    bright = linear_rgb[luma >= threshold]
+    if bright.size == 0:
+        return linear_rgb.reshape(-1, linear_rgb.shape[-1]).mean(axis=0)
+    return bright.mean(axis=0).astype(np.float32)
+
 
 def estimate_airlight(image: np.ndarray, top_percent: float = 0.1) -> np.ndarray:
     """Estimate atmospheric light (airlight) color from an image's brightest pixels.

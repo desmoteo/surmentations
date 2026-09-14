@@ -50,24 +50,36 @@ class DepthAnythingV2Estimator(DepthEstimator):
     back to a CPU inference path slow enough to blow the training-step time
     budget this library is built to respect.
 
-    Note on sign convention: Depth Anything (V1 and V2) predicts a
-    disparity-like quantity — larger raw output means *closer* to the
-    camera, the opposite of this library's ``DepthEstimator`` contract. This
-    class min-max normalizes the raw output per-image to ``[0, 1]`` and
-    inverts it (``depth = 1 - normalized_disparity``) so ``estimate()``
-    returns depth with larger = farther, as promised by the base class. This
-    conversion is the first thing to re-check if a depth-conditioned effect
-    ever looks inverted (e.g. fog denser close up instead of in the
-    distance) against a real reference photo.
+    Note on sign convention *and* on the shape of the conversion: Depth
+    Anything (V1 and V2) predicts a **disparity**-like quantity — larger raw
+    output means *closer* to the camera, and disparity is proportional to
+    ``1/depth``, not to ``-depth``. So the raw output is min-max normalised
+    per image and then **reciprocated**,
+    ``depth = 1 / (disparity + disparity_offset)``, before being rescaled to
+    ``[0, 1]``.
+
+    Using a linear flip (``1 - disparity``) instead — an easy mistake — badly
+    compresses the far field: everything past the mid-ground collapses into a
+    narrow band of depth values, so distance-driven effects like fog stop
+    separating the middle distance from the horizon and read as a flat wash.
+    ``disparity_offset`` sets how far "the farthest thing in frame" is
+    relative to the nearest: the depth ratio across the image is
+    ``(1 + offset) / offset``, so 0.03 spans roughly a 34x range, which suits
+    outdoor/driving scenes. Raise it for enclosed scenes with little depth
+    range, lower it for long open vistas.
     """
 
     def __init__(
         self,
         model_name: str = "depth-anything/Depth-Anything-V2-Small-hf",
         device: str = "cuda",
+        disparity_offset: float = 0.03,
     ) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError(_NO_CUDA_MESSAGE.format(cls=type(self).__name__))
+        if disparity_offset <= 0:
+            raise ValueError("disparity_offset must be > 0 (it bounds the farthest depth)")
+        self.disparity_offset = disparity_offset
 
         # Imported lazily: transformers is a heavy import and only needed once
         # a depth-conditioned transform is actually constructed.
@@ -98,5 +110,10 @@ class DepthAnythingV2Estimator(DepthEstimator):
             return np.zeros((height, width), dtype=np.float32)
 
         normalized_disparity = (disparity - d_min) / (d_max - d_min)
-        depth = 1.0 - normalized_disparity  # invert: larger = farther, per DepthEstimator contract
+
+        # disparity ~ 1/depth, so depth ~ 1/disparity. The offset keeps the
+        # horizon (disparity -> 0) finite and sets the near/far depth ratio.
+        depth = 1.0 / (normalized_disparity + self.disparity_offset)
+        depth -= depth.min()
+        depth /= max(float(depth.max()), 1e-6)
         return depth.astype(np.float32)

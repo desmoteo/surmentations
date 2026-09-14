@@ -46,10 +46,22 @@ def test_monotonic_approach_to_airlight_with_depth(
 ) -> None:
     """Koschmieder's law invariant: as depth increases, pixel color must move
     monotonically closer to the airlight color (transmission t=exp(-beta*d)
-    is itself monotonically decreasing in d)."""
+    is itself monotonically decreasing in d).
+
+    The sky cap and the forward-scatter blur are both disabled here: they are
+    deliberate departures from the bare equation (a capped sky keeps its
+    gradient; the blur mixes neighbouring rows), so leaving them on would be
+    testing them rather than the scattering law.
+    """
     airlight = (220, 220, 220)
     t = RandomFog(
-        depth_provider=provider, p=1.0, beta_range=(0.05, 0.05), atmospheric_light=airlight
+        depth_provider=provider,
+        p=1.0,
+        beta_range=(0.05, 0.05),
+        scattering_gamma_range=(0.0, 0.0),
+        atmospheric_light=airlight,
+        forward_scatter_range=(0.0, 0.0),
+        sky_optical_depth_cap=10.0,
     )
     out = t(image=scene)["image"].astype(np.float32)
 
@@ -59,6 +71,29 @@ def test_monotonic_approach_to_airlight_with_depth(
     # Depth increases with row index (top->bottom), so distance to airlight
     # must be non-increasing as row index increases.
     assert np.all(np.diff(dist_to_airlight) <= 1e-3)
+
+
+def test_thin_haze_is_bluer_than_dense_fog(
+    provider: SharedDepthProvider, scene: np.ndarray
+) -> None:
+    """Wavelength-dependent extinction: beta ~ lambda^-gamma, so with a large
+    gamma the blue channel is scattered hardest and the distance goes cool,
+    while gamma=0 (droplets >> wavelength, i.e. dense fog) stays neutral."""
+    common = dict(
+        depth_provider=provider,
+        p=1.0,
+        beta_range=(0.03, 0.03),
+        atmospheric_light=(210, 210, 210),
+        forward_scatter_range=(0.0, 0.0),
+    )
+    neutral = RandomFog(scattering_gamma_range=(0.0, 0.0), **common)(image=scene)["image"]
+    selective = RandomFog(scattering_gamma_range=(3.0, 3.0), **common)(image=scene)["image"]
+
+    far_neutral = neutral[-1].astype(np.float32).mean(axis=0)
+    far_selective = selective[-1].astype(np.float32).mean(axis=0)
+
+    # Blue relative to red must rise once scattering is wavelength-selective.
+    assert (far_selective[2] - far_selective[0]) > (far_neutral[2] - far_neutral[0])
 
 
 def test_zero_beta_is_near_identity(provider: SharedDepthProvider, scene: np.ndarray) -> None:
@@ -73,7 +108,33 @@ def test_fixed_atmospheric_light_is_respected(
 ) -> None:
     """At very high beta, transmission -> 0 everywhere, so output -> atmospheric_light."""
     airlight = (200, 210, 190)
-    t = RandomFog(depth_provider=provider, p=1.0, beta_range=(2.0, 2.0), atmospheric_light=airlight)
+    t = RandomFog(
+        depth_provider=provider,
+        p=1.0,
+        beta_range=(2.0, 2.0),
+        scattering_gamma_range=(0.0, 0.0),
+        atmospheric_light=airlight,
+        forward_scatter_range=(0.0, 0.0),
+        sky_optical_depth_cap=10.0,
+    )
     out = t(image=scene)["image"].astype(np.float32)
     # Row 0 has depth=0 so transmission=1 regardless of beta; check a deep row instead.
     np.testing.assert_allclose(out[-1].mean(axis=0), np.array(airlight, dtype=np.float32), atol=2.0)
+
+
+def test_sky_keeps_its_gradient(provider: SharedDepthProvider, scene: np.ndarray) -> None:
+    """Uncapped, the far field collapses to exactly the airlight colour and the
+    sky goes flat. The cap must leave measurable variation up there."""
+    common = dict(
+        depth_provider=provider,
+        p=1.0,
+        beta_range=(0.5, 0.5),
+        scattering_gamma_range=(0.0, 0.0),
+        atmospheric_light=(220, 220, 220),
+        forward_scatter_range=(0.0, 0.0),
+    )
+    flat = RandomFog(sky_optical_depth_cap=10.0, **common)(image=scene)["image"]
+    capped = RandomFog(sky_optical_depth_cap=1.0, **common)(image=scene)["image"]
+
+    far_rows = slice(-8, None)
+    assert capped[far_rows].astype(np.float32).std() > flat[far_rows].astype(np.float32).std()
