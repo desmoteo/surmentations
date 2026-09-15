@@ -910,3 +910,59 @@ peak modulation is a real property of the output and says nothing about
 whether a human can see it. The check that would have caught it — and the one
 that did, eventually — was looking at the rendered frame at full size next to
 a clean one.
+
+## F18 — The gallery override discarded the library fix, twice
+
+F17's readout-time widening never reached a single rendered frame. The
+gallery's variant override for `ac_flicker` set
+
+    "readout_time_range_s": _span(rng, 0.008, 0.033)
+
+— a hardcoded copy of an older library default, which silently overrode the
+new (0.020, 0.060). Every published frame kept rendering **0.8–3.3 bands**,
+the exact regime F17 identified as illegible, while the library's own tests
+passed throughout because they test the library.
+
+**An override that duplicates a range the transform already owns is a copy
+waiting to go stale.** The override exists to alternate 50/60 Hz mains; the
+readout was incidental and is now gone, so the library's range stands.
+
+This is also how the same report could be right three times running. Each
+round I measured the library and the library was fine.
+
+`tests/unit/test_gallery_configs.py` closes it: for every effect and
+severity, it builds the configuration **the gallery builds** — overrides
+included — renders the reference photograph, and requires the median of 8
+seeds to move it by at least one 8-bit level. It fails on the old override,
+and it would have failed on F14's empty occluders too.
+
+Writing that test immediately surfaced one more thing worth fixing rather
+than asserting around. Even with a corrected readout, `ac_flicker`'s draws
+were bimodal — half of them near zero — because the default exposure range
+(1–16 ms) straddles the sinc's first null at 10 ms (50 Hz) and 8.33 ms
+(60 Hz), and at 60 Hz nearly reaches the second. The default now stops at
+**8 ms, below the first null**.
+
+That is not a fudge to make the effect appear. A shutter shorter than one
+flicker period is the condition under which banding exists at all, and a
+camera sitting on the null is a camera whose anti-flicker setting is
+working — not one you would put in a set labelled "shows flicker banding".
+It is the same principle as F14: **whether the effect happens is what `p` is
+for; the parameters decide how strongly.** Cancellation remains fully
+modelled, tested, and available to anyone who widens the range deliberately.
+
+| exposure range | \|sinc\| median, 50 Hz | 60 Hz | draws essentially blank |
+| --- | --- | --- | --- |
+| 1–16 ms (was) | 0.758 | 0.663 | 17–24% |
+| 1–8 ms (now) | **0.875** | **0.820** | 0% / 7% |
+
+Published frames now carry **8.0 / 15.0 / 13.8 / 22.9 / 23.0%** peak-to-peak
+across 3–6 bands, against 6.2 / 5.2 / 15.3 / 16.6 / 21.4% over 2 bands.
+
+**What this one is really about.** Three consecutive rounds of "still no
+effect" were three correct reports, and each time I verified the fix against
+the layer I had just edited rather than against the artefact the report was
+about. The library was never the thing being looked at. The rule that falls
+out is narrower than "measure more": **verify at the layer the complaint
+names.** The test now does that, so the next such regression fails in CI
+rather than in the gallery.

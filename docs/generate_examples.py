@@ -238,10 +238,16 @@ def _variant_kwargs(
     if name == "ac_flicker":
         # 50 Hz and 60 Hz mains give different band counts for the same
         # readout, so alternate rather than picking one.
-        return {
-            "mains_frequency_hz": 50.0 if index % 2 == 0 else 60.0,
-            "readout_time_range_s": _span(rng, 0.008, 0.033),
-        }
+        #
+        # Readout time is deliberately *not* overridden here. It used to be,
+        # with a hardcoded (0.008, 0.033) s copied from an older library
+        # default, and when that default was widened to (0.020, 0.060) to get
+        # a legible band count the override silently kept the gallery on the
+        # old fast range — so the fix never reached a single rendered frame.
+        # An override that duplicates a range the transform already owns is a
+        # copy waiting to go stale; vary what this variant is actually about
+        # and let the library's own range stand.
+        return {"mains_frequency_hz": 50.0 if index % 2 == 0 else 60.0}
     if name == "video_codec":
         return {"codec": "h264" if index % 2 == 0 else "h265"}
     if name == "snow":

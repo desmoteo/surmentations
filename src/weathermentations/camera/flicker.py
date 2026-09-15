@@ -138,9 +138,20 @@ class AcFlicker(WeatherTransform):
             photographers count it in stops, and the interval 1/1000-1/500 s
             is as large a change as 1/8-1/4 s. Drawing it uniformly puts most
             of the mass at the long end, which here is the end the sinc
-            cancels — median |sinc| 0.22 uniform against 0.76 log-uniform
-            over the default range, i.e. most frames came out with no visible
-            banding at all.
+            cancels.
+
+            The default **stops below the first null** (8 ms, against 10 ms
+            for 50 Hz mains and 8.33 ms for 60 Hz). That is not a fudge to
+            make the effect show up: a shutter shorter than one flicker period
+            is the condition under which banding is visible at all, and a
+            camera sitting on the null is a camera whose anti-flicker setting
+            is working — which is a camera you would not include in a set
+            labelled "shows flicker banding". Whether a frame flickers is
+            what ``p`` is for; this range decides how strongly it does.
+            Widen it past the null deliberately to explore cancellation, and
+            the sinc will duly cancel: median |sinc| over 1-16 ms is 0.76 at
+            50 Hz and 0.66 at 60 Hz with 17-24% of draws essentially blank,
+            against 0.88 and 0.82 with none and 7% below 1-8 ms.
         pulse_exponent_range: shape of the lamp's output over one flicker
             period, as ``|sin| ** exponent``. 1 is a gas-discharge lamp
             following the rectified current, 2 is exactly a sinusoid (an
@@ -187,7 +198,7 @@ class AcFlicker(WeatherTransform):
         self,
         mains_frequency_hz: float = 50.0,
         readout_time_range_s: tuple[float, float] = (0.020, 0.060),
-        exposure_time_range_s: tuple[float, float] = (0.001, 0.016),
+        exposure_time_range_s: tuple[float, float] = (0.001, 0.008),
         pulse_exponent_range: tuple[float, float] = (1.0, 5.0),
         modulation_depth_range: tuple[float, float] = (0.05, 0.35),
         p: float = 0.5,
