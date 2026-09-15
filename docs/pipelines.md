@@ -21,15 +21,26 @@ often each condition occurs in a temperate maritime climate on a mixed camera
 fleet, and **that will not match your footage**. The rest of this document is
 why the numbers are what they are, so you can change them deliberately.
 
-> **`severity` decides how degraded a frame gets** (1-5, default 2), and it is
+> **`severity` decides how degraded a frame gets** (1-5, default 1), and it is
 > the first thing to change if the output looks too heavy. Omitting it is not
 > neutral: the transforms then run on their own constructor defaults, which
 > span the whole physically plausible range, so `RandomRain` reaches 200 mm/h
 > — a tropical cloudburst — where severity 1 is 2-8 mm/h. Those wide defaults
 > exist so one transform can explore its parameter space; they are the wrong
-> thing for a pipeline that stacks three or four effects at once. At severity
-> 2 a typical frame keeps about 80% of its high-frequency detail; on the
-> library defaults the median frame kept 77% and the worst kept 9%.
+> thing for a pipeline that stacks three or four effects at once — and it
+> compounds, so level 2 on each of three effects is not an ordinary frame but
+> a bad one. That is why the default is 1. Measured, a typical frame keeps
+> 75-81% of its high-frequency detail; on the library defaults the median
+> frame kept 77% and the worst kept 9%.
+>
+> Two other things were driving the "too aggressive" impression and are now
+> fixed. The night branches used a strong under-exposure and warm cast, which
+> put a **29-level median red-blue shift** on `surveillance_lite` — it read as
+> a sepia filter over a daylit frame rather than as night, because neither
+> branch can relight the scene. `surveillance_lite` now renders no night at
+> all and says so, and `surveillance`'s version is mild enough that the
+> under-exposure carries the impression while the tint only hints: the median
+> cast is 3.1 levels, with 2 frames in 20 above 15.
 
 > **Severity is fixed per pipeline, not drawn per frame**, and that is
 > deliberate. Picking it per frame with a `OneOf` gate looks obvious and is
