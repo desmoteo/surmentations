@@ -368,6 +368,20 @@ Streaks become visible against dark backgrounds — night, dark buildings,
 shadowed foliage — so they carry the effect at night and the veil and the wet
 road carry it by day. Both are correct; only one is photogenic.
 
+### Droplets follow the camera chain's severity, not the weather's
+
+A drop on the front element is centimetres from the sensor; a raindrop in the
+air is metres away. The one on the glass therefore dominates any frame it
+appears on, and at the weather's severity it dominated frames whose rain was
+invisible — which is how a sample can end up looking like it has more
+lens-water than rain even when the counts are 7 rain to 6 droplets.
+
+So `WaterDroplets` takes `droplet_severity`, defaulting to the camera chain's
+level rather than the weather's. Measured at 512 px, that is 15% of the
+frame's high-frequency detail rather than 24%. `wet_fog` also came down from
+0.30 to 0.18: rain splashing onto an exposed dome is the commonest source of
+water on glass, while fog has to condense on glass colder than the air.
+
 **Snow is different and is visible**, roughly 180 flakes at severity 2 on a
 512 px frame. If it appears to be missing, check whether you are looking at a
 downscaled image: a flake and a streak are both about a pixel across, so any
