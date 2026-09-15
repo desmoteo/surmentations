@@ -52,10 +52,13 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "trail_probability": _lerp(0.1, 0.6, t),
             },
             "DirtSoil": {
-                "smudge_count_range": (int(_lerp(2, 8, t)), int(_lerp(5, 18, t))),
-                "coverage_range": (_lerp(0.02, 0.12, t), _lerp(0.08, 0.35, t)),
-                "highlight_boost_range": (_lerp(1.0, 3.0, t), _lerp(3.0, 7.0, t)),
-                "veil_strength_range": (_lerp(0.08, 0.4, t), _lerp(0.25, 0.8, t)),
+                # Level 1 must be mild, not absent: at the previous floor it
+                # moved the frame by 0.94 of an 8-bit level, i.e. below the
+                # quantisation it is rendered into.
+                "smudge_count_range": (int(_lerp(3, 8, t)), int(_lerp(7, 18, t))),
+                "coverage_range": (_lerp(0.05, 0.12, t), _lerp(0.14, 0.35, t)),
+                "highlight_boost_range": (_lerp(1.5, 3.0, t), _lerp(3.5, 7.0, t)),
+                "veil_strength_range": (_lerp(0.18, 0.4, t), _lerp(0.4, 0.8, t)),
                 "water_spot_count_range": (0, int(_lerp(5, 30, t))),
             },
             "SunFlare": {
@@ -123,7 +126,13 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
             # co-varies: a neglected site has a scuffed dome, an old sensor,
             # a failing IR-cut filter *and* a starved uplink.
             "AcFlicker": {
-                "modulation_depth_range": (_lerp(0.02, 0.2, t), _lerp(0.12, 0.6, t)),
+                # A 2% supply modulation is genuinely invisible, so level 1
+                # started below the 8-bit quantisation. Raised to a lightly
+                # ballasted lamp rather than a perfect one. Note the sinc
+                # cancellation still zeroes individual frames whose exposure
+                # lands on a whole flicker period — that is the physics, and
+                # it is why this is measured over many seeds.
+                "modulation_depth_range": (_lerp(0.06, 0.2, t), _lerp(0.18, 0.6, t)),
             },
             "RollingShutter": {
                 "pan_shift_range_px": (_lerp(-3.0, -30.0, t), _lerp(3.0, 30.0, t)),
@@ -140,10 +149,13 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "detail_gain_range": (_lerp(0.95, 1.2, t), _lerp(1.2, 2.0, t)),
             },
             "TemporalDenoiseArtifacts": {
-                "strength_range": (_lerp(0.15, 0.7, t), _lerp(0.5, 1.0, t)),
-                "iterations_range": (1, int(_lerp(1, 4, t))),
-                "edge_threshold_range": (_lerp(8.0, 35.0, t), _lerp(25.0, 90.0, t)),
-                "chroma_blur_range": (_lerp(0.002, 0.008, t), _lerp(0.008, 0.035, t)),
+                # Same correction as DirtSoil: level 1 was moving the frame by
+                # 0.71 of an 8-bit level, which is not a mild setting but no
+                # setting at all.
+                "strength_range": (_lerp(0.35, 0.7, t), _lerp(0.65, 1.0, t)),
+                "iterations_range": (1, int(_lerp(2, 4, t))),
+                "edge_threshold_range": (_lerp(18.0, 35.0, t), _lerp(40.0, 90.0, t)),
+                "chroma_blur_range": (_lerp(0.005, 0.008, t), _lerp(0.014, 0.035, t)),
             },
             "NightIrMode": {
                 # Severity is how little light there is to work with: a

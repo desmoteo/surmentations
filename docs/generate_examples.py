@@ -123,6 +123,13 @@ def _span(
     return (centre - span / 2.0, centre + span / 2.0)
 
 
+# How far a jittered band may exceed the preset band it came from. Without a
+# ceiling the shift and stretch compound: severity 5's rain band nominally
+# tops out at 100 mm/h but was drawing up to 137, and levels 3-5 overlapped so
+# heavily the ladder stopped ordering anything.
+_JITTER_HEADROOM = 1.1
+
+
 def _jitter_band(
     band: tuple[float, float], rng: np.random.Generator, floor: float = 0.0
 ) -> tuple[float, float]:
@@ -131,13 +138,22 @@ def _jitter_band(
     Used to vary a quantity the severity preset already sets, without
     discarding what severity chose: the level still decides roughly how bad
     the weather is, and this moves the window around that.
+
+    Clamped at **both** ends. The floor is the transform's own validated
+    minimum; the ceiling keeps the jittered band from wandering out of the
+    severity level it belongs to, which is what makes the ladder mean
+    something.
     """
     low, high = band
     shift = float(rng.uniform(0.75, 1.4))
     stretch = float(rng.uniform(0.9, 1.6))
     centre = 0.5 * (low + high) * shift
     half = 0.5 * (high - low) * stretch
-    return (max(floor, centre - half), max(floor + 1e-3, centre + half))
+
+    ceiling = high * _JITTER_HEADROOM
+    jittered_low = min(max(floor, centre - half), ceiling)
+    jittered_high = min(max(jittered_low + 1e-3, centre + half), ceiling)
+    return (jittered_low, jittered_high)
 
 
 def _variant_kwargs(
