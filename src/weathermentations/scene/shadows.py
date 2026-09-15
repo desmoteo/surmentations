@@ -51,6 +51,7 @@ from weathermentations.base import WeatherTransform, require_depth_provider
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.depth.scale import to_pseudo_metric
+from weathermentations.diagnostics import record_draw
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
 # Relative spectrum of skylight against direct sun, normalised on green. What
@@ -185,7 +186,8 @@ class CastShadows(WeatherTransform):
         rng = self.random_generator
 
         shapes = np.zeros((height, width), dtype=np.float32)
-        for _ in range(self.py_random.randint(*self.shadow_count_range)):
+        shadow_count = self.py_random.randint(*self.shadow_count_range)
+        for _ in range(shadow_count):
             _draw_cast_shape(
                 shapes,
                 rng,
@@ -206,6 +208,13 @@ class CastShadows(WeatherTransform):
             camera_pitch_deg=self.camera_pitch_deg,
         )
         occlusion = np.clip(shapes, 0.0, 1.0) * surface**self.surface_sharpness
+
+        record_draw(
+            shadow_count=shadow_count,
+            penumbra_px=penumbra,
+            surface_fraction=float((surface > 0.5).mean()),
+            shadowed_fraction=float((occlusion > 0.1).mean()),
+        )
 
         return {
             "occlusion": occlusion.astype(np.float32),

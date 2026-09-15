@@ -46,6 +46,7 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
 from weathermentations.base import WeatherTransform
+from weathermentations.diagnostics import record_draw
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
 
@@ -202,16 +203,21 @@ class HousingOccluders(WeatherTransform):
 
         mask = np.zeros((height, width), dtype=np.float32)
 
-        for _ in range(self.py_random.randint(*self.insect_count_range)):
+        insect_count = self.py_random.randint(*self.insect_count_range)
+        insect_sizes = []
+        for _ in range(insect_count):
+            size = self.py_random.uniform(*self.insect_size_range) * diagonal
+            insect_sizes.append(size)
             _draw_insect(
                 mask,
                 rng,
                 float(rng.uniform(0, width)),
                 float(rng.uniform(0, height)),
-                self.py_random.uniform(*self.insect_size_range) * diagonal,
+                size,
             )
 
-        for _ in range(self.py_random.randint(*self.web_count_range)):
+        web_count = self.py_random.randint(*self.web_count_range)
+        for _ in range(web_count):
             # Webs are usually anchored near a corner or the illuminator ring
             # rather than floating in the middle of the view.
             _draw_web(
@@ -227,6 +233,17 @@ class HousingOccluders(WeatherTransform):
         # edge. The blur *is* the appearance, not a finishing touch.
         sigma = max(1.0, self.py_random.uniform(*self.defocus_range) * diagonal)
         mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=sigma)
+
+        # Counts and sizes are local: only the composited mask reaches the
+        # renderer, so "how many insects, how big" is unanswerable from the
+        # output alone - and it is exactly what an audit of this effect asks.
+        record_draw(
+            insect_count=insect_count,
+            insect_size_px=np.array(insect_sizes, dtype=np.float32),
+            web_count=web_count,
+            defocus_sigma_px=sigma,
+            covered_fraction=float((mask > 0.05).mean()),
+        )
 
         return {
             "occluder": np.clip(mask, 0.0, 1.0),

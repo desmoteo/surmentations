@@ -52,6 +52,7 @@ from pydantic import AfterValidator, Field
 from weathermentations.base import WeatherTransform, require_depth_provider
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.depth.scale import to_pseudo_metric
+from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import estimate_airlight
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
@@ -161,6 +162,20 @@ class RandomFog(WeatherTransform):
         optical_depth = optical_depth * (1.0 - sky[..., None]) + capped * sky[..., None]
 
         transmission = np.exp(-optical_depth).astype(np.float32)
+
+        # beta is the whole chain here: it fixes the visibility via
+        # Koschmieder and the visibility is what the effect is *about*. Logged
+        # because it is a local variable that never reaches the renderer -
+        # only exp(-beta z) does - so without this the one derivation worth
+        # auditing has to be run backwards out of the transmission field.
+        record_draw(
+            beta=beta,
+            scattering_gamma=gamma,
+            beta_rgb=beta_rgb,
+            koschmieder_visibility_m=3.912 / beta if beta > 1e-9 else float("inf"),
+            depth_min_m=float(depth_pm.min()),
+            depth_max_m=float(depth_pm.max()),
+        )
 
         if self.atmospheric_light is not None:
             airlight = np.array(self.atmospheric_light, dtype=np.float32) / 255.0

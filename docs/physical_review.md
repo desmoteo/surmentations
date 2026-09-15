@@ -541,3 +541,209 @@ claim.
 
 Still nothing here is a broken formula. Every derived chain that can be
 checked, checks — twice now, on independent draws.
+
+---
+
+# Third pass (2026-09-15): closing F9, F10 and F11
+
+## F9 — Wetness now reads the depth map
+
+`_apply_ground_wetness` no longer takes a band fraction. It takes the ground
+mask, the horizon row and the focal length, and two things changed with it.
+
+**Where the wetness goes.** The mask is `upward_facing(...) ** falloff`, the
+same cosine `RandomSnow` already uses for accumulation, with a steeper
+exponent (4–9 against snow's 2–5) because water runs off a slope more readily
+than snow slides off it. Measured on the reference frame:
+
+| | ground pixels covered | false positives |
+| --- | --- | --- |
+| screen-space band (widest, 32% of rows) | 49% | — |
+| depth-derived mask | **93% ± 3%** | **0.0%** |
+
+**Where the reflection comes from.** A horizontal mirror flips a ray's
+vertical angle about the horizontal, so the reflection at row `y` is the scene
+at row `2·horizon − y`. The old code mirrored about the band's own top edge,
+which put the reflection of a car somewhere the car is not. The horizon comes
+from a new `depth/normals.py::horizon_row`: on a ground plane
+`1/z = (y − y_h)/(h·f)`, so **inverse** depth is linear in the row index and
+crosses zero at the horizon. Fitting that line and reading its root recovers
+`y_h` without knowing the camera height, the focal length or the pitch —
+verified exact (±0.05 rows) across nine synthetic planes spanning all three.
+
+I nearly "fixed" this estimator for a bias it does not have. On the reference
+frame it returns row 120 while the treeline sits near row 185, which looked
+wrong until I computed what it should be: for a camera pitched down by θ the
+horizon is at `cy − f·tan θ`, which is row 136 at 14° and row 72 at 22°. Row
+120 corresponds to ~17°, entirely plausible for a bridge-mounted shot. **The
+treeline is scene content above the horizon, not the horizon.** I had also
+built a second estimator from the ground-plane normal to replace it; measured
+side by side it was worse on both synthetic data (2–4 rows off, from the
+normals' smoothing) and the real frame (row 59), so it was discarded.
+
+**How strong the reflection is.** Reflectance is not a constant. Schlick's
+approximation over the depression angle below the horizon,
+`R = R₀ + (1 − R₀)(1 − cos θ)⁵` with `R₀ = 0.02` for water, gives what a wet
+road actually looks like — mirror-bright toward the horizon, merely dark and
+matte at your feet. Measured down the frame (horizon at row 121, f = 416 px):
+
+| row | Fresnel R | change vs dry |
+| --- | --- | --- |
+| 160 | 0.62 | **+4.0%** (sky mirror) |
+| 240 | 0.22 | −3.3% |
+| 320 | 0.08 | **−7.2%** |
+| 440 | 0.03 | −2.1% |
+
+That gradient is the effect. A single blend weight, which is what the band
+had, cannot produce it in either direction.
+
+One calibration change came out of looking at the result: the near-field
+darkening was too timid. Dry asphalt albedo runs 0.10–0.15 and wet 0.05–0.08,
+about a halving, so `wetness_darkening_range` moved from (0.55, 0.85) to
+(0.4, 0.7). Near-road darkening went from −4.5% to **−9% … −13%**, which is
+where it reads as a wet road rather than a slightly grey one.
+
+`wetness_band_fraction_range` is gone, replaced by `wetness_darkening_range`
+and `wetness_falloff_range`. `wetness_probability` is deliberately still
+independent of the drawn rain rate, and now says why in its docstring: road
+wetness follows the rain's *history*, which a single-frame transform cannot
+know — a road stays wet after the rain stops and is dry for the first seconds
+of a downpour.
+
+## F10 — The cause was not what I said it was
+
+The second pass concluded the clipping came from "the auto-exposure metering
+the frame mean". **It does not — it meters the 80th percentile, and always
+has.** I asserted the mechanism from the symptom without reading the six lines
+that implement it, which is the same error as the withdrawn F1 claim for the
+third time in this document.
+
+The actual cause, visible immediately on reading them, is that gain was
+applied **twice**: the AE drives the 80th percentile to `target_level`, and
+then `signal = signal * gain` multiplies it again. With `target_level` up to
+0.6 and `gain` up to 1.6, the 80th percentile landed at 0.96, so a fifth of
+the frame sat against the clipping point by construction.
+
+That is also wrong as physics. Gain is one of the levers an AE loop uses to
+*reach* its target, not something applied on top of a level it already hit.
+What gain does control is the noise, which the line below it already handled
+independently. Removing the signal multiply:
+
+| severity | % saturated before → after | % black | noise floor |
+| --- | --- | --- | --- |
+| 1 | 10.4 → **7.2** | 3.9 | 42.0 |
+| 2 | 12.4 → **7.1** | 7.9 | 60.6 |
+| 3 | 16.9 → **7.1** | 11.1 | 80.4 |
+| 4 | **24.4 → 7.0** | 13.8 | 101.3 |
+| 5 | 17.8 → **7.0** | 16.8 | 123.2 |
+
+Clipping is now flat at ~7% across the ladder — headlights, plates and the
+nearest metre of tarmac, which is what a real IR installation clips — instead
+of scaling to a quarter of the frame. The noise floor still rises cleanly, so
+the severity test's metric is unaffected. Black rises with severity, which is
+correct: severity 5 is a long-range scene with a weak illuminator, and its far
+field genuinely is black.
+
+## F11 — The four silent transforms now log their draws
+
+`fog`, `cast_shadows`, `housing_occluders` and `dirt_soil` record what they
+sample. Fog was the one that mattered: it now logs `beta`,
+`scattering_gamma`, `beta_rgb` and the Koschmieder visibility, so the
+visibility → extinction → `exp(−βz)` chain can be checked forwards instead of
+reconstructed backwards out of the transmission field. `cast_shadows` logs the
+shadow count and penumbra, `housing_occluders` the insect count and sizes and
+the web count, `dirt_soil` which deposit species it drew.
+
+The other four transforms without `drew` — `rolling_shutter`,
+`denoise_artifacts`, `wdr_tone_mapping`, `video_codec` — are left alone
+deliberately: they hand every sampled parameter straight to the renderer, so
+`out` already **is** the draw list and a second copy would only be a second
+thing to keep in sync. `tests/unit/test_diagnostics.py` pins the four that
+needed it.
+
+None of this changes a rendered pixel; the goldens confirm it, with only
+`rain.png` moving (from F9).
+
+## F13 — A distant flat plane reads as "ground" past ~18° of pitch
+
+Found while checking F9's horizon estimates across the sweep rather than on
+one frame. The estimate sat stably at row 120.5 for every drawn pitch from
+5.6° to 17.3° — correctly, since it reads the depth map, which encodes the
+photograph's true geometry rather than the pitch that happened to be drawn —
+and then **collapsed to row 49 at 18.1° and 26.5°**.
+
+The cause is in `upward_facing`, not in the fit. A sky is a flat far plane
+whose normal points straight at the camera, so `n · up` there is exactly
+`sin(pitch)`, which crosses a lenient 0.3 threshold at 17.5°. Past that the
+"ground" mask jumps from 63% to 94.5% of the frame and starts at row 1.
+
+The rendered output was never affected: the falloff exponent (6.5 for
+wetness, 3.5 for snow accumulation) drives those pixels to **1–3% weight**
+against the road's 41–73%, so nothing visible was ever wet or snowed-on that
+should not have been. Only the horizon fit, which used the raw cosine at a
+lenient threshold, saw them. Fitting on the same falloff-weighted mask the
+renderer uses holds the estimate at **122.5 ± 0.7 rows across 16 seeds**
+spanning the whole 0–22° pitch range, against a 71-row bimodal swing before.
+
+Worth recording as a caveat on `upward_facing` rather than a defect in it: the
+function is behaving correctly given a pitch, and a surface facing a camera
+tilted 26° down genuinely is partly facing up. The trouble is that
+`camera_pitch_deg` is a per-call *draw* while the depth map encodes the
+scene's actual, unknown geometry, so the two can disagree. Any future consumer
+of `upward_facing` should apply its falloff before thresholding, as both
+current callers now do.
+
+## Verification sweep
+
+A fresh 300-record sweep after all of the above:
+
+| Check | Result |
+| --- | --- |
+| Draws inside their declared ranges | **340 draws, 0 violations** (was 180 — the new logging nearly doubled what is checkable) |
+| Transforms recording their draws | **11/15**, the remaining four by design |
+| Fog: `visibility == 3.912/β` logged forwards | max error **1.1e-2 m** on a 409–672 m visibility |
+| Goldens | only `rain.png` and `snow.png` moved, both from F9 |
+| Tests | **193 passing**, ruff and mypy clean |
+
+Rain's whole-frame effect rose across the ladder (severity 1: 10.4 → 13.5)
+now that wetness covers the road rather than a band of rows.
+
+## Status
+
+| | |
+| --- | --- |
+| F1 | Withdrawn — the claim was wrong |
+| F2–F6 | Resolved |
+| F7 | Confirmed, not a defect (sub-pixel handling, rain and snow both) |
+| F8 | Superseded by F10 |
+| F9 | **Resolved** — wetness reads the depth map; 49% → 93% of the ground, 0% false positives |
+| F10 | **Resolved** — gain was applied twice; clipping 24.4% → 7.0% |
+| F11 | **Resolved** — four transforms now log their draws, four by design do not |
+| F12 | Resolved — recorder schema consistent |
+| F13 | **Resolved** — horizon fit no longer sees the sky; render was never affected |
+
+## What three passes of this actually taught
+
+Every wrong call in this document has the same shape, and it is worth naming
+because it recurred after being named twice.
+
+- **F1**: claimed the veil double-counts by 7–14%, using particle *count* as a
+  proxy for *extinction*. Measured: 0.3%.
+- **F10**: claimed night mode clips because the auto-exposure "meters the
+  frame mean". It meters the 80th percentile, and six lines of source say so.
+  The real cause — gain applied on top of a level the AE had already hit — was
+  visible immediately on reading them.
+- **F9's horizon**: nearly "fixed" a 65-row bias that was my own bad reference
+  point, and had a replacement estimator built and measured before discovering
+  it was worse than the one it would have replaced.
+
+In each case a plausible mechanism was inferred from a real symptom and then
+reported as the cause. The symptoms were all genuine; **the diagnoses were
+guesses wearing the clothes of measurements.** What consistently worked was
+the opposite order — measure the specific quantity in the claim, and read the
+code that implements the mechanism before naming it.
+
+The same order also refuted four suspicions cheaply in the second pass
+(occluded particles, flake hardness, dirt colour, contrast loss), and found
+F13, which no amount of looking at pictures would have surfaced because it
+never reached a picture.

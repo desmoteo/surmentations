@@ -137,3 +137,47 @@ def test_array_summaries_have_the_same_shape_whatever_the_array_size() -> None:
     # Small arrays additionally keep their values; large ones do not.
     assert _summarise(np.array([1.0, 2.0]))["values"] == [1.0, 2.0]
     assert "values" not in _summarise(np.arange(1000, dtype=np.float32))
+
+
+def test_every_depth_conditioned_transform_records_its_draws() -> None:
+    """The log's value is that local variables reach it.
+
+    Eight of fifteen transforms recorded no draws at all. For four of them
+    that cost nothing — they hand every sampled parameter straight to the
+    renderer, so the params dict *is* the draw list. For the four that derive
+    something on the way, it meant the one chain worth auditing could not be
+    read: fog logged ``exp(-beta z)`` but never ``beta``, so its
+    visibility → extinction → transmission derivation had to be run backwards
+    out of the transmission field, and could not be closed exactly.
+    """
+    from tests.unit.test_randomization import _GroundPlaneDepth
+    from weathermentations.atmosphere.fog import RandomFog
+    from weathermentations.depth.provider import SharedDepthProvider
+    from weathermentations.lens import DirtSoil, HousingOccluders
+    from weathermentations.scene import CastShadows
+
+    provider = SharedDepthProvider(_GroundPlaneDepth())
+    scene = np.random.default_rng(0).integers(0, 256, (96, 128, 3), dtype=np.uint8)
+
+    expected = {
+        "RandomFog": {"beta", "koschmieder_visibility_m"},
+        "CastShadows": {"shadow_count", "penumbra_px"},
+        "HousingOccluders": {"insect_count", "web_count"},
+        "DirtSoil": {"smudge_count", "deposits"},
+    }
+    builders = {
+        "RandomFog": lambda: RandomFog(depth_provider=provider, p=1.0),
+        "CastShadows": lambda: CastShadows(depth_provider=provider, p=1.0),
+        "HousingOccluders": lambda: HousingOccluders(p=1.0, insect_count_range=(2, 4)),
+        "DirtSoil": lambda: DirtSoil(p=1.0),
+    }
+
+    for name, build in builders.items():
+        transform = build()
+        transform.set_random_seed(0)
+        with recording() as log:
+            transform(image=scene)
+        assert log, f"{name} produced no record at all"
+        drew = log[0].get("drew", {})
+        missing = expected[name] - set(drew)
+        assert not missing, f"{name} does not record {sorted(missing)}"
