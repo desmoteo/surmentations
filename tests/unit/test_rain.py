@@ -4,10 +4,13 @@ import pytest
 from weathermentations.atmosphere.rain import (
     RandomRain,
     _apply_ground_wetness,
+    _perspective_angles,
+    render_streak_layer,
     streak_alpha,
 )
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
+from weathermentations.utils.precipitation import raindrop_terminal_velocity
 
 
 class _LinearDepthEstimator(DepthEstimator):
@@ -26,6 +29,19 @@ def provider() -> SharedDepthProvider:
 @pytest.fixture
 def scene() -> np.ndarray:
     img = np.zeros((80, 60, 3), dtype=np.uint8)
+    img[:, :] = (40, 70, 130)
+    return img
+
+
+@pytest.fixture
+def scene_hd() -> np.ndarray:
+    """Large enough that drop widths are not all quantised to one pixel.
+
+    At 60px wide the focal length is ~52px, so every drop in the simulated
+    column projects to well under a pixel and every streak is drawn one pixel
+    thick — which silently flattens any test of how width varies.
+    """
+    img = np.zeros((480, 854, 3), dtype=np.uint8)
     img[:, :] = (40, 70, 130)
     return img
 
@@ -51,7 +67,7 @@ def test_zero_density_and_zero_veil_beta_is_near_identity(
     t = RandomRain(
         depth_provider=provider,
         p=1.0,
-        streak_density_range=(0, 0),
+        max_streaks=0,
         veil_beta_range=(0.0, 0.0),
         wetness_probability=0.0,
     )
@@ -68,7 +84,7 @@ def test_veil_transmission_monotonic_with_depth(
     t = RandomRain(
         depth_provider=provider,
         p=1.0,
-        streak_density_range=(0, 0),
+        max_streaks=0,
         veil_beta_range=(0.05, 0.05),
         wetness_probability=0.0,
     )
@@ -91,40 +107,128 @@ def test_streak_alpha_follows_diameter_over_length() -> None:
 
 
 def test_streak_alpha_layer_stays_in_bounds(
-    provider: SharedDepthProvider, scene: np.ndarray
+    provider: SharedDepthProvider, scene_hd: np.ndarray
 ) -> None:
-    t = RandomRain(depth_provider=provider, p=1.0, streak_density_range=(50, 50))
-    params = t.get_params_dependent_on_data({"shape": scene.shape}, {"image": scene})
+    # HD: streaks narrower than `min_streak_width_px` go to the veil rather
+    # than being drawn, and on a 60px-wide frame nothing passes that cut.
+    t = RandomRain(depth_provider=provider, p=1.0, max_streaks=50)
+    params = t.get_params_dependent_on_data({"shape": scene_hd.shape}, {"image": scene_hd})
     assert params["veil_transmission"].min() >= 0.0
     assert params["veil_transmission"].max() <= 1.0
+
     # Streaks are a struct-of-arrays: one parallel array per property, each
-    # holding one entry per requested streak.
+    # holding one entry per rendered streak.
     streaks = params["streaks"]
-    assert all(field.shape == (50,) for field in streaks.values())
+    lengths = {field.shape for field in streaks.values()}
+    assert len(lengths) == 1, "streak fields must be parallel arrays"
     assert streaks["alpha"].min() >= 0.0
     assert streaks["alpha"].max() <= 1.0
 
 
+def test_streak_opacity_is_physically_small(
+    provider: SharedDepthProvider, scene_hd: np.ndarray
+) -> None:
+    """Garg & Nayar: a drop occupies any one pixel for only diameter/length
+    of the exposure, so streaks are a *few percent* opaque. Painting them at
+    30-60% is the single thing that makes synthetic rain read as white
+    scratches drawn over a photo."""
+    t = RandomRain(depth_provider=provider, p=1.0, rain_rate_range_mm_h=(20.0, 20.0))
+    t.set_random_seed(0)
+    params = t.get_params_dependent_on_data({"shape": scene_hd.shape}, {"image": scene_hd})
+    alpha = params["streaks"]["alpha"]
+    assert np.median(alpha) < 0.25
+    assert alpha.max() <= 1.0
+
+
+def test_terminal_velocity_matches_gunn_and_kinzer() -> None:
+    """The fall speed law is load-bearing: it sets streak length, and through
+    ``alpha = D / (v T)`` the streak's opacity too. Pin it against the
+    measured Gunn & Kinzer (1949) table.
+
+    An earlier fit in this module was saturated — it returned 9.40 m/s for
+    every drop from 0.5 mm up, i.e. more than 4x too fast for a small drop —
+    and went unnoticed because nothing called it.
+    """
+    measured = {0.5: 2.06, 1.0: 4.03, 2.0: 6.49, 3.0: 8.06, 4.0: 8.83, 5.0: 9.09}
+    diameters = np.array(list(measured), dtype=np.float32)
+    predicted = raindrop_terminal_velocity(diameters)
+    expected = np.array(list(measured.values()), dtype=np.float32)
+
+    relative_error = np.abs(predicted - expected) / expected
+    assert relative_error.max() < 0.05, dict(zip(measured, predicted, strict=True))
+    # Strictly increasing, and emphatically not a constant.
+    assert np.all(np.diff(predicted) > 0)
+
+
+def test_bigger_drops_draw_longer_streaks(
+    provider: SharedDepthProvider, scene_hd: np.ndarray
+) -> None:
+    """Length, width and opacity are not independent: they all follow from
+    one drop diameter through the terminal-velocity law. A longer streak must
+    therefore also be a wider one."""
+    t = RandomRain(depth_provider=provider, p=1.0, rain_rate_range_mm_h=(40.0, 40.0))
+    t.set_random_seed(0)
+    params = t.get_params_dependent_on_data({"shape": scene_hd.shape}, {"image": scene_hd})
+    streaks = params["streaks"]
+    # Thickness is quantised to whole pixels, so compare group means rather
+    # than correlating the raw arrays.
+    order = np.argsort(streaks["length"])
+    quartile = len(order) // 4
+    short = streaks["thickness"][order[:quartile]].mean()
+    long = streaks["thickness"][order[-quartile:]].mean()
+    assert long > short
+
+
 def test_streak_angles_vary_within_jitter_bound(
-    provider: SharedDepthProvider, scene: np.ndarray
+    provider: SharedDepthProvider, scene_hd: np.ndarray
 ) -> None:
     """Streaks must not all share the exact same angle (real rain isn't a
-    perfectly parallel line-hatch pattern), but each one's deviation from
-    the base angle must stay within angle_jitter_range."""
-    angle_range = (10.0, 10.0)
-    angle_jitter_range = (5.0, 5.0)
+    perfectly parallel line-hatch pattern), but with a level camera — whose
+    vanishing point is at infinity — each one's deviation from the base
+    angle must stay within angle_jitter_range."""
     t = RandomRain(
         depth_provider=provider,
         p=1.0,
-        streak_density_range=(100, 100),
-        angle_range=angle_range,
-        angle_jitter_range=angle_jitter_range,
+        rain_rate_range_mm_h=(20.0, 20.0),
+        camera_pitch_range_deg=(0.0, 0.0),
+        wind_angle_range=(10.0, 10.0),
+        angle_jitter_range=(5.0, 5.0),
     )
-    params = t.get_params_dependent_on_data({"shape": scene.shape}, {"image": scene})
+    t.set_random_seed(0)
+    params = t.get_params_dependent_on_data({"shape": scene_hd.shape}, {"image": scene_hd})
     streak_angles = {round(float(a), 6) for a in params["streaks"]["angle"]}
     assert len(streak_angles) > 1, "all streaks share the exact same angle"
     for angle in streak_angles:
         assert 10.0 - 5.0 - 1e-6 <= angle <= 10.0 + 5.0 + 1e-6
+
+
+def test_level_camera_gives_parallel_streaks() -> None:
+    """Rain falls along parallel world lines. With the camera level that
+    direction is perpendicular to the optical axis, its vanishing point is at
+    infinity, and the projected streaks are exactly parallel."""
+    x = np.array([50.0, 320.0, 600.0], dtype=np.float32)
+    y = np.full(3, 240.0, dtype=np.float32)
+    angles = _perspective_angles(x, y, 640, 480, 554.0, camera_pitch_deg=0.0, wind_angle_deg=12.0)
+    np.testing.assert_allclose(angles, 12.0, atol=1e-4)
+
+
+def test_tilted_camera_makes_streaks_converge() -> None:
+    """Parallel 3-D lines project through a common vanishing point, so a
+    camera tilted down makes the streaks splay symmetrically about it —
+    which is what says the rain is falling *through* the scene rather than
+    being drawn on top of it."""
+    # Symmetric about the frame centre (320), so the flanking angles must
+    # come out equal and opposite.
+    x = np.array([50.0, 320.0, 590.0], dtype=np.float32)
+    y = np.full(3, 240.0, dtype=np.float32)
+    angles = _perspective_angles(x, y, 640, 480, 554.0, camera_pitch_deg=30.0, wind_angle_deg=0.0)
+
+    # Centre column falls straight down; the flanks lean toward it, by equal
+    # and opposite amounts for a symmetric pair.
+    assert angles[1] == pytest.approx(0.0, abs=1e-4)
+    assert angles[0] > 2.0
+    assert angles[2] < -2.0
+    assert angles[0] == pytest.approx(-angles[2], abs=1e-3)
 
 
 def test_ground_wetness_feathers_without_hard_seam() -> None:
@@ -140,3 +244,47 @@ def test_ground_wetness_feathers_without_hard_seam() -> None:
     natural_step = np.abs(img[band_start] - img[band_start - 1]).mean()
     seam_diff = np.abs(out[band_start] - out[band_start - 1]).mean()
     assert seam_diff <= natural_step + 5.0
+
+
+def test_rain_rate_drives_visible_streak_coverage(
+    provider: SharedDepthProvider, scene_hd: np.ndarray
+) -> None:
+    """Heavier rain must put visibly more streak coverage in frame, at every
+    step of the ladder.
+
+    This is the end-to-end guard on the budget logic. When the render cap
+    binds, the *width* threshold is raised rather than the field truncated;
+    truncating instead makes apparent intensity depend on the render budget
+    rather than on the weather, which showed up as coverage peaking mid-ladder
+    and then falling as the rate kept climbing.
+    """
+
+    def coverage(rate: float) -> float:
+        t = RandomRain(depth_provider=provider, p=1.0, rain_rate_range_mm_h=(rate, rate))
+        t.set_random_seed(0)
+        params = t.get_params_dependent_on_data({"shape": scene_hd.shape}, {"image": scene_hd})
+        layer = render_streak_layer(scene_hd.shape[0], scene_hd.shape[1], params["streaks"])
+        return float((-np.expm1(-layer) > 0.02).mean())
+
+    coverages = [coverage(rate) for rate in (5.0, 20.0, 45.0, 70.0, 95.0)]
+    assert all(a < b for a, b in zip(coverages, coverages[1:], strict=False)), coverages
+
+
+def test_streak_width_and_length_track_distance(
+    provider: SharedDepthProvider, scene_hd: np.ndarray
+) -> None:
+    """Both scale as 1/z, so near drops must draw longer *and* wider streaks.
+
+    Distance is compared directly rather than via a rendered dimension: width
+    and length each depend on the drop's diameter as well as its distance, so
+    neither is a usable proxy for the other.
+    """
+    t = RandomRain(depth_provider=provider, p=1.0, rain_rate_range_mm_h=(40.0, 40.0))
+    t.set_random_seed(0)
+    params = t.get_params_dependent_on_data({"shape": scene_hd.shape}, {"image": scene_hd})
+    streaks = params["streaks"]
+
+    order = np.argsort(streaks["distance"])
+    near, far = order[: len(order) // 4], order[-len(order) // 4 :]
+    assert streaks["length"][near].mean() > streaks["length"][far].mean()
+    assert streaks["thickness"][near].mean() >= streaks["thickness"][far].mean()

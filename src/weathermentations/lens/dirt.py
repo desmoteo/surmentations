@@ -26,16 +26,39 @@ what make a dirty lens recognisable:
    Gaussians (cheap, and keeps the heavy tail) and lerp toward it under the
    mask — which washes out local contrast the way real haze on glass does.
 
-Only a small absorption tint is applied on top, for genuinely opaque muck.
-Note that front-element dust specks are *not* drawn as visible specks: they
-are optically invisible in their own right. Sharp dark spots come from
-sensor dust, which is a different (and per-camera fixed) phenomenon.
+3. **It is not one substance, and not one colour.** This is the third thing
+   that decides whether grime reads as real, and the easiest to get wrong.
+   A pane collects several deposits at once, each with its own *single-
+   scattering albedo* — the fraction of light it returns, per wavelength:
+
+   * **Mineral dust and sand** (silica with iron-oxide staining) absorb
+     strongly toward the blue, so they scatter a warm tan. This is the
+     Ångström-exponent behaviour that makes dust-hazed skies yellow.
+   * **Clay and soil splash** absorb harder still across the blue-green,
+     reading light brown.
+   * **Soot and urban road film** (black carbon) absorb almost flat across
+     the visible band — the canonical *grey* absorber, dark but neutral.
+   * **Limescale, sea salt and dried spray residue** barely absorb at all,
+     so they scatter nearly white, and being highly scattering they are the
+     most visible deposit per unit of thickness.
+   * **Pollen and organic films** absorb blue and reflect yellow-green.
+
+   The albedo multiplies the scattered term rather than being painted over
+   the top, so each deposit both tints *and* dims what scatters through it,
+   and ``1 - albedo`` is the light it absorbs. A single global brown tint —
+   the previous model — collapses all of that into a decal.
+
+Front-element dust specks are *not* drawn as visible specks: they are
+optically invisible in their own right. Sharp dark spots come from sensor
+dust, which is a different (and per-camera fixed) phenomenon.
 
 The mask itself is deliberately multi-scale and anisotropic: a low-frequency
 smudge field, plus curved *wipe arcs* (someone smeared it with a cloth or a
 wiper blade, which leaves directional streaks rather than isotropic blobs),
 plus dried water-spot rings — droplets dry via the coffee-ring effect,
-leaving a high-scatter annulus with a cleaner centre.
+leaving a high-scatter annulus with a cleaner centre. Each of those carries
+its own deposit colour: a wipe arc is smeared road film, a dried spot is
+mineral residue left by evaporating water, and they do not look alike.
 
 All size-like parameters are fractions of the image diagonal, so the effect
 looks the same at any resolution.
@@ -50,16 +73,53 @@ import cv2
 import numpy as np
 from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator
 
 from weathermentations.base import WeatherTransform
-from weathermentations.utils.noise import blob_cluster_mask
+from weathermentations.utils.noise import colored_blob_cluster
 from weathermentations.utils.photometry import (
     from_linear_unit,
     luminance,
-    srgb_to_linear,
     to_linear_unit,
 )
+
+# Single-scattering albedo of each deposit as **linear-light** RGB: the
+# fraction of light the substance returns in each channel, so 1 - albedo is
+# what it absorbs. These are representative values for the material classes,
+# not measurements of a specific sample — the point is the relative spectral
+# shape (which channel is suppressed), because that is what the eye reads as
+# "dust" versus "soot" versus "salt".
+DEPOSIT_ALBEDOS: dict[str, tuple[float, float, float]] = {
+    # Salt, limescale, dried spray residue: essentially non-absorbing, so it
+    # scatters near-white and is the most conspicuous deposit per unit of
+    # thickness.
+    "limescale": (0.92, 0.93, 0.94),
+    # Silica sand stained with iron oxide. Absorbs toward the blue (the
+    # Angstrom-exponent behaviour that yellows dust-hazed skies), so it
+    # scatters a warm tan.
+    "mineral_dust": (0.80, 0.70, 0.48),
+    # Clay/soil splash: absorbs harder across blue and green, reading light
+    # brown.
+    "clay_soil": (0.52, 0.40, 0.27),
+    # Black carbon is the canonical *grey* absorber: near-flat absorption
+    # across the visible band, so it darkens without tinting.
+    "soot": (0.22, 0.22, 0.23),
+    # The usual windscreen mixture of diesel exhaust and road dust.
+    "road_film": (0.45, 0.44, 0.42),
+    # Pollen and organic films absorb blue and reflect yellow-green.
+    "pollen": (0.72, 0.66, 0.30),
+}
+
+# What a wiper or a cloth leaves: every deposit present, mechanically mixed,
+# so it is duller and more neutral than any single one of them.
+_WIPE_DEPOSIT = "road_film"
+# Evaporating water leaves behind its dissolved minerals, not whatever else
+# was on the glass.
+_WATER_SPOT_DEPOSIT = "limescale"
+
+# A caked, opaque crust is the same substance seen in its own shadow rather
+# than lit through: darker than the deposit's albedo, but the same hue.
+_OPAQUE_BODY_FRACTION = 0.35
 
 
 def scatter_psf(image: np.ndarray, radius_px: float, max_sigma_px: float = 12.0) -> np.ndarray:
@@ -179,8 +239,17 @@ class DirtSoil(WeatherTransform):
             invisible in flat light and glaring when backlit.
         scatter_radius_range: scatter PSF radius, as a fraction of the image
             diagonal — how far a bright source fogs out across the grime.
-        absorption_range: how much genuinely opaque muck darkens/tints, on
-            top of the scattering. Keep small; dirt mostly scatters.
+        absorption_range: how much genuinely *opaque* caked muck blocks the
+            scene outright, on top of the scattering. Keep small; dirt
+            mostly scatters. What it blocks toward is the deposit's own dark
+            body colour, so this stays consistent with the mix on the glass.
+        deposits: which deposit types may appear, as keys of
+            :data:`DEPOSIT_ALBEDOS` (``None`` uses all of them). Each smudge
+            patch independently draws one, so a single frame normally shows
+            several. Restrict it to model a specific environment — e.g.
+            ``("mineral_dust", "clay_soil")`` for a dirt road, ``("soot",
+            "road_film")`` for urban traffic, ``("limescale",)`` for dried
+            sea spray.
 
     Targets:
         image
@@ -240,7 +309,7 @@ class DirtSoil(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 0.6)),
         ]
-        tint: tuple[int, int, int] = Field(default=(120, 112, 100))
+        deposits: tuple[str, ...] | None
 
     def __init__(
         self,
@@ -254,7 +323,7 @@ class DirtSoil(WeatherTransform):
         veil_strength_range: tuple[float, float] = (0.35, 0.8),
         scatter_radius_range: tuple[float, float] = (0.02, 0.07),
         absorption_range: tuple[float, float] = (0.02, 0.12),
-        tint: tuple[int, int, int] = (120, 112, 100),
+        deposits: tuple[str, ...] | None = None,
         p: float = 0.5,
     ):
         super().__init__(p=p)
@@ -268,7 +337,16 @@ class DirtSoil(WeatherTransform):
         self.veil_strength_range = veil_strength_range
         self.scatter_radius_range = scatter_radius_range
         self.absorption_range = absorption_range
-        self.tint = tint
+        if deposits is not None:
+            unknown = sorted(set(deposits) - set(DEPOSIT_ALBEDOS))
+            if unknown:
+                raise ValueError(
+                    f"Unknown deposit type(s) {unknown}. "
+                    f"Available: {sorted(DEPOSIT_ALBEDOS)}"
+                )
+            if not deposits:
+                raise ValueError("`deposits` must name at least one deposit type.")
+        self.deposits = deposits
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -277,22 +355,48 @@ class DirtSoil(WeatherTransform):
         diagonal = float(np.hypot(width, height))
         rng = self.random_generator
 
-        mask = blob_cluster_mask(
+        names = tuple(self.deposits) if self.deposits is not None else tuple(DEPOSIT_ALBEDOS)
+
+        # Each smudge patch is its own substance, drawn independently, so one
+        # frame normally carries several deposits at once — which is what a
+        # real pane looks like and what a single global tint cannot express.
+        smudge_count = self.py_random.randint(*self.smudge_count_range)
+        chosen = [names[self.py_random.randrange(len(names))] for _ in range(smudge_count)]
+        smudge_albedos = np.array(
+            [DEPOSIT_ALBEDOS[name] for name in chosen] or [(1.0, 1.0, 1.0)], dtype=np.float32
+        )
+        mask, albedo = colored_blob_cluster(
             height,
             width,
             rng=rng,
-            count=self.py_random.randint(*self.smudge_count_range),
+            colors=smudge_albedos,
             size_range=(
                 self.smudge_size_range[0] * diagonal,
                 self.smudge_size_range[1] * diagonal,
             ),
         )
 
+        def merge(
+            layer: np.ndarray, color: tuple[float, float, float]
+        ) -> None:
+            """Fold one extra mask layer in, carrying its own deposit colour.
+
+            Masks combine with a max, so the colour has to follow the same
+            rule: wherever the new layer is the thicker deposit, it is also
+            the one whose albedo is seen.
+            """
+            nonlocal mask, albedo
+            takes_over = layer > mask
+            albedo = np.where(
+                takes_over[..., None], np.array(color, dtype=np.float32), albedo
+            )
+            mask = np.maximum(mask, layer)
+
         arc_count = self.py_random.randint(*self.wipe_arc_count_range)
         if arc_count:
             arcs = _wipe_arcs(height, width, rng, arc_count, thickness_px=diagonal * 0.02)
             arcs = cv2.GaussianBlur(arcs, (0, 0), sigmaX=diagonal * 0.012)
-            mask = np.maximum(mask, arcs * 1.4)
+            merge(arcs * 1.4, DEPOSIT_ALBEDOS[_WIPE_DEPOSIT])
 
         spot_count = self.py_random.randint(*self.water_spot_count_range)
         if spot_count:
@@ -307,10 +411,14 @@ class DirtSoil(WeatherTransform):
                 ),
             )
             spots = cv2.GaussianBlur(spots, (0, 0), sigmaX=max(1.0, diagonal * 0.003))
-            mask = np.maximum(mask, spots)
+            merge(spots, DEPOSIT_ALBEDOS[_WATER_SPOT_DEPOSIT])
 
-        # Grime is never sharp — it is far outside the depth of field.
-        mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=max(1.0, diagonal * 0.006))
+        # Grime is never sharp — it is far outside the depth of field. The
+        # albedo field is softened with it, or deposits would meet along hard
+        # seams that the blurred mask no longer has.
+        blur_sigma = max(1.0, diagonal * 0.006)
+        mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=blur_sigma)
+        albedo = cv2.GaussianBlur(albedo, (0, 0), sigmaX=blur_sigma)
 
         # Normalise to the requested (sparse) coverage so the knobs stay
         # predictable regardless of how the blobs happened to land.
@@ -321,6 +429,7 @@ class DirtSoil(WeatherTransform):
 
         return {
             "dirt_mask": mask.astype(np.float32),
+            "deposit_albedo": albedo.astype(np.float32),
             "veil_strength": self.py_random.uniform(*self.veil_strength_range),
             "highlight_boost": self.py_random.uniform(*self.highlight_boost_range),
             "scatter_radius": self.py_random.uniform(*self.scatter_radius_range) * diagonal,
@@ -331,6 +440,7 @@ class DirtSoil(WeatherTransform):
         self,
         img: np.ndarray,
         dirt_mask: np.ndarray,
+        deposit_albedo: np.ndarray,
         veil_strength: float,
         highlight_boost: float,
         scatter_radius: float,
@@ -354,13 +464,24 @@ class DirtSoil(WeatherTransform):
         luma = luminance(linear)
         highlight = np.clip((luma - 0.35) / 0.65, 0.0, 1.0)[..., None]
         emphasised = linear * (1.0 + highlight_boost * highlight)
-        scattered = scatter_psf(emphasised, scatter_radius)
+
+        # The deposit's single-scattering albedo multiplies the scattered
+        # term. Light that scatters off a tan dust grain comes back tan, and
+        # the 1 - albedo it did not return is simply absorbed — so tint and
+        # absorption are the same physical quantity here rather than two
+        # separately-tuned layers. It also stays energy-conserving: albedo is
+        # at most 1, so this can only ever remove light from the scattered
+        # term, never manufacture it.
+        scattered = scatter_psf(emphasised, scatter_radius) * deposit_albedo
 
         veil = np.clip(veil_strength * mask, 0.0, 0.95)
         out = linear * (1.0 - veil) + scattered * veil
 
-        # A little genuinely opaque muck on top.
-        tint = srgb_to_linear(np.array(self.tint, dtype=np.float32).reshape(1, 1, 3) / 255.0)
-        out = out * (1.0 - absorption * mask) + tint * (absorption * mask)
+        # A little genuinely opaque, caked muck on top — thick enough to block
+        # rather than scatter. It blocks toward a dark version of whatever
+        # deposit is actually there, so a soot patch goes near-black while a
+        # limescale crust stays pale.
+        body_color = deposit_albedo * _OPAQUE_BODY_FRACTION
+        out = out * (1.0 - absorption * mask) + body_color * (absorption * mask)
 
         return from_linear_unit(out, scale, is_integer, img.dtype)

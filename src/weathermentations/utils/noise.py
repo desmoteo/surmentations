@@ -8,6 +8,8 @@ irregular cluster masks this library needs.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import cv2
 import numpy as np
 
@@ -41,25 +43,29 @@ def value_noise(
     return np.clip(result, 0.0, 1.0)
 
 
-def blob_cluster_mask(
+def _blob_patches(
     height: int,
     width: int,
     *,
     rng: np.random.Generator,
     count: int,
     size_range: tuple[float, float],
-    irregularity: float = 1.5,
-) -> np.ndarray:
-    """Soft alpha mask (float32, ``[0, 1]``) with ``count`` irregular noise-based blobs.
+    irregularity: float,
+) -> Iterator[tuple[int, np.ndarray, slice, slice]]:
+    """Yield ``(index, blob, row_slice, col_slice)`` for each generated blob.
+
+    The index is the blob's position in the requested sequence, which is not
+    the same as its position in the yielded stream: blobs landing entirely
+    off-frame are skipped, so a caller pairing blobs with per-blob data must
+    use this index rather than counting yields.
 
     Each blob is a localized patch of value noise modulated by a radial
     falloff, normalized so it always peaks at 1.0 regardless of the random
     noise draw, then raised to ``irregularity`` (>1 shrinks the blob toward
-    an irregular core; 1 keeps the raw soft-edged shape). Blobs are combined
-    with a max so overlapping blobs don't double-darken.
+    an irregular core; 1 keeps the raw soft-edged shape). Blobs falling
+    entirely outside the frame are skipped.
     """
-    mask = np.zeros((height, width), dtype=np.float32)
-    for _ in range(count):
+    for index in range(count):
         radius = float(rng.uniform(*size_range))
         cx = rng.uniform(0, width)
         cy = rng.uniform(0, height)
@@ -87,7 +93,80 @@ def blob_cluster_mask(
         src_x1 = src_x0 + (dst_x1 - dst_x0)
         src_y1 = src_y0 + (dst_y1 - dst_y0)
 
-        region = mask[dst_y0:dst_y1, dst_x0:dst_x1]
-        np.maximum(region, blob[src_y0:src_y1, src_x0:src_x1], out=region)
+        yield (
+            index,
+            blob[src_y0:src_y1, src_x0:src_x1],
+            slice(dst_y0, dst_y1),
+            slice(dst_x0, dst_x1),
+        )
 
+
+def blob_cluster_mask(
+    height: int,
+    width: int,
+    *,
+    rng: np.random.Generator,
+    count: int,
+    size_range: tuple[float, float],
+    irregularity: float = 1.5,
+) -> np.ndarray:
+    """Soft alpha mask (float32, ``[0, 1]``) with ``count`` irregular noise-based blobs.
+
+    Blobs are combined with a max so overlapping blobs don't double-darken.
+    """
+    mask = np.zeros((height, width), dtype=np.float32)
+    for _index, blob, rows, cols in _blob_patches(
+        height, width, rng=rng, count=count, size_range=size_range, irregularity=irregularity
+    ):
+        region = mask[rows, cols]
+        np.maximum(region, blob, out=region)
     return mask
+
+
+def colored_blob_cluster(
+    height: int,
+    width: int,
+    *,
+    rng: np.random.Generator,
+    colors: np.ndarray,
+    size_range: tuple[float, float],
+    irregularity: float = 1.5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Blob mask plus a per-pixel colour field, one colour per blob.
+
+    ``colors`` is ``(count, C)``; one blob is generated per row. Real grime is
+    not one substance — a windscreen collects road salt in one patch, diesel
+    film in another and clay splash in a third, and each has its own colour.
+    Painting the whole mask a single tint is what makes synthetic dirt read as
+    a brown decal.
+
+    Returns ``(mask, color_field)``. The mask combines with a max, as in
+    :func:`blob_cluster_mask`. The colour field is the blob colours averaged
+    *weighted by each blob's own alpha*, so where two deposits overlap their
+    colours mix in proportion to how thick each one is there, and where no
+    blob reaches the field falls back to the mean colour (the mask is zero
+    there, so that value is never actually visible — it just keeps the field
+    finite for any downstream filtering).
+    """
+    channels = colors.shape[1]
+    mask = np.zeros((height, width), dtype=np.float32)
+    weighted = np.zeros((height, width, channels), dtype=np.float32)
+    weights = np.zeros((height, width), dtype=np.float32)
+
+    for index, blob, rows, cols in _blob_patches(
+        height,
+        width,
+        rng=rng,
+        count=len(colors),
+        size_range=size_range,
+        irregularity=irregularity,
+    ):
+        region = mask[rows, cols]
+        np.maximum(region, blob, out=region)
+        weighted[rows, cols] += blob[..., None] * colors[index]
+        weights[rows, cols] += blob
+
+    fallback = colors.mean(axis=0).astype(np.float32)
+    safe = np.maximum(weights, 1e-6)[..., None]
+    color_field = np.where(weights[..., None] > 1e-6, weighted / safe, fallback)
+    return mask, color_field.astype(np.float32)
