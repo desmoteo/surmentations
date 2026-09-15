@@ -87,10 +87,8 @@ def _summarise(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         if value.size == 0:
             return {"n": 0}
-        if value.size <= _SMALL_ARRAY:
-            return [round(float(x), 5) for x in value.ravel()]
         flat = value.astype(np.float64).ravel()
-        return {
+        summary = {
             "n": int(value.size),
             "shape": list(value.shape),
             "min": round(float(flat.min()), 5),
@@ -98,6 +96,16 @@ def _summarise(value: Any) -> Any:
             "max": round(float(flat.max()), 5),
             "mean": round(float(flat.mean()), 5),
         }
+        # A tiny array is cheap enough to keep in full, but it keeps the same
+        # shape as every other one. Emitting a bare list here instead — which
+        # this did — meant a field's schema changed with the particle count,
+        # so `out.flakes.radius.p50` read fine on a heavy frame and raised
+        # TypeError on a light one. That is the worst place for an
+        # inconsistency: the low-severity frames are exactly the ones an audit
+        # of "is severity 1 doing anything" has to read.
+        if value.size <= _SMALL_ARRAY:
+            summary["values"] = [round(float(x), 5) for x in flat]
+        return summary
     if isinstance(value, (list, tuple)):
         # A list of per-particle tuples reduces to its length; a short tuple
         # (a range, a position) is worth keeping verbatim.
