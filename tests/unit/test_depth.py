@@ -6,7 +6,11 @@ import torch
 
 from weathermentations.depth.estimator import DepthAnythingV2Estimator, DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.depth.scale import DEFAULT_MAX_DISTANCE_METERS, to_pseudo_metric
+from weathermentations.depth.scale import (
+    DEFAULT_MAX_DISTANCE_METERS,
+    DEFAULT_MIN_DISTANCE_METERS,
+    to_pseudo_metric,
+)
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="depth-conditioned effects require CUDA"
@@ -46,13 +50,36 @@ def test_shared_depth_provider_caches_by_array_identity() -> None:
     assert not np.array_equal(first, third)
 
 
-def test_to_pseudo_metric_default_and_explicit_scale() -> None:
-    relative = np.array([[0.0, 0.5, 1.0]], dtype=np.float32)
-    default = to_pseudo_metric(relative)
-    np.testing.assert_allclose(default, relative * DEFAULT_MAX_DISTANCE_METERS)
+def test_to_pseudo_metric_maps_between_a_near_and_a_far_plane() -> None:
+    """Relative depth spans a *range* of distances, not [0, far].
 
-    explicit = to_pseudo_metric(relative, depth_scale=10.0)
-    np.testing.assert_allclose(explicit, relative * 10.0)
+    The nearest scene point must land on the near plane. Mapping it to zero
+    instead is a singularity for any inverse-square quantity — it gave the
+    night-mode illuminator a 27 778x near:far irradiance ratio on a scene
+    whose real span is closer to 300x.
+    """
+    relative = np.array([[0.0, 0.5, 1.0]], dtype=np.float32)
+
+    default = to_pseudo_metric(relative)
+    assert default[0, 0] == pytest.approx(DEFAULT_MIN_DISTANCE_METERS)
+    assert default[0, -1] == pytest.approx(DEFAULT_MAX_DISTANCE_METERS)
+    # Linear in between.
+    assert default[0, 1] == pytest.approx(
+        0.5 * (DEFAULT_MIN_DISTANCE_METERS + DEFAULT_MAX_DISTANCE_METERS)
+    )
+
+    explicit = to_pseudo_metric(relative, depth_scale=10.0, near_distance=2.0)
+    np.testing.assert_allclose(explicit, np.array([[2.0, 6.0, 10.0]]), rtol=1e-6)
+
+
+def test_to_pseudo_metric_is_monotonic_and_never_degenerate() -> None:
+    """Whatever the calibration, farther must mean farther and no distance may
+    reach zero — every downstream formula divides by it."""
+    relative = np.linspace(0.0, 1.0, 32, dtype=np.float32)
+    for far, near in ((50.0, 3.0), (10.0, 0.5), (5.0, 20.0)):
+        depth = to_pseudo_metric(relative, depth_scale=far, near_distance=near)
+        assert np.all(np.diff(depth) >= 0.0)
+        assert depth.min() > 0.0
 
 
 @requires_cuda
