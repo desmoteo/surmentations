@@ -15,6 +15,8 @@ than exposed.
   models and why, with diagrams. Start here to decide which knobs matter.
 - **[`docs/physical_review.md`](docs/physical_review.md)** — a critical audit
   of whether the implementation lives up to that, including where it did not.
+- **[`optimizations.md`](optimizations.md)** — where the CPU time actually
+  goes, and an assessment of what is worth optimising.
 - **[`plan.md`](plan.md)** — design record and roadmap.
 
 ---
