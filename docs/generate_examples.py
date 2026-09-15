@@ -302,6 +302,42 @@ def _build(
     return RandomSnow(depth_provider=provider, accumulation_probability=1.0, **kwargs)
 
 
+
+# How many draws to take per gallery cell before choosing one to show.
+_GALLERY_DRAWS = 7
+
+
+def _render_representative(
+    transform: Any, scene: np.ndarray, rng: np.random.Generator
+) -> np.ndarray:
+    """Render several draws and keep the median one, by how much it changed.
+
+    A gallery cell is a single sample from a distribution, and showing
+    whichever sample came up first misrepresents the distribution at both
+    ends. Some effects can legitimately draw themselves out of existence —
+    an exposure landing on a whole flicker period cancels AC banding exactly,
+    which is how a camera's anti-flicker setting works, and the sun-flare
+    geometry can put every artefact off frame. Those are correct outputs and
+    useless illustrations: the reader cannot tell them from a bug, and three
+    of the five `housing_occluders` cells were bit-identical to the input
+    before this existed.
+
+    Taking the **median** rather than the strongest draw is the point. It
+    rejects the degenerate tail without reaching for the flattering tail, so
+    a cell shows what that severity typically looks like. Only the seed
+    varies across the draws; the preset and the per-variant jitter are fixed,
+    so nothing here can make a level appear stronger than it is.
+    """
+    reference = scene.astype(np.float32)
+    candidates = []
+    for _ in range(_GALLERY_DRAWS):
+        transform.set_random_seed(int(rng.integers(0, 2**31 - 1)))
+        out = transform(image=scene)["image"]
+        candidates.append((float(np.abs(out.astype(np.float32) - reference).mean()), out))
+    candidates.sort(key=lambda pair: pair[0])
+    return candidates[len(candidates) // 2][1]
+
+
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     scene = _base_scene()
@@ -322,8 +358,7 @@ def main() -> None:
     for name in tqdm(names, total=len(names), desc="effects"):
         for index, level in enumerate(LEVELS):
             transform = _build(name, level, index, rng, depth_provider)
-            transform.set_random_seed(int(rng.integers(0, 2**31 - 1)))
-            out = transform(image=scene)["image"]
+            out = _render_representative(transform, scene, rng)
             cv2.imwrite(
                 str(OUT_DIR / f"{name}_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
             )

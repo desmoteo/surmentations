@@ -75,9 +75,17 @@ class AcFlicker(WeatherTransform):
         readout_time_range_s: time the sensor takes to read all rows out.
             Together with the flicker frequency this fixes how many bands
             cross the frame.
-        exposure_time_range_s: per-row exposure. Sets the band *depth* through
-            the sinc term — an exposure that is a whole number of flicker
-            periods cancels the banding entirely.
+        exposure_time_range_s: per-row exposure. Sets the band *depth*
+            through the sinc term — an exposure that is a whole number of
+            flicker periods cancels the banding entirely, which is exactly
+            what a camera's "anti-flicker" setting arranges. **Sampled
+            log-uniformly**, because exposure is a logarithmic quantity:
+            photographers count it in stops, and the interval 1/1000-1/500 s
+            is as large a change as 1/8-1/4 s. Drawing it uniformly puts most
+            of the mass at the long end, which here is the end the sinc
+            cancels — median |sinc| 0.22 uniform against 0.76 log-uniform
+            over the default range, i.e. most frames came out with no visible
+            banding at all.
         modulation_depth_range: peak-to-mean modulation of the lamp itself,
             before the exposure averages it. Gas-discharge lamps without
             smoothing ballast approach 1; an incandescent filament has thermal
@@ -127,7 +135,13 @@ class AcFlicker(WeatherTransform):
     ) -> dict[str, Any]:
         del data
         readout = self.py_random.uniform(*self.readout_time_range_s)
-        exposure = self.py_random.uniform(*self.exposure_time_range_s)
+        # Log-uniform: see exposure_time_range_s. Readout time stays uniform -
+        # it is a fixed property of the sensor over a narrow range, not an
+        # exposure setting that moves in stops.
+        low, high = self.exposure_time_range_s
+        exposure = float(
+            np.exp(self.py_random.uniform(np.log(max(low, 1e-9)), np.log(max(high, 1e-9))))
+        )
         nominal = self.py_random.uniform(*self.modulation_depth_range)
 
         flicker_hz = 2.0 * self.mains_frequency_hz

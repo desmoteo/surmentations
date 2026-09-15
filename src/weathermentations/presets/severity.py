@@ -171,7 +171,16 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "stale_block_fraction_range": (_lerp(0.01, 0.08, t), _lerp(0.08, 0.35, t)),
             },
             "HousingOccluders": {
-                "insect_count_range": (0, int(_lerp(1, 6, t))),
+                # At least one insect at every level. A count range starting
+                # at zero made "no occluders at all" a legal draw 28% of the
+                # time at level 1 and 3% at level 5 - so a caller who set
+                # p=1.0, and therefore explicitly asked for the effect, got a
+                # bit-identical frame back. Whether the effect applies is
+                # what `p` is for; the count should decide how much of it
+                # there is, not whether there is any.
+                "insect_count_range": (int(_lerp(1, 3, t)), int(_lerp(2, 8, t))),
+                # Webs stay optional: they are seasonal and a housing can
+                # easily carry insects with no web at all.
                 "web_count_range": (0, int(_lerp(1, 3, t))),
                 "opacity_range": (_lerp(0.3, 0.6, t), _lerp(0.6, 1.0, t)),
             },
