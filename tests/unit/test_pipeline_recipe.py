@@ -47,9 +47,18 @@ class _GroundPlane(DepthEstimator):
 
 
 def _recipe() -> dict[str, Any]:
-    """The document's first python block, executed as written."""
-    blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), re.S)
-    assert blocks, "docs/pipelines.md has no python block"
+    """The document's recipe block, executed as written.
+
+    Selected by content rather than position: the document opens with a short
+    import snippet, and indexing blindly into `blocks[0]` silently ran that
+    instead the moment the page was reorganised.
+    """
+    blocks = [
+        b
+        for b in re.findall(r"```python\n(.*?)```", DOC.read_text(), re.S)
+        if "def surveillance" in b
+    ]
+    assert blocks, "docs/pipelines.md no longer contains the recipe"
     namespace: dict[str, Any] = {}
     exec(blocks[0], namespace)  # noqa: S102 - the point is to run the documented code
     return namespace

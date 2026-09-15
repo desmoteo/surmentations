@@ -19,3 +19,6 @@ htmlcov/
 # Diagnostic sweeps and benchmark output (scripts/diagnose.py, scripts/benchmark.py)
 draws.jsonl
 diagnostics/
+
+# Output of scripts/benchmark_pipelines.py
+pipeline_samples/
