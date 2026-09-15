@@ -854,3 +854,59 @@ most of the time. Every check in this document's first three passes verified
 that outputs follow from their inputs; none of them asked whether the inputs
 were drawn from a sensible distribution. That is the gap the fourth pass
 found, and the severity tests now guard the visible end of it.
+
+## F17 — Band *count*, not band depth, is what makes flicker legible
+
+F15 tripled the flicker's band depth and it was still reported as having no
+effect. It did have one: measured peak-to-peak modulation was **27%**. The
+picture disagreed with the number, and the picture was right — **the metric
+was measuring the wrong thing.**
+
+Two broad bands across a frame is a smooth luminance gradient, and the eye
+discounts slow gradients as an exposure difference no matter how deep they
+are. What makes flicker read as an artefact is the number of bands, and
+
+    bands across the frame = 2 · f_mains · readout_time
+
+`readout_time_range_s` defaulted to (0.012, 0.033) s, giving **1.2–3.3
+bands**. That range is a fast sensor: 12 ms is an 83 fps readout. A rolling
+shutter reads out over roughly its frame period, so a 25–30 fps camera takes
+33–40 ms and a bandwidth-limited 17 fps stream takes 60 ms. The default is
+now (0.020, 0.060) s — 50 fps down to 17 fps — for **2–6 bands** at 50 Hz
+mains and 2.4–7.2 at 60 Hz.
+
+Second, the lamp was a pure sinusoid. Only an incandescent filament is one,
+and only because its thermal mass low-passes the supply; a discharge lamp
+follows `|sin|` and a cheap LED driver conducts in narrow pulses near the
+mains peaks, both of which carry harmonics that give bands visible edges. The
+lamp is now `|sin(πu)| ** pulse_exponent` over the flicker period, with a new
+`pulse_exponent_range` defaulting to (1, 5): 1 is a discharge lamp, 2 is
+exactly a sinusoid, 4+ an LED pulse train.
+
+**Each harmonic is box-filtered by the exposure independently**, so each gets
+its own `sinc(n·T·f)`. That is not a detail — it is what keeps anti-flicker
+cancellation exact: when `T·f` is a whole number so is every multiple, and
+the entire profile vanishes together rather than leaving harmonics ringing.
+A test pins that at a strongly harmonic lamp setting.
+
+| | bands | mean \|Δ\| by severity | peak-to-peak at sev 5 |
+| --- | --- | --- | --- |
+| originally reported | 2.2 | 1.9 / 6.4 / 1.4 / 4.4 / 10.2 | — |
+| after F15 (log-uniform exposure) | 2.2 | 3.2 / 5.1 / 7.0 / 8.9 / 10.8 | 20.6% |
+| after F17 | **3.9** | 2.8 / 4.5 / 6.2 / 7.8 / 9.4 | **21.2%** |
+
+The mean |Δ| barely moved — correctly, since nothing about the amount of
+light changed. What moved is entirely in how it is distributed down the
+frame, which is the whole of the complaint and none of what the metric saw.
+
+Severity 1 remains genuinely subtle (6.3% peak-to-peak), which is what a
+bottom rung is for, and the sinc still zeroes the occasional frame outright,
+which is the physics and is worth training against.
+
+**The lesson is a new one for this document.** The earlier failures were
+mechanisms asserted without measurement. This was the reverse: a measurement,
+correctly executed, of a quantity that did not answer the question. Peak-to-
+peak modulation is a real property of the output and says nothing about
+whether a human can see it. The check that would have caught it — and the one
+that did, eventually — was looking at the rendered frame at full size next to
+a clean one.
