@@ -57,6 +57,21 @@ from weathermentations.scene import CastShadows
 #: typical rather than extreme.
 DEFAULT_SEVERITY = 1
 
+#: Severity the *weather* is built at, separately and higher.
+#:
+#: Weather is the only thing in these pipelines a viewer is meant to notice.
+#: It also fires rarely — 12% of frames by default, because that is roughly
+#: how often it rains or fogs in a temperate maritime climate — so a frame
+#: that draws it and then renders an invisible drizzle has wasted the draw.
+#: Measured at 512 px, severity 1 snow puts **19 flakes** in the whole frame
+#: and almost all of its effect comes from the distance veil rather than from
+#: anything the eye reads as snow; severity 2 puts 179 there, and rain goes
+#: from 269 streaks to 1144.
+#:
+#: The camera chain is the opposite case: it is present in nearly every frame,
+#: so it should sit at the bottom of its ladder and compound gently.
+DEFAULT_WEATHER_SEVERITY = 2
+
 
 def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
     """One transform at a severity level, built directly.
@@ -75,7 +90,10 @@ def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any
     pipelines and alternate if you want a mixture; that composes correctly
     because the choice is then outside Albumentations' RNG.
     """
-    return factory(p=probability, **SEVERITY[severity][name], **extra)
+    # `extra` overrides the preset rather than colliding with it, so a caller
+    # can keep a level's physics and still pin one knob — the rain branch
+    # raises `wetness_probability` that way.
+    return factory(p=probability, **{**SEVERITY[severity][name], **extra})
 
 
 def _stream(
@@ -125,7 +143,7 @@ def weather_state(
     wet_snow: float = 0.10,
     wet_fog: float = 0.30,
     wet_clear: float = 0.06,
-    severity: int = DEFAULT_SEVERITY,
+    severity: int = DEFAULT_WEATHER_SEVERITY,
 ) -> A.OneOf:
     """Exactly one atmospheric state per frame, including "clear".
 
@@ -137,8 +155,9 @@ def weather_state(
         wet_rain, wet_snow, wet_fog, wet_clear: ``P(water on the glass | state)``.
             ``wet_clear`` covers dew, residual drops after the rain stops and
             wind-blown spray, which is why it is not zero.
-        severity: level 1-5 from
-            :data:`~weathermentations.presets.severity.SEVERITY`.
+        severity: level 1-5 for the weather itself. Defaults to
+            :data:`DEFAULT_WEATHER_SEVERITY`, which is higher than the rest of
+            the pipeline on purpose — see that constant.
 
     Raises:
         ValueError: if the three weather probabilities sum to 1 or more.
@@ -153,7 +172,17 @@ def weather_state(
         [
             A.Sequential(
                 [
-                    _at(RandomRain, "RandomRain", 1.0, severity, depth_provider=depth_provider),
+                    # Wetness raised above the severity preset's default.
+                    # In daylight a streak carries the sky's radiance, so
+                    # against a bright sky it has almost no contrast --
+                    # measured, lengthening the exposure 5x leaves the
+                    # high-frequency energy it adds flat, because alpha =
+                    # D/(vT) spreads the same light further. What actually
+                    # says "rain" in a daylit frame is the wet road.
+                    _at(
+                        RandomRain, "RandomRain", 1.0, severity,
+                        depth_provider=depth_provider, wetness_probability=0.85,
+                    ),
                     _at(WaterDroplets, "WaterDroplets", wet_rain, severity),
                 ],
                 p=rain,
@@ -191,6 +220,7 @@ def surveillance(
     dirt: float = 0.25,
     occluders: float = 0.12,
     severity: int = DEFAULT_SEVERITY,
+    weather_severity: int = DEFAULT_WEATHER_SEVERITY,
     **weather: float,
 ) -> A.Compose:
     """The full pipeline: weather, optics and the camera chain. **Needs CUDA.**
@@ -219,7 +249,13 @@ def surveillance(
             first one to change if the output looks too heavy. 1 is barely
             visible, 2 an ordinary bad day, 5 a frame you would file a fault
             report about.
-        **weather: forwarded to :func:`weather_state`.
+        weather_severity: level for rain, snow and fog, kept separate and
+            higher — see :data:`DEFAULT_WEATHER_SEVERITY`.
+        **weather: forwarded to :func:`weather_state`. The defaults put
+            weather on 12% of frames, which is climatological rather than
+            convenient: over 20 sample frames you will typically see one rain
+            and no snow. Raise ``rain``/``snow``/``fog`` if you want weather
+            coverage in training rather than a matched climate.
 
     Example:
         >>> from weathermentations.depth import (
@@ -240,7 +276,7 @@ def surveillance(
                                 CastShadows, "CastShadows", 0.30, severity,
                                 depth_provider=depth_provider,
                             ),
-                            weather_state(depth_provider, severity=severity, **weather),
+                            weather_state(depth_provider, severity=weather_severity, **weather),
                             _at(SunFlare, "SunFlare", 0.12, severity),
                             *_stream(lit_by_mains=False, severity=severity, **tail),
                         ],
@@ -248,7 +284,7 @@ def surveillance(
                     ),
                     A.Sequential(
                         [
-                            weather_state(depth_provider, severity=severity, **weather),
+                            weather_state(depth_provider, severity=weather_severity, **weather),
                             # Night under street or shop lighting, camera still
                             # in colour: under-exposed, with the warm cast of
                             # sodium or low-CRI LED against a daylight AWB.
@@ -272,7 +308,7 @@ def surveillance(
                     ),
                     A.Sequential(
                         [
-                            weather_state(depth_provider, severity=severity, **weather),
+                            weather_state(depth_provider, severity=weather_severity, **weather),
                             # p=1.0 because the branch *is* the IR state, and
                             # its weight is what says how often that occurs. A
                             # camera that has cut to monochrome has done so
