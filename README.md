@@ -95,8 +95,9 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | Transform | Models | Needs depth |
 | --- | --- | --- |
 | `RandomFog` | Koschmieder extinction with per-channel scattering, and a cap that keeps the sky's gradient | yes |
-| `RandomRain` | Marshall-Palmer drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and optional wet ground with Fresnel reflection | yes |
+| `RandomRain` | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground that darkens and mirrors the scene about the horizon with Fresnel-weighted reflectance | yes |
 | `RandomSnow` | Gunn-Marshall sizes corrected for snow density, Locatelli-Hobbs fall speeds, and accumulation on upward-facing surfaces | yes |
+| `NightRain` | Rain lit by the camera's **own infrared illuminator**, brightness falling as 1/z² from the lamp. The one case where rain reads as streaks rather than haze — see [`docs/rain_visibility.md`](docs/rain_visibility.md). Needs no depth, so it runs on CPU | no |
 | `CastShadows` | Hard cast shadows on upward-facing surfaces — a classic false-positive source. A loss of the direct beam, so texture survives and the shadow is bluer | yes |
 
 ### Lens and housing
@@ -154,7 +155,8 @@ and the physics behind it.
 | Transform | Start with |
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `exposure_time_range`, `wetness_probability`, `min_streak_width_px`, `max_streaks` |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `exposure_time_range`, `wetness_probability`, `wetness_darkening_range`, `min_streak_width_px` |
+| `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `min_flake_width_px`, `max_flakes` |
 | `CastShadows` | `shadow_count_range`, `shadow_scale_range`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `background_blur_range`, `condensation_coverage_range` |

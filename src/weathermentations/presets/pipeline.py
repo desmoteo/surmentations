@@ -41,14 +41,19 @@ _STAGE_ORDER: dict[str, int] = {
     "SunFlare": 3,
     # Sensor: exposure, readout and their artefacts.
     "NightIrMode": 4,
-    "AcFlicker": 5,
-    "RollingShutter": 5,
+    # Rain lit by the camera's own illuminator, so it has to follow the IR
+    # conversion rather than precede it: the streaks are already in infrared
+    # terms and running them through the scene's reflectance-to-IR conversion
+    # would convert them twice.
+    "NightRain": 5,
+    "AcFlicker": 6,
+    "RollingShutter": 6,
     # ISP: everything the processor does to the raw frame.
-    "ExposureTransient": 6,
-    "WdrToneMapping": 7,
-    "TemporalDenoiseArtifacts": 8,
+    "ExposureTransient": 7,
+    "WdrToneMapping": 8,
+    "TemporalDenoiseArtifacts": 9,
     # Transmission: last, because it acts on the finished picture.
-    "VideoCodecArtifacts": 9,
+    "VideoCodecArtifacts": 10,
 }
 
 # Anything unknown sorts here — after the optics, before the ISP. A neutral
