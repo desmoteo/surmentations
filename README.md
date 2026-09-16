@@ -13,6 +13,9 @@ than exposed.
 
 - **[`docs/how_it_works.md`](docs/how_it_works.md)** — what each effect
   models and why, with diagrams. Start here to decide which knobs matter.
+- **[`docs/rain_visibility.md`](docs/rain_visibility.md)** — why rain streaks
+  are faint at surveillance resolutions, measured; and the drop-size
+  distribution options.
 - **[`docs/pipelines.md`](docs/pipelines.md)** — a worked composite whose
   effects cannot contradict each other, with measured frequencies and cost.
   Start here if you want a pipeline rather than a transform.

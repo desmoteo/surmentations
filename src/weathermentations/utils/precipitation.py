@@ -64,6 +64,74 @@ def marshall_palmer_slope(rain_rate_mm_h: float) -> float:
     return MP_SLOPE_COEFF * max(rain_rate_mm_h, 1e-3) ** MP_SLOPE_EXPONENT
 
 
+#: Shape parameter of the gamma drop-size distribution (Ulbrich 1983). The
+#: exponential of Marshall & Palmer is the ``mu = 0`` case; observed spectra
+#: are consistently better fitted with ``mu`` around 2-4, which suppresses the
+#: pile-up of very small drops an exponential predicts and moves the mode to a
+#: finite diameter. Measured here at 50 mm/h, going from 0 to 3 raises the
+#: share of drops above 2 mm from 11.5% to 14.8%.
+#:
+#: It changes the *statistics*, not how visible the rain is: the quantity that
+#: decides that is the summed projected area, and at a fixed rain rate that
+#: moves by 2.5% across the whole range of mu. See ``docs/rain_visibility.md``.
+DEFAULT_DSD_SHAPE = 3.0
+
+
+def gamma_dsd_slope(rain_rate_mm_h: float, shape_mu: float = DEFAULT_DSD_SHAPE) -> float:
+    """Slope ``Lambda`` (mm^-1) of the gamma drop-size distribution.
+
+    ``N(D) = N0 D^mu exp(-Lambda D)``. Pinned to Marshall & Palmer through the
+    median volume diameter rather than by refitting: for a gamma distribution
+    ``Lambda D0 = 3.67 + mu``, and the ``mu = 0`` case has to reproduce
+    ``D0 = 3.67 / Lambda_MP``. So the same ``D0(R)`` serves every shape, and
+    ``shape_mu = 0`` returns exactly :func:`marshall_palmer_slope`.
+    """
+    median_volume_diameter = 3.67 / marshall_palmer_slope(rain_rate_mm_h)
+    return float((3.67 + shape_mu) / median_volume_diameter)
+
+
+def _gamma_dsd_weights(
+    diameter_mm: np.ndarray, slope: float, shape_mu: float
+) -> np.ndarray:
+    """Unnormalised ``N(D)`` on a grid, guarding ``0^0`` at the origin."""
+    safe = np.maximum(diameter_mm, 1e-6)
+    return safe**shape_mu * np.exp(-slope * safe)
+
+
+def sample_gamma_diameters(
+    rng: np.random.Generator,
+    count: int,
+    slope: float,
+    low: float,
+    high: float,
+    shape_mu: float = DEFAULT_DSD_SHAPE,
+    grid: int = 1024,
+) -> np.ndarray:
+    """Sample ``N(D) ~ D^mu exp(-Lambda D)`` restricted to ``[low, high]``.
+
+    The exponential case has a closed-form inverse CDF; the gamma one does not
+    for arbitrary ``mu``, so the CDF is built on a grid and inverted by search.
+    That is exact to the grid spacing, costs one ``searchsorted``, and unlike
+    rejection sampling its cost does not depend on how much of the
+    distribution the window cuts away — which matters because the window here
+    routinely keeps only a few percent of it.
+    """
+    if count <= 0:
+        return np.zeros(0, dtype=np.float32)
+    if shape_mu <= 0.0:
+        return _truncated_exponential(rng, count, slope, low, high)
+
+    edges = np.linspace(low, high, grid, dtype=np.float64)
+    weights = _gamma_dsd_weights(edges, slope, shape_mu)
+    cdf = np.cumsum(weights)
+    total = cdf[-1]
+    if total <= 0.0:  # pragma: no cover - degenerate slope/window
+        return _truncated_exponential(rng, count, slope, low, high)
+    cdf /= total
+    picked = np.searchsorted(cdf, rng.random(count))
+    return edges[np.clip(picked, 0, grid - 1)].astype(np.float32)
+
+
 def _truncated_exponential(
     rng: np.random.Generator, count: int, slope: float, low: float, high: float
 ) -> np.ndarray:
@@ -181,10 +249,51 @@ def frustum_volume(
 MP_INTERCEPT = 8.0e3
 
 
-def rain_number_density(rain_rate_mm_h: float, min_diameter_mm: float = 1.0) -> float:
-    """Raindrops per cubic metre larger than ``min_diameter_mm``."""
-    slope = marshall_palmer_slope(rain_rate_mm_h)
-    return float(MP_INTERCEPT / slope * np.exp(-slope * min_diameter_mm))
+def rain_number_density(
+    rain_rate_mm_h: float, min_diameter_mm: float = 1.0, shape_mu: float = 0.0
+) -> float:
+    """Raindrops per cubic metre larger than ``min_diameter_mm``.
+
+    ``shape_mu = 0`` is Marshall & Palmer and keeps their closed form. For a
+    gamma distribution the intercept is not a constant of the model, so it is
+    calibrated numerically against the rain rate itself:
+
+        R = 1.885e-3 * integral of N(D) D^3 v(D) dD
+
+    with ``D`` in mm and ``v`` from :func:`raindrop_terminal_velocity`. That
+    is the definition of the rain rate rather than a fit, so the returned
+    density carries the same rate whatever shape is asked for — which is the
+    property the whole derived chain depends on.
+    """
+    if shape_mu <= 0.0:
+        slope = marshall_palmer_slope(rain_rate_mm_h)
+        return float(MP_INTERCEPT / slope * np.exp(-slope * min_diameter_mm))
+
+    diameters = np.linspace(0.05, MAX_RAINDROP_DIAMETER_MM, 2048, dtype=np.float64)
+    step = float(diameters[1] - diameters[0])
+    speeds = raindrop_terminal_velocity(diameters)
+
+    def _density_above(slope: float, mu: float) -> tuple[float, float]:
+        shape = _gamma_dsd_weights(diameters, slope, mu)
+        rate = 1.885e-3 * float((shape * diameters**3 * speeds).sum() * step)
+        return rate, float(shape[diameters >= min_diameter_mm].sum() * step)
+
+    # Calibrated *relative to Marshall & Palmer at the same rate* rather than
+    # absolutely. Integrating MP's own constants does not return the rain rate
+    # they are labelled with -- (N0 = 8000, Lambda = 4.1 R^-0.21) comes out
+    # 4% high at 100 mm/h and 20% high at 5 mm/h, because the intercept and
+    # the slope relation were fitted separately. Calibrating the gamma path
+    # absolutely would therefore put a 10% step at mu = 0 that is an artefact
+    # of that inconsistency rather than a property of the shape. Taking the
+    # ratio cancels it, so mu = 0 is exactly Marshall-Palmer and mu > 0
+    # differs only by what the shape change actually does.
+    reference_slope = marshall_palmer_slope(rain_rate_mm_h)
+    reference_rate, reference_density = _density_above(reference_slope, 0.0)
+    rate, density = _density_above(gamma_dsd_slope(rain_rate_mm_h, shape_mu), shape_mu)
+    if rate <= 0.0 or reference_rate <= 0.0 or reference_density <= 0.0:  # pragma: no cover
+        return 0.0
+    marshall_palmer = MP_INTERCEPT / reference_slope * np.exp(-reference_slope * min_diameter_mm)
+    return float(marshall_palmer * (density / reference_density) * (reference_rate / rate))
 
 
 def width_cut_for_budget(
@@ -198,6 +307,7 @@ def width_cut_for_budget(
     focal_px: float,
     floor_width_px: float,
     size_scale: float = 1.0,
+    shape_mu: float = 0.0,
 ) -> float:
     """Projected-width threshold (px) that keeps the rendered count within budget.
 
@@ -220,10 +330,11 @@ def width_cut_for_budget(
 
     def count_at(width: float) -> float:
         fraction = resolvable_fraction(
-            slope, d_min, d_max, near_m, far_m, focal_px, width, size_scale
+            slope, d_min, d_max, near_m, far_m, focal_px, width, size_scale, shape_mu=shape_mu
         )
         base = resolvable_fraction(
-            slope, d_min, d_max, near_m, far_m, focal_px, floor_width_px, size_scale
+            slope, d_min, d_max, near_m, far_m, focal_px, floor_width_px, size_scale,
+            shape_mu=shape_mu,
         )
         if base <= 0.0:
             return 0.0
@@ -314,6 +425,27 @@ def _truncated_exponential_survival(
     return np.where(diameter_mm <= low, 1.0, np.where(diameter_mm >= high, 0.0, survival))
 
 
+def _dsd_survival(
+    diameter_mm: np.ndarray, slope: float, low: float, high: float, shape_mu: float
+) -> np.ndarray:
+    """``P(D > diameter)`` for the truncated gamma, exponential when ``mu = 0``.
+
+    Quadrature on the same grid the sampler inverts, so the two agree by
+    construction: a diameter's sampling probability and its contribution to
+    the resolvable fraction come from one description of the distribution.
+    Keeping them in separate closed forms is how that pair drifts apart.
+    """
+    if shape_mu <= 0.0:
+        return _truncated_exponential_survival(diameter_mm, slope, low, high)
+    edges = np.linspace(low, high, 1024, dtype=np.float64)
+    weights = _gamma_dsd_weights(edges, slope, shape_mu)
+    cdf = np.cumsum(weights)
+    cdf /= max(float(cdf[-1]), 1e-30)
+    inside = np.interp(np.clip(diameter_mm, low, high), edges, cdf)
+    survival = 1.0 - inside
+    return np.where(diameter_mm <= low, 1.0, np.where(diameter_mm >= high, 0.0, survival))
+
+
 def resolvable_fraction(
     slope: float,
     d_min: float,
@@ -324,6 +456,7 @@ def resolvable_fraction(
     min_width_px: float,
     size_scale: float = 1.0,
     samples: int = 512,
+    shape_mu: float = 0.0,
 ) -> float:
     """Fraction of particles that project wider than ``min_width_px``.
 
@@ -348,7 +481,7 @@ def resolvable_fraction(
     weight /= weight.sum()
 
     required_mm = min_width_px * z / max(focal_px, 1e-6) * 1e3 / max(size_scale, 1e-6)
-    survival = _truncated_exponential_survival(required_mm, slope, d_min, d_max)
+    survival = _dsd_survival(required_mm, slope, d_min, d_max, shape_mu)
     return float(np.sum(weight * survival))
 
 
@@ -363,6 +496,7 @@ def sample_resolvable_particles(
     focal_px: float,
     min_width_px: float,
     size_scale: float = 1.0,
+    shape_mu: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Draw ``count`` ``(diameter_mm, distance_m)`` pairs that actually resolve.
 
@@ -377,7 +511,8 @@ def sample_resolvable_particles(
         return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=np.float32)
 
     acceptance = resolvable_fraction(
-        slope, d_min, d_max, near_m, far_m, focal_px, min_width_px, size_scale
+        slope, d_min, d_max, near_m, far_m, focal_px, min_width_px, size_scale,
+        shape_mu=shape_mu,
     )
     acceptance = max(acceptance, 1e-4)
 
@@ -386,7 +521,7 @@ def sample_resolvable_particles(
     found = 0
     for _ in range(8):
         batch = int(min(2_000_000, max(1024, (count - found) / acceptance * 1.4)))
-        candidate_d = _truncated_exponential(rng, batch, slope, d_min, d_max)
+        candidate_d = sample_gamma_diameters(rng, batch, slope, d_min, d_max, shape_mu)
         candidate_z = volume_uniform_distances(rng, batch, near_m, far_m)
         width = focal_px * (candidate_d * size_scale * 1e-3) / candidate_z
         keep = width > min_width_px
