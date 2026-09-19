@@ -141,9 +141,10 @@ def weather_state(
     fog: float = 0.03,
     wet_rain: float = 0.35,
     wet_snow: float = 0.10,
-    wet_fog: float = 0.30,
+    wet_fog: float = 0.18,
     wet_clear: float = 0.06,
     severity: int = DEFAULT_WEATHER_SEVERITY,
+    droplet_severity: int = DEFAULT_SEVERITY,
 ) -> A.OneOf:
     """Exactly one atmospheric state per frame, including "clear".
 
@@ -153,11 +154,23 @@ def weather_state(
         rain, snow, fog: absolute probability of each state. The remainder is
             clear weather; they must sum to less than 1.
         wet_rain, wet_snow, wet_fog, wet_clear: ``P(water on the glass | state)``.
+            Rain splashing straight onto an exposed dome is the commonest
+            source, which is why ``wet_rain`` leads; fog has to condense on
+            glass that is colder than the air, which happens but less often.
             ``wet_clear`` covers dew, residual drops after the rain stops and
             wind-blown spray, which is why it is not zero.
         severity: level 1-5 for the weather itself. Defaults to
             :data:`DEFAULT_WEATHER_SEVERITY`, which is higher than the rest of
             the pipeline on purpose — see that constant.
+        droplet_severity: level for the water on the glass, which follows the
+            **camera chain** rather than the weather. Droplets are an optics
+            -stage effect that rain merely makes likely; at the weather's
+            severity they dominate every frame they appear on, because a drop
+            on the front element is centimetres from the sensor and a raindrop
+            in the air is metres away. Measured at 512 px, severity 2 droplets
+            cost 24% of the frame's high-frequency detail against 15% at
+            severity 1, and they were the most conspicuous thing in the
+            output while the rain they signalled was invisible.
 
     Raises:
         ValueError: if the three weather probabilities sum to 1 or more.
@@ -183,26 +196,26 @@ def weather_state(
                         RandomRain, "RandomRain", 1.0, severity,
                         depth_provider=depth_provider, wetness_probability=0.85,
                     ),
-                    _at(WaterDroplets, "WaterDroplets", wet_rain, severity),
+                    _at(WaterDroplets, "WaterDroplets", wet_rain, droplet_severity),
                 ],
                 p=rain,
             ),
             A.Sequential(
                 [
                     _at(RandomSnow, "RandomSnow", 1.0, severity, depth_provider=depth_provider),
-                    _at(WaterDroplets, "WaterDroplets", wet_snow, severity),
+                    _at(WaterDroplets, "WaterDroplets", wet_snow, droplet_severity),
                 ],
                 p=snow,
             ),
             A.Sequential(
                 [
                     _at(RandomFog, "RandomFog", 1.0, severity, depth_provider=depth_provider),
-                    _at(WaterDroplets, "WaterDroplets", wet_fog, severity),
+                    _at(WaterDroplets, "WaterDroplets", wet_fog, droplet_severity),
                 ],
                 p=fog,
             ),
             A.Sequential(
-                [_at(WaterDroplets, "WaterDroplets", wet_clear, severity)],
+                [_at(WaterDroplets, "WaterDroplets", wet_clear, droplet_severity)],
                 p=1.0 - total,
             ),
         ],
@@ -276,7 +289,12 @@ def surveillance(
                                 CastShadows, "CastShadows", 0.30, severity,
                                 depth_provider=depth_provider,
                             ),
-                            weather_state(depth_provider, severity=weather_severity, **weather),
+                            weather_state(
+                                depth_provider,
+                                severity=weather_severity,
+                                droplet_severity=severity,
+                                **weather,
+                            ),
                             _at(SunFlare, "SunFlare", 0.12, severity),
                             *_stream(lit_by_mains=False, severity=severity, **tail),
                         ],
@@ -284,7 +302,12 @@ def surveillance(
                     ),
                     A.Sequential(
                         [
-                            weather_state(depth_provider, severity=weather_severity, **weather),
+                            weather_state(
+                                depth_provider,
+                                severity=weather_severity,
+                                droplet_severity=severity,
+                                **weather,
+                            ),
                             # Night under street or shop lighting, camera still
                             # in colour: under-exposed, with the warm cast of
                             # sodium or low-CRI LED against a daylight AWB.
@@ -308,7 +331,12 @@ def surveillance(
                     ),
                     A.Sequential(
                         [
-                            weather_state(depth_provider, severity=weather_severity, **weather),
+                            weather_state(
+                                depth_provider,
+                                severity=weather_severity,
+                                droplet_severity=severity,
+                                **weather,
+                            ),
                             # p=1.0 because the branch *is* the IR state, and
                             # its weight is what says how often that occurs. A
                             # camera that has cut to monochrome has done so
