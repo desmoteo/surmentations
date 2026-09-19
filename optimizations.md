@@ -348,24 +348,86 @@ plausible-looking proxies being wrong by an order of magnitude; see
 
 ---
 
+## Does any of it matter? A realistic pipeline
+
+Per-transform costs do not say whether optimising is worth the risk. A full
+pipeline does: 14 effects in `physical_order`, each at `p=0.15`, measured over
+30 images.
+
+| size | median | mean | p90 | per worker | 8 workers |
+| --- | --- | --- | --- | --- | --- |
+| 512 px | 104 ms | 193 ms | 384 ms | 5.2 img/s | **41 img/s** |
+| 1024 px | 235 ms | 284 ms | 574 ms | 3.5 img/s | **28 img/s** |
+
+**41 images/second from eight workers is a bottleneck**, not a rounding error.
+A mid-size detection model on a current GPU consumes several times that, so
+these transforms would decide the training step time rather than the network.
+The mean sits well above the median because cost is driven by which effects
+happen to fire, and the tail reaches 1.2 s.
+
+So: yes, optimising is worth doing. But the ranking depends on resolution in a
+way the per-transform numbers hide.
+
+### Where the 104 ms goes at 512 px
+
+Expected cost per image = per-transform cost × probability, with the depth
+estimate charged once whenever any of the five depth-conditioned effects
+fires (56% of images at `p=0.15`). This model predicts **101 ms** against the
+**104 ms** measured median, so it can be trusted to target work:
+
+| | ms | share |
+| --- | --- | --- |
+| **depth estimate** | **25.6** | **25.4%** |
+| WDR tone mapping | 16.4 | 16.2% |
+| water droplets | 15.2 | 15.1% |
+| rain | 11.4 | 11.3% |
+| everything else (10 effects) | 32.2 | 32.0% |
+
+### The ranking is resolution-dependent
+
+**C3 saves nothing at 512 px.** The depth map is 518×518, so at a 512 px crop
+there is nothing to downsample — `upward_facing` costs 22.5 ms and would cost
+22.5 ms after the change. It is the top item at 1024 px and worthless at the
+resolution many pipelines actually train at. Measured:
+
+| training size | C3 saves |
+| --- | --- |
+| 512 px | **0** |
+| 1024 px | ~84 ms per call, ~4% of pipeline |
+| 1920 px | more |
+
+**C2 is the one that pays at every resolution**, because the depth estimate
+costs the same 46 ms whatever the frame size — which is exactly why
+preprocessing being a third of it matters. Replacing `AutoImageProcessor`
+takes the estimate from ~46 ms to ~19 ms, and the amortised depth cost from
+25.6 ms to ~10.6 ms: a **~15% cut in total pipeline cost from one function**.
+
 ## Suggested order
 
-1. **C3 — normals at 518 px with scale-matched sigma.** Self-contained, one
-   function, 6.6× on a 98.7 ms operation, 99.4% agreement. Best
-   effort-to-payoff ratio in the list.
-2. **A2 — 16-bit LUT for `linear_to_srgb`.** Exact, local, ~30% on an
-   operation every transform performs.
-3. **C2 — direct preprocessing.** ~27 ms per depth estimate; needs a
-   validation pass comparing depth output before and after.
-4. **D1 — bucketed streak rasterisation.** Largest win, but needs the
+1. **C2 — direct preprocessing.** The only item that is both large and
+   resolution-independent: ~15% of the whole pipeline, one function, and the
+   depth map is easy to diff before and after. Do this first regardless of
+   what else gets done.
+2. **A2 — 16-bit LUT for `linear_to_srgb`.** Exact, local, an hour's work.
+   Small in absolute terms (~1 ms at 512 px) but it is free and correct.
+3. **C3 — normals at 518 px with scale-matched sigma.** Only if you train
+   above ~724 px. At 512 px, skip it.
+4. **WDR's bilateral and the droplet renderer (A1 + D3).** Together 31% of
+   the 512 px budget, and the largest remaining targets. Both are real work.
+5. **D1 — bucketed streak rasterisation.** 11% of the budget, and needs the
    occupancy-accumulation question settled first.
-5. **A1 + D3 — droplet shading fields and blur batching.** Largest rewrite of
-   the group; do it once rather than twice.
-6. **D2 — linear-light pipeline.** Highest ceiling, most invasive, and worth
-   doing only if pipelines here routinely chain several of these transforms.
+6. **D2 — linear-light pipeline.** Highest ceiling, most invasive. Only worth
+   it if pipelines routinely chain several of these.
 
 Proposal B is not on the list. Its ceiling is 11% of two transforms, and it
 trades sample independence to get there.
+
+### The cheapest optimization is not in this document
+
+At `p=0.15` the pipeline already costs 104 ms because 14 effects are
+configured. Dropping the two most expensive effects you do not actually need —
+or halving their `p` — costs nothing to implement and is available today.
+`WdrToneMapping` and `WaterDroplets` are 31% of the budget between them.
 
 ## Verifying any of this
 
