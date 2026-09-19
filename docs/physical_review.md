@@ -747,3 +747,110 @@ The same order also refuted four suspicions cheaply in the second pass
 (occluded particles, flake hardness, dirt colour, contrast loss), and found
 F13, which no amount of looking at pictures would have surfaced because it
 never reached a picture.
+
+---
+
+# Fourth pass (2026-09-15): two effects that were invisible in the gallery
+
+Prompted by a report that only one `housing_occluders` frame showed anything
+and that `ac_flicker` was hard to notice. Both were real, and they had
+different causes — plus a third, in how the gallery chooses what to show.
+
+## F14 — `housing_occluders` produced bit-identical output at three severities
+
+Not "too subtle": **max absolute change of 0**, at severities 1, 2 and 3.
+
+The preset drew counts from `insect_count_range = (0, …)` and
+`web_count_range = (0, …)`, so an empty frame was a legal draw at every
+level. Measured over 200 seeds:
+
+| severity | insects | webs | empty output |
+| --- | --- | --- | --- |
+| 1 | (0, 1) | (0, 1) | **28.0%** |
+| 2 | (0, 2) | (0, 1) | 20.0% |
+| 3 | (0, 3) | (0, 2) | 9.5% |
+| 4 | (0, 4) | (0, 2) | 8.0% |
+| 5 | (0, 6) | (0, 3) | 3.0% |
+
+The rendering was never at fault: on a non-empty draw the effect is strong
+(mean |Δ| 2.3–12.3, peak 93–174 levels). The gallery simply drew three empty
+frames in a row, which at those rates is about a 0.5% event — unlucky, and a
+fair symptom of a design that permits it at all.
+
+**Whether an effect applies is what `p` is for.** A caller who sets `p=1.0`
+has explicitly asked for it and should not get a bit-identical frame back a
+quarter of the time; the count should decide how *much* there is, not
+*whether* there is any. Insect counts now start at 1 at every level. Webs
+stay optional, because a housing can easily carry insects and no web.
+Empty output is now **0.0%** at all five levels, and the ladder runs
+4.00 → 5.67 → 13.9 → 15.5 → 19.3.
+
+## F15 — Exposure was sampled uniformly, and the sinc cancels the long end
+
+`AcFlicker`'s banding depth is `nominal × |sinc(T·f)|`, which is correct
+physics — an exposure spanning a whole flicker period averages the
+oscillation away, and arranging exactly that is what a camera's anti-flicker
+setting does. The bug was in how `T` was drawn.
+
+Exposure is a **logarithmic** quantity. It is counted in stops, and
+1/1000 → 1/500 s is as large a change as 1/8 → 1/4 s. Drawing it uniformly
+over (0.001, 0.016) s puts most of the mass at the long end — which is
+precisely the end the sinc cancels:
+
+| sampling | median exposure | median `T·f` | median \|sinc\| | frames with \|sinc\| < 0.1 |
+| --- | --- | --- | --- | --- |
+| uniform (was) | 8.47 ms | 0.85 | **0.217** | 13.7% |
+| log-uniform (now) | 4.00 ms | 0.40 | **0.757** | 7.4% |
+
+A 3.5× increase in typical band depth, from correcting the sampling rather
+than from raising any amplitude. Measured end to end, mean |Δ| by severity
+went from 1.9 / 6.4 / 1.4 / 4.4 / 10.2 (non-monotonic, two levels under two
+8-bit levels) to **3.2 / 5.1 / 7.0 / 8.9 / 10.8** — monotonic, with the
+fraction of near-invisible frames down from ~14% to 3–8%.
+
+What remains is honest about the effect: the rendered banding is **±3.9% at
+severity 1 rising to ±13.5%, across 2–3 broad bands**. That is what 50 Hz
+mains and a 12–33 ms readout produce, and it reads as a gentle vertical
+gradient at thumbnail scale even though it is plainly visible at full size.
+The sinc cancellation is still there and still zeroes the occasional frame,
+because that is the physics and it is worth training against.
+
+## F16 — The gallery showed whichever draw came up first
+
+Both findings above were reported from the gallery, and the gallery made
+each look worse than it was by rendering exactly one sample per cell.
+
+A cell is one draw from a distribution, and showing the first one
+misrepresents it at both ends. Effects that can legitimately draw themselves
+out of existence — flicker cancelling on the sinc, a flare whose geometry
+puts every artefact off frame — then produce a cell the reader cannot
+distinguish from a bug.
+
+`docs/generate_examples.py` now takes **seven draws per cell and keeps the
+median** by mean absolute change. Taking the median rather than the strongest
+is the point: it drops the degenerate tail without reaching for the
+flattering one, so a cell shows what that severity typically looks like.
+Only the seed varies — the preset and the per-variant jitter are fixed — so
+nothing here can make a level appear stronger than it is.
+
+Across all 75 cells, **none is now under one 8-bit level** (the same
+threshold F6 established), against four before.
+
+Also removed: `sun_flare_fixed_*.png`, five stale files from a naming the
+generator dropped when the flare's position was randomised. They had not been
+regenerated since September 14, and one of them was the near-blank frame that
+would have been the next thing to look wrong.
+
+## Status
+
+F1 withdrawn. F2–F6, F9–F16 resolved. F7 and F8 stand as documented
+characteristics (sub-pixel particle width; superseded by F10).
+
+The pattern F14 and F15 share is worth naming alongside the diagnostic one
+from the third pass: **both are distribution bugs, not formula bugs.** The
+occluder renderer and the sinc term are each exactly right, and each was
+being fed a sampling choice that made the correct formula produce nothing
+most of the time. Every check in this document's first three passes verified
+that outputs follow from their inputs; none of them asked whether the inputs
+were drawn from a sensible distribution. That is the gap the fourth pass
+found, and the severity tests now guard the visible end of it.
