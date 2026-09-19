@@ -1,28 +1,72 @@
-"""Depth-conditioned snow: falling flakes plus a heuristic ground-accumulation overlay.
+"""Depth-conditioned snow: falling flakes plus depth-derived ground accumulation.
 
-Physical model for the falling flakes mirrors ``atmosphere/rain.py``: each
-flake's apparent size scales with distance (nearer flakes are bigger,
-farther ones shrink toward a diffuse haze), and flakes drift at a slant
-angle (wind) with a much smaller motion-blur elongation than rain streaks,
-since snow falls roughly 3-5x slower than rain.
+Physical model
+--------------
+Snow is parameterised in **physical units** — flake diameters in millimetres,
+distances in metres, an exposure time in seconds — and projected through a
+pinhole camera. That is what keeps the three things a flake's appearance
+depends on locked together instead of being three independent tuning knobs:
 
-A near flake isn't just "bigger", though — a camera focused on a scene
-several meters out renders anything within a few centimeters of the lens as
-a large, very soft, translucent disc (defocus/"bokeh"), well beyond the
-flake's true size, while a flake far enough to be near the focal plane stays
-a small, comparatively crisp point. We render each flake as its own soft
-radial sprite whose *softness and translucency*, not just its radius, scale
-with how close it is (``depth_factor``): near flakes get a larger, gentler
-falloff and lower peak opacity (the same total "light" spread over more
-pixels), far flakes stay tight and crisp.
+* **Apparent size** ``= f * D / z``. A flake's distance ``z`` comes from a
+  volume-uniform draw through the air in front of the lens (see
+  ``utils/precipitation.py``), never from the depth map — a falling flake is
+  *in front of* the scene, so what is behind it says nothing about how far
+  away it is. Sizing flakes from the scene depth is what makes them look
+  pasted onto surfaces: big over the near road, tiny over the distant sky.
 
-Ground accumulation is **not** modeled from first principles the way fog,
-rain-veil, and the flakes themselves are: how much snow settles on a surface
-actually depends on that surface's orientation and material (needs real
-surface normals, which this library doesn't estimate), not just depth. We
-render it as an explicitly-heuristic brightness/desaturation overlay on the
-image's lower band — documented here as a heuristic, not a physical claim,
-per the plan's validation strategy.
+* **Defocus**. A camera focused several metres out renders anything within a
+  few centimetres of the lens as a large, very soft, translucent disc, well
+  beyond the flake's true size. A defocused flake is not a Gaussian blob but
+  an **image of the aperture**: a polygon with one side per blade,
+  bright-rimmed from spherical aberration, and clipped into a cat's-eye lemon
+  off-axis by optical vignetting.
+
+* **Motion smear** ``= f * v * T / z``. This used to be a single global blur
+  applied to the finished flake layer, which is wrong in the way that matters
+  most: it smears near and far flakes by the *same* number of pixels, when
+  the smear scales with distance exactly as the size does. Each flake now
+  carries its own smear, and the ratio between smear and size is
+  ``v T / D`` — independent of distance but inversely proportional to flake
+  size, so small flakes read as short dashes and large ones stay blobby,
+  which is the texture real snowfall has.
+
+Snow falls *slowly*: aggregates reach only about 0.5-1.5 m/s, near enough
+independent of size (Locatelli & Hobbs 1974 measure ``v ~ 1.1 D^0.12`` m/s
+for unrimed dendrite aggregates, i.e. barely varying at all) because a
+snowflake's drag and its mass grow together. That is roughly a fifth of a
+raindrop's fall speed and is why snow streaks are short and rain streaks are
+long at the same shutter speed.
+
+Flakes also **flutter**: they are low-density plates and aggregates that
+tumble and swing as they fall rather than dropping on a straight line, so
+each one's smear direction deviates from the prevailing wind slant. Without
+that, a field of flakes reads as a combed, unnaturally parallel texture.
+
+Smearing a shape along a line is a **Minkowski sum**, which for a convex
+aperture polygon is exact and free: the support distance of each edge simply
+grows by the segment's extent projected onto that edge's normal. So the
+smear costs no convolution — it is built into the sprite's own distance
+field.
+
+Accumulation
+------------
+Snow settles on surfaces that face **up**. Earlier versions brightened the
+bottom band of the frame, which is a proxy for "ground" that fails on
+anything interesting: a wall at the bottom of the frame got snow it should
+not have, and a car roof or a rooftop higher up got none when it should be
+the most obvious snow in the shot.
+
+The depth map is enough to do this properly. Back-projecting it gives a
+surface normal per pixel, and what lands on a surface goes as
+``max(0, n . up)`` — Lambert's cosine law, applied to falling snow instead of
+to light, since the geometry is the same. See ``depth/normals.py``, which
+also documents where the estimate breaks down (it does not model shelter, so
+the underside of a bridge collects snow it never would).
+
+The veil is the other half of "it is snowing": snow scatters roughly 7x more
+than rain at the same precipitation rate, so heavy snowfall drops visibility
+hard, and that loss of contrast with distance is a stronger cue than the
+flakes themselves.
 """
 
 from __future__ import annotations
@@ -36,23 +80,95 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
 from weathermentations.base import WeatherTransform, require_depth_provider
+from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.depth.scale import to_pseudo_metric
-from weathermentations.utils.color import sky_radiance_linear
-from weathermentations.utils.compositing import directional_blur_kernel, feathered_band_blend
-from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
+from weathermentations.diagnostics import record_draw
+from weathermentations.utils.color import illuminant_radiance_linear, sky_radiance_linear
+from weathermentations.utils.noise import value_noise
+from weathermentations.utils.photometry import (
+    from_linear_unit,
+    luminance,
+    srgb_to_linear,
+    to_linear_unit,
+)
+from weathermentations.utils.precipitation import (
+    focal_length_px,
+    frustum_volume,
+    gunn_marshall_slope,
+    resolvable_fraction,
+    sample_resolvable_particles,
+    snow_extinction_coefficient,
+    snow_number_density,
+    snow_physical_diameter,
+)
 
-_SNOW_COLOR = np.array([245.0, 248.0, 252.0])
 _ACCUMULATION_COLOR = np.array([235.0, 240.0, 245.0])
+
+# Locatelli & Hobbs (1974) for unrimed aggregates: v = 1.1 * D^0.12 m/s with
+# D in mm. The exponent is small enough that fall speed is nearly independent
+# of flake size, which is the physically interesting part.
+_SNOW_VELOCITY_COEFF = 1.1
+_SNOW_VELOCITY_EXPONENT = 0.12
+
+
+def snow_fall_speed(diameter_mm: np.ndarray | float) -> np.ndarray:
+    """Terminal fall speed (m/s) of a snow aggregate ``diameter_mm`` across.
+
+    Locatelli & Hobbs 1974. Unlike a raindrop — whose speed more than triples
+    between 0.5 mm and 3 mm — a snow aggregate's speed barely moves, because
+    its mass and its drag both scale with roughly the same power of size.
+    """
+    diameter = np.asarray(diameter_mm, dtype=np.float32)
+    return _SNOW_VELOCITY_COEFF * np.maximum(diameter, 1e-3) ** _SNOW_VELOCITY_EXPONENT
+
+
+def _smeared_aperture_distance(
+    dy: np.ndarray,
+    dx: np.ndarray,
+    blades: int,
+    blade_rotation: float,
+    half_smear: float,
+    smear_dir: tuple[float, float],
+) -> np.ndarray:
+    """Distance field of an aperture shape smeared along a motion segment.
+
+    Returns a field that is < 1 inside the shape and 1 on its boundary, for
+    the aperture swept along ``+-half_smear * smear_dir`` (both in units of
+    the render radius).
+
+    Sweeping a convex shape along a line segment is a Minkowski sum, and for
+    a convex polygon expressed as an intersection of half-planes that sum has
+    a closed form: each edge's supporting offset grows by the segment's
+    extent projected onto that edge's normal. So a motion-smeared polygonal
+    bokeh disc costs exactly as much to evaluate as an unsmeared one — no
+    convolution, and no directional blur pass over the whole layer.
+    """
+    ux, uy = smear_dir
+
+    if blades >= 3:
+        angles = blade_rotation + 2.0 * np.pi * np.arange(blades) / blades
+        base_support = np.cos(np.pi / blades)
+        planes = []
+        for angle in angles:
+            nx, ny = np.cos(angle), np.sin(angle)
+            support = base_support + half_smear * abs(ux * nx + uy * ny)
+            planes.append((dx * nx + dy * ny) / support)
+        return np.max(np.stack(planes, axis=0), axis=0)
+
+    # Circle swept along a segment is a capsule: distance to the segment.
+    along = np.clip(dx * ux + dy * uy, -half_smear, half_smear)
+    return np.sqrt((dx - along * ux) ** 2 + (dy - along * uy) ** 2)
 
 
 def _paste_flake_sprite(
     canvas: np.ndarray,
     x: float,
     y: float,
-    size: float,
-    depth_factor: float,
-    bokeh_strength: float,
+    radius_px: float,
+    blur_radius_px: float,
+    smear_px: float,
+    smear_dir: tuple[float, float],
     blades: int,
     blade_rotation: float,
     rim_gain: float,
@@ -61,48 +177,43 @@ def _paste_flake_sprite(
 ) -> None:
     """Max-blend one flake's sprite into ``canvas``.
 
-    A defocused flake is not a Gaussian blob — it is an **image of the
-    aperture**. That means a polygon with as many sides as the lens has
-    blades, with an intensity profile set by spherical aberration (often
-    bright-rimmed rather than flat), and, away from the optical axis, clipped
-    into a "cat's eye" lemon by optical vignetting. Those three cues are what
-    make out-of-focus points read as a photograph rather than as airbrushed
-    dots.
+    ``radius_px`` is the flake's *geometric* projected radius and
+    ``blur_radius_px`` half its circle of confusion. The rendered sprite is
+    their quadrature sum, which is the standard approximation to convolving
+    two discs, and the two limits it interpolates are the physically right
+    ones: a flake near the focal plane renders at its own size and near-solid,
+    while a flake against the front element renders as the aperture's image,
+    far larger than the flake and correspondingly translucent.
 
-    ``depth_factor`` (0=far, 1=near) drives the circle of confusion: near
-    flakes become large, soft and *faint* (flux is conserved as the disc
-    grows), far flakes stay small, crisp and closer to opaque.
+    ``smear_px`` is the full length of the flake's motion streak over the
+    exposure.
     """
-    base_radius = max(0.5, size / 2.0)
-    coc = 1.0 + bokeh_strength * depth_factor
-    render_radius = base_radius * coc
-    patch_size = max(3, int(round(render_radius * 2.6)) | 1)
+    render_radius = max(0.5, float(np.hypot(radius_px, blur_radius_px)))
+    half_smear = 0.5 * smear_px / render_radius
 
-    yy, xx = np.mgrid[0:patch_size, 0:patch_size].astype(np.float32)
+    # The patch has to hold the disc plus the streak's reach in either
+    # direction, or the sprite is clipped into a rectangle.
+    reach = render_radius * (1.3 + half_smear)
+    patch_size = max(3, int(round(reach * 2.0)) | 1)
+
     centre = patch_size / 2.0
-    dx = (xx - centre) / render_radius
-    dy = (yy - centre) / render_radius
+    axis = (np.arange(patch_size, dtype=np.float32) - centre) / render_radius
+    dy = axis.reshape(patch_size, 1)
+    dx = axis.reshape(1, patch_size)
 
-    if blades >= 3:
-        # Signed distance to a regular polygon: max over the half-planes of
-        # its edges. This is the aperture's own shape.
-        angles = blade_rotation + 2.0 * np.pi * np.arange(blades) / blades
-        dist = np.max(
-            np.stack([dx * np.cos(a) + dy * np.sin(a) for a in angles], axis=0), axis=0
-        ) / np.cos(np.pi / blades)
-    else:
-        dist = np.sqrt(dx**2 + dy**2)
+    dist = _smeared_aperture_distance(dy, dx, blades, blade_rotation, half_smear, smear_dir)
 
     # Cat's-eye: optical vignetting clips off-axis bokeh with a second
     # aperture displaced towards the frame centre, and the further off-axis
     # the flake sits the more of it is cut away.
     if cats_eye > 0.0:
-        to_centre = np.array([frame_centre[0] - x, frame_centre[1] - y], dtype=np.float32)
-        norm = float(np.hypot(*to_centre))
+        to_centre_x = frame_centre[0] - x
+        to_centre_y = frame_centre[1] - y
+        norm = float(np.hypot(to_centre_x, to_centre_y))
         if norm > 1e-3:
-            direction = to_centre / norm
+            dir_x, dir_y = to_centre_x / norm, to_centre_y / norm
             offset = cats_eye * min(1.0, norm / max(frame_centre[0], frame_centre[1]))
-            clip = np.sqrt((dx - direction[0] * offset) ** 2 + (dy - direction[1] * offset) ** 2)
+            clip = np.sqrt((dx - dir_x * offset) ** 2 + (dy - dir_y * offset) ** 2)
             dist = np.maximum(dist, clip)
 
     inside = np.clip(1.0 - dist, 0.0, 1.0)
@@ -110,12 +221,23 @@ def _paste_flake_sprite(
     # profile: rim_gain > 1 brightens the edge, < 1 the centre.
     edge = np.clip(inside / 0.12, 0.0, 1.0)
     profile = 1.0 + (rim_gain - 1.0) * np.clip(1.0 - inside / 0.35, 0.0, 1.0)
-    sprite = edge * profile
+    sprite: np.ndarray = edge * profile
 
-    # Spreading the disc dims it, but a nearer flake also subtends a larger
-    # solid angle, so the two effects partly cancel: a pure 1/coc^2 point-
-    # source falloff over-dims an extended object like a flake.
-    sprite = sprite / (coc**1.2)
+    # Flux conservation. A flake reflects a fixed amount of light; defocus
+    # and motion both only decide how wide an area it lands on, so the
+    # sprite's peak is that flux divided by the area it now covers.
+    #
+    # Defocus spreads the flake's disc over the circle of confusion, so the
+    # peak coverage is the ratio of the two areas — which is why a flake
+    # pressed against the lens reads as a large *translucent* disc rather
+    # than a large bright one, and why it fades smoothly to solid as the
+    # flake approaches the focal plane.
+    #
+    # Motion smear spreads it further still, by the ratio of the swept area
+    # to the static one: a disc swept along a segment gains 2*half_smear/pi.
+    defocus_coverage = min(1.0, (radius_px / render_radius) ** 2)
+    smear_area_ratio = 1.0 + 2.0 * half_smear / np.pi
+    sprite = sprite * (defocus_coverage / smear_area_ratio)
 
     ksize = max(1, int(render_radius * 0.12)) | 1
     if ksize > 1:
@@ -136,32 +258,92 @@ def _paste_flake_sprite(
 
 
 class RandomSnow(WeatherTransform):
-    """Depth-scaled falling snowflakes with an optional, explicitly-heuristic
-    ground-accumulation overlay.
+    """Physically-parameterised falling snow with depth-derived accumulation.
 
     Args:
         depth_provider: shared :class:`~weathermentations.depth.provider.SharedDepthProvider`.
-        flake_density_range: number of flakes to render.
-        flake_size_range: apparent flake diameter for a flake right at the
-            near plane, as a fraction of the image diagonal. Flakes further
-            back in the volume are proportionally smaller.
+        flake_count_scale: multiplier on the flake count, which is otherwise
+            *derived* rather than chosen: the number of flakes in frame is
+            the Gunn-Marshall number density above
+            ``flake_diameter_range_mm[0]`` times the volume of the simulated
+            column, so it follows from the snowfall rate and the camera
+            geometry instead of being a knob that can contradict them. Use
+            this only to trade fidelity for speed, or for deliberate
+            exaggeration.
+        max_flakes: hard cap on the rendered flake count, so an extreme
+            snowfall rate or a very deep column cannot make a single call
+            unboundedly slow.
+        flake_diameter_range_mm: truncation window for the flake size
+            distribution, in **melted-equivalent** millimetres — the size of
+            the water drop a flake would melt into, which is the unit every
+            gauge-derived precipitation distribution is stated in. Sizes
+            inside it follow the Gunn-Marshall exponential law rather than
+            being uniform, so a frame gets many small flakes and a few large
+            ones. The flake's real optical size is larger; see
+            ``snow_density_g_cm3``.
+        snow_density_g_cm3: bulk density of the falling snow. A snowflake is
+            mostly air, so its physical diameter is
+            ``D_melted * (rho_water / rho_snow)^(1/3)`` — about 2.3x at the
+            default, and therefore five times the projected area. Lower
+            (0.05) is fresh dry dendrites, higher (0.2) is wet compacted
+            snow.
+        min_flake_width_px: flakes projecting narrower than this are not
+            drawn individually — they are what the veil represents. The cut
+            is on *projected* width rather than on diameter, because a large
+            distant flake and a small near one can subtend the same angle;
+            cutting on diameter alone discards exactly the near flakes that
+            carry the visible texture.
+        snowfall_rate_mm_h: precipitation rate in mm/h of melted water
+            equivalent, and the single physical intensity knob. It sets the
+            *slope* of the size distribution (heavier snowfall lengthens the
+            tail of large aggregates), the number density and hence how many
+            flakes are in frame, and — through the visibility relation for
+            dry snow — how dense the veil is.
+
+            Worth knowing: past moderate rates the flake *count* saturates
+            while sizes keep growing, because a flatter slope trades many
+            small flakes for fewer large ones. Heavier snow therefore looks
+            like bigger flakes and a thicker veil, not like more dots.
+        distance_range_m: near and far bounds of the column of air in front
+            of the lens that is simulated, in metres. Flakes fill it
+            uniformly *by volume*, so most land near the far bound.
+
+            The default stops at a couple of metres deliberately. At any
+            sane resolution a flake further away than that is well under a
+            pixel across, so drawing it individually costs a sprite to
+            deposit a sub-pixel smudge; everything beyond this column is
+            represented by the veil instead. That division of labour is why
+            the counts here are in the hundreds rather than the tens of
+            thousands a physically complete column would need.
+        fall_speed_scale: multiplier on the Locatelli & Hobbs terminal
+            velocity, for wind-driven snow that crosses the frame faster
+            than it falls. 1 is still air.
+        exposure_time_range: shutter time in seconds. Together with the fall
+            speed this sets how far a flake travels during the exposure, and
+            therefore how much it streaks.
         fall_angle_range: slant angle in degrees from vertical (wind).
-        motion_blur_range: motion-blur kernel length as a fraction of a
-            flake's own size (0 = crisp round flake, higher = more streaked).
-        bokeh_strength_range: how much extra softness/size the *nearest*
-            flakes get beyond their nominal ``flake_size_range`` radius, to
-            mimic real defocus/bokeh discs (0 = no extra bokeh, flakes are
-            just scaled circles; higher = near flakes become large, soft,
-            translucent discs while far flakes stay crisp points).
-        veil_beta_range: extinction coefficient for the snow veil. Snow
-            scatters roughly 7x more than rain at the same precipitation
-            rate, so heavy snowfall drops visibility hard — this is the
-            single biggest cue that it is *snowing* rather than that white
-            dots have been pasted on.
-        depth_ratio: ratio between the farthest and nearest flake distance
-            in the simulated volume. Higher means a deeper snow column, hence
-            a larger spread between the tiny background flakes and the big
-            near ones.
+        flutter_range: how far an individual flake's path deviates from that
+            slant, in degrees. Snowflakes tumble and swing rather than
+            falling on rails; 0 gives an unnaturally combed field.
+        horizontal_fov_deg: camera field of view, used to project physical
+            sizes and distances into pixels and to back-project the depth
+            map into surface normals.
+        aperture_diameter_range_mm: physical diameter of the lens aperture.
+            This is what sets the bokeh: the circle of confusion is
+            ``f * A * |1/z - 1/z_focus|``, so a wide aperture turns nearby
+            flakes into large soft translucent discs while a small one (a
+            typical surveillance camera) keeps the whole column sharp.
+        focus_distance_m: what the camera is focused on. The default is far
+            into the scene, which is the dashcam/surveillance case and the
+            reason flakes on the front element are the defocused ones.
+        veil_beta_range: extinction coefficient for the snow veil. ``None``
+            (the default) derives it from ``snowfall_rate_mm_h``, which is
+            the physically consistent choice — the veil is the flakes too
+            small to draw individually, so the two cannot be set apart
+            without contradiction. Snow scatters roughly 7x more than rain at
+            the same precipitation rate, so heavy snowfall drops visibility
+            hard; this is the single biggest cue that it is *snowing* rather
+            than that white dots have been pasted on.
         aperture_blades: number of lens aperture blades. Defocused flakes are
             images of the aperture, so they take its polygonal shape; 0 gives
             perfectly circular bokeh.
@@ -169,12 +351,21 @@ class RandomSnow(WeatherTransform):
             centre (>1 = bright-rimmed, as most modern fast lenses render).
         cats_eye_strength: how strongly off-axis bokeh is clipped into
             lemon shapes by optical vignetting.
-        accumulation_probability: chance of rendering the ground-accumulation
-            overlay.
-        accumulation_strength_range: how strongly the ground band is pushed
-            toward the accumulation color.
-        accumulation_band_fraction: fraction of the image height (from the
-            bottom) treated as "ground" for the accumulation pass.
+        accumulation_probability: chance of rendering settled snow.
+        accumulation_strength_range: how strongly upward-facing surfaces are
+            pushed toward the settled-snow colour.
+        camera_pitch_deg: how far the camera is tilted **down** from level,
+            which is how world "up" is oriented relative to the image. The
+            usual mounting for a surveillance camera is a few degrees down.
+        accumulation_patchiness: how unevenly the settled snow lies. 0 is a
+            perfectly even coat; higher leaves bare patches where it has
+            blown clear or melted.
+        accumulation_falloff: exponent applied to the cosine term. The
+            cosine alone is the *rate* at which snow arrives, but whether it
+            **stays** has a threshold — snow slides off anything much past
+            45 degrees — so raising it to a power concentrates the coat on
+            near-horizontal surfaces instead of giving a 60-degree wall half
+            a covering. 1 disables the effect and uses the bare cosine.
 
     Targets:
         image
@@ -185,156 +376,353 @@ class RandomSnow(WeatherTransform):
 
     class InitSchema(BaseTransformInitSchema):
         depth_provider: SharedDepthProvider
-        flake_density_range: Annotated[
-            tuple[int, int],
-            AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0, 20000)),
-        ]
-        flake_size_range: Annotated[
+        flake_count_scale: float = Field(ge=0.0, le=20.0)
+        max_flakes: int = Field(ge=0, le=200000)
+        flake_diameter_range_mm: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.001, 0.15)),
+            AfterValidator(check_range_bounds(0.1, 30.0)),
+        ]
+        snowfall_rate_range_mm_h: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.02, 100.0)),
+        ]
+        snow_density_range_g_cm3: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.005, 0.6)),
+        ]
+        min_flake_width_px: float = Field(ge=0.0, le=20.0)
+        distance_range_m: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.05, 200.0)),
+        ]
+        fall_speed_scale_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.05, 20.0)),
+        ]
+        exposure_time_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1e-5, 1.0)),
         ]
         fall_angle_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(-45.0, 45.0)),
+            AfterValidator(check_range_bounds(-60.0, 60.0)),
         ]
-        motion_blur_range: Annotated[
+        flutter_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.0, 2.0)),
+            AfterValidator(check_range_bounds(0.0, 90.0)),
         ]
-        bokeh_strength_range: Annotated[
+        horizontal_fov_range_deg: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.0, 4.0)),
+            AfterValidator(check_range_bounds(5.0, 175.0)),
         ]
-        veil_beta_range: Annotated[
+        aperture_diameter_range_mm: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.0, 2.0)),
+            AfterValidator(check_range_bounds(0.1, 100.0)),
         ]
-        depth_ratio: float = Field(gt=1.0, le=200.0)
-        aperture_blades: int = Field(ge=0, le=12)
+        focus_distance_range_m: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.2, 1000.0)),
+        ]
+        veil_beta_range: (
+            Annotated[
+                tuple[float, float],
+                AfterValidator(nondecreasing),
+                AfterValidator(check_range_bounds(0.0, 2.0)),
+            ]
+            | None
+        )
+        aperture_blades_range: Annotated[
+            tuple[int, int],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(3, 12)),
+        ]
         rim_gain_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.5, 2.0)),
         ]
-        cats_eye_strength: float = Field(ge=0.0, le=1.0)
+        cats_eye_strength_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
         accumulation_probability: float = Field(ge=0.0, le=1.0)
         accumulation_strength_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
-        accumulation_band_fraction: float = Field(ge=0.0, le=1.0)
+        camera_pitch_range_deg: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(-89.0, 89.0)),
+        ]
+        accumulation_patchiness_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
+        accumulation_falloff_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1.0, 12.0)),
+        ]
 
     def __init__(
         self,
         depth_provider: SharedDepthProvider,
-        flake_density_range: tuple[int, int] = (900, 2600),
-        flake_size_range: tuple[float, float] = (0.03, 0.07),
-        fall_angle_range: tuple[float, float] = (-5.0, 5.0),
-        motion_blur_range: tuple[float, float] = (0.1, 0.4),
-        bokeh_strength_range: tuple[float, float] = (0.8, 2.0),
-        veil_beta_range: tuple[float, float] = (0.006, 0.045),
-        depth_ratio: float = 18.0,
-        aperture_blades: int = 7,
+        flake_count_scale: float = 1.0,
+        max_flakes: int = 9000,
+        flake_diameter_range_mm: tuple[float, float] = (1.0, 15.0),
+        snowfall_rate_range_mm_h: tuple[float, float] = (0.8, 8.0),
+        snow_density_range_g_cm3: tuple[float, float] = (0.035, 0.11),
+        min_flake_width_px: float = 1.5,
+        distance_range_m: tuple[float, float] = (0.12, 5.0),
+        fall_speed_scale_range: tuple[float, float] = (0.7, 1.8),
+        exposure_time_range: tuple[float, float] = (0.001, 0.005),
+        fall_angle_range: tuple[float, float] = (-12.0, 12.0),
+        flutter_range: tuple[float, float] = (8.0, 30.0),
+        horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
+        aperture_diameter_range_mm: tuple[float, float] = (4.0, 14.0),
+        focus_distance_range_m: tuple[float, float] = (10.0, 45.0),
+        veil_beta_range: tuple[float, float] | None = None,
+        aperture_blades_range: tuple[int, int] = (5, 9),
         rim_gain_range: tuple[float, float] = (0.95, 1.45),
-        cats_eye_strength: float = 0.45,
+        cats_eye_strength_range: tuple[float, float] = (0.15, 0.7),
         accumulation_probability: float = 0.4,
-        accumulation_strength_range: tuple[float, float] = (0.2, 0.5),
-        accumulation_band_fraction: float = 0.15,
+        accumulation_strength_range: tuple[float, float] = (0.35, 0.85),
+        camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
+        accumulation_patchiness_range: tuple[float, float] = (0.15, 0.6),
+        accumulation_falloff_range: tuple[float, float] = (2.0, 5.0),
         p: float = 0.5,
     ):
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
-        self.flake_density_range = flake_density_range
-        self.flake_size_range = flake_size_range
+        self.flake_count_scale = flake_count_scale
+        self.max_flakes = max_flakes
+        self.flake_diameter_range_mm = flake_diameter_range_mm
+        self.snowfall_rate_range_mm_h = snowfall_rate_range_mm_h
+        self.snow_density_range_g_cm3 = snow_density_range_g_cm3
+        self.min_flake_width_px = min_flake_width_px
+        self.distance_range_m = distance_range_m
+        self.fall_speed_scale_range = fall_speed_scale_range
+        self.exposure_time_range = exposure_time_range
         self.fall_angle_range = fall_angle_range
-        self.motion_blur_range = motion_blur_range
-        self.bokeh_strength_range = bokeh_strength_range
+        self.flutter_range = flutter_range
+        self.horizontal_fov_range_deg = horizontal_fov_range_deg
+        self.aperture_diameter_range_mm = aperture_diameter_range_mm
+        self.focus_distance_range_m = focus_distance_range_m
         self.veil_beta_range = veil_beta_range
-        self.depth_ratio = depth_ratio
-        self.aperture_blades = aperture_blades
+        self.aperture_blades_range = aperture_blades_range
         self.rim_gain_range = rim_gain_range
-        self.cats_eye_strength = cats_eye_strength
+        self.cats_eye_strength_range = cats_eye_strength_range
         self.accumulation_probability = accumulation_probability
         self.accumulation_strength_range = accumulation_strength_range
-        self.accumulation_band_fraction = accumulation_band_fraction
+        self.camera_pitch_range_deg = camera_pitch_range_deg
+        self.accumulation_patchiness_range = accumulation_patchiness_range
+        self.accumulation_falloff_range = accumulation_falloff_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
         image = data["image"]
         height, width = params["shape"][:2]
+        rng = self.random_generator
 
         relative_depth = self.depth_provider.get_depth(image)
         depth_pm = to_pseudo_metric(relative_depth, None)
 
-        count = self.py_random.randint(*self.flake_density_range)
-        angle = self.py_random.uniform(*self.fall_angle_range)
-        motion_blur_amount = self.py_random.uniform(*self.motion_blur_range)
-        bokeh_strength = self.py_random.uniform(*self.bokeh_strength_range)
-        depth_ratio = self.depth_ratio
-        base_size = self.py_random.uniform(*self.flake_size_range) * float(np.hypot(width, height))
+        # Every physical quantity is drawn per call. A scalar here would make
+        # a whole dataset share one snowfall rate, one snow type and one
+        # camera geometry, which is the opposite of what an augmentation is
+        # for.
+        snowfall_rate = self.py_random.uniform(*self.snowfall_rate_range_mm_h)
+        snow_density = self.py_random.uniform(*self.snow_density_range_g_cm3)
+        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        focus_distance = self.py_random.uniform(*self.focus_distance_range_m)
+        camera_pitch = self.py_random.uniform(*self.camera_pitch_range_deg)
+        fall_speed_scale = self.py_random.uniform(*self.fall_speed_scale_range)
+        accumulation_falloff = self.py_random.uniform(*self.accumulation_falloff_range)
+        accumulation_patchiness = self.py_random.uniform(*self.accumulation_patchiness_range)
 
-        # A falling flake hangs in the air *in front of* the scene, so its
-        # distance has nothing to do with the scene depth behind it. Sizing
-        # flakes from the depth map (the previous approach) makes them look
-        # pasted onto surfaces — big over the near road, tiny over the distant
-        # sky — which is not how snowfall looks. Instead each flake gets its
-        # own distance, sampled so the flakes fill the *volume* in front of
-        # the lens: shells at distance d hold ~d^2 more flakes while
-        # projecting ~1/d smaller, which is what produces a field of many
-        # tiny distant flakes with a few big near ones instead of confetti.
-        flakes = []
-        for _ in range(count):
-            x = self.py_random.uniform(0, width)
-            y = self.py_random.uniform(0, height)
-            # Volume-uniform distance: the number of flakes closer than d
-            # grows as d^3, so sampling d = (1 + u*(ratio^3 - 1))^(1/3) puts
-            # most of them far away. Apparent size then goes as 1/d, which is
-            # what gives a dense haze of tiny distant flakes punctuated by a
-            # handful of big near ones.
-            u = self.py_random.random()
-            distance = (1.0 + u * (depth_ratio**3 - 1.0)) ** (1.0 / 3.0)
-            nearness = 1.0 / distance
-            size = base_size * nearness
-            flakes.append((x, y, size, nearness))
+        focal = focal_length_px(width, height, horizontal_fov)
+
+        # How many flakes belong in frame is a consequence of the weather and
+        # the camera, not a free parameter: number density above the size
+        # cut-off, times the volume of the column, times the fraction of
+        # those that actually project wide enough to be worth drawing.
+        slope = gunn_marshall_slope(snowfall_rate)
+        size_scale = float(snow_physical_diameter(1.0, snow_density))
+        density = snow_number_density(snowfall_rate, self.flake_diameter_range_mm[0])
+        volume = frustum_volume(
+            width, height, horizontal_fov, *self.distance_range_m
+        )
+        visible = resolvable_fraction(
+            slope,
+            *self.flake_diameter_range_mm,
+            *self.distance_range_m,
+            focal,
+            self.min_flake_width_px,
+            size_scale=size_scale,
+        )
+        count = int(
+            min(self.max_flakes, round(density * volume * visible * self.flake_count_scale))
+        )
+
+        angle = self.py_random.uniform(*self.fall_angle_range)
+        flutter = self.py_random.uniform(*self.flutter_range)
+        aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
+        exposure = self.py_random.uniform(*self.exposure_time_range)
+
+
+        # Physical flake sizes and physical distances, projected through the
+        # camera. Size, defocus and smear all derive from these two numbers,
+        # which is what keeps them consistent with each other.
+        melted_mm, distance_m = sample_resolvable_particles(
+            rng,
+            count,
+            slope,
+            *self.flake_diameter_range_mm,
+            *self.distance_range_m,
+            focal,
+            self.min_flake_width_px,
+            size_scale=size_scale,
+        )
+        count = len(melted_mm)
+        # Gunn-Marshall is stated in melted-equivalent diameters. The flake
+        # the camera sees is mostly air and therefore much larger.
+        diameter_mm = snow_physical_diameter(melted_mm, snow_density)
+
+        radius_px = 0.5 * focal * (diameter_mm * 1e-3) / distance_m
+
+        # Thin-lens circle of confusion: c = f * A * |1/z - 1/z_focus|. This
+        # is the actual defocus law rather than a "nearness" ramp, so the
+        # aperture and the focus distance mean what they say — stopping down
+        # genuinely deepens the depth of field, and a flake at the focal
+        # distance genuinely renders sharp.
+        blur_radius_px = (
+            0.5
+            * focal
+            * aperture_m
+            * np.abs(1.0 / distance_m - 1.0 / focus_distance)
+        )
+
+        # Distance travelled during the exposure, projected. Snow falls so
+        # slowly that this is a short smear at typical shutter speeds — which
+        # is exactly what distinguishes it from rain.
+        speed = snow_fall_speed(diameter_mm) * fall_speed_scale
+        smear_px = focal * speed * exposure / distance_m
+
+        # Each flake tumbles, so its own path deviates from the prevailing
+        # slant. Without this the field reads as combed.
+        flake_angle = angle + rng.uniform(-flutter, flutter, count)
+        angle_rad = np.deg2rad(flake_angle)
+
+        flakes = {
+            "x": rng.uniform(0.0, width, count).astype(np.float32),
+            "y": rng.uniform(0.0, height, count).astype(np.float32),
+            # Carried through for introspection and testing: it is the
+            # quantity size, defocus and smear all derive from, and none of
+            # them is a usable proxy for it on its own.
+            "distance": distance_m.astype(np.float32),
+            "radius": radius_px.astype(np.float32),
+            "blur_radius": blur_radius_px.astype(np.float32),
+            "smear": smear_px.astype(np.float32),
+            # Direction of travel: the slant is measured from vertical, and
+            # image y grows downward, so a falling flake moves along
+            # (sin, cos).
+            "dir_x": np.sin(angle_rad).astype(np.float32),
+            "dir_y": np.cos(angle_rad).astype(np.float32),
+        }
 
         draw_accumulation = self.py_random.random() < self.accumulation_probability
         accumulation_strength = (
             self.py_random.uniform(*self.accumulation_strength_range) if draw_accumulation else 0.0
         )
 
-        veil_beta = self.py_random.uniform(*self.veil_beta_range)
+        settled = np.zeros((height, width), dtype=np.float32)
+        if draw_accumulation:
+            # Lambert's cosine law for falling snow: what a surface collects
+            # goes as the cosine of the angle between its normal and "up".
+            cosine = upward_facing(
+                depth_pm,
+                horizontal_fov_deg=horizontal_fov,
+                camera_pitch_deg=camera_pitch,
+            )
+            # The cosine is how fast snow *arrives*; staying put is a
+            # threshold, since a coat slides off anything much steeper than
+            # about 45 degrees. Without this a 60-degree wall keeps half a
+            # covering and the whole frame washes flat white.
+            settled = cosine**accumulation_falloff
+            if accumulation_patchiness > 0.0:
+                # Settled snow is never a perfectly even coat: wind scours it
+                # off exposed edges and it melts first where the surface is
+                # warm, so it lies in patches.
+                patches = value_noise(height, width, rng=rng, octaves=3, base_cells=4)
+                settled = settled * (
+                    1.0 - accumulation_patchiness * (1.0 - patches)
+                )
+
+        if self.veil_beta_range is not None:
+            veil_bounds = self.veil_beta_range
+        else:
+            beta = snow_extinction_coefficient(snowfall_rate)
+            veil_bounds = (beta * 0.75, beta * 1.3)
+        veil_beta = self.py_random.uniform(*veil_bounds)
+
+        record_draw(
+            snowfall_rate_mm_h=snowfall_rate,
+            snow_density_g_cm3=snow_density,
+            melted_to_physical=size_scale,
+            horizontal_fov_deg=horizontal_fov,
+            focus_distance_m=focus_distance,
+            camera_pitch_deg=camera_pitch,
+            fall_speed_scale=fall_speed_scale,
+            exposure_s=exposure,
+            aperture_mm=aperture_m * 1e3,
+            gm_slope=slope,
+            focal_px=focal,
+            volume_m3=volume,
+            number_density_per_m3=density,
+            resolvable_fraction=visible,
+            count_requested=count,
+            veil_beta=veil_beta,
+            accumulation_falloff=accumulation_falloff,
+            accumulation_patchiness=accumulation_patchiness,
+        )
 
         return {
             "flakes": flakes,
-            "angle": angle,
-            "motion_blur_amount": motion_blur_amount,
-            "bokeh_strength": bokeh_strength,
             "blade_rotation": self.py_random.uniform(0, 2 * np.pi),
+            "blades": self.py_random.randint(*self.aperture_blades_range),
+            "cats_eye": self.py_random.uniform(*self.cats_eye_strength_range),
             "rim_gain": self.py_random.uniform(*self.rim_gain_range),
             "veil_transmission": np.exp(-veil_beta * depth_pm).astype(np.float32),
-            "draw_accumulation": draw_accumulation,
+            "settled": settled.astype(np.float32),
             "accumulation_strength": accumulation_strength,
         }
 
     def apply(
         self,
         img: np.ndarray,
-        flakes: list[tuple[float, float, float, float]],
-        angle: float,
-        motion_blur_amount: float,
-        bokeh_strength: float,
+        flakes: dict[str, np.ndarray],
         blade_rotation: float,
+        blades: int,
+        cats_eye: float,
         rim_gain: float,
         veil_transmission: np.ndarray,
-        draw_accumulation: bool,
+        settled: np.ndarray,
         accumulation_strength: float,
         **params: Any,
     ) -> np.ndarray:
@@ -342,28 +730,24 @@ class RandomSnow(WeatherTransform):
         frame_centre = (width / 2.0, height / 2.0)
 
         flake_layer = np.zeros((height, width), dtype=np.float32)
-        for x, y, size, depth_factor in flakes:
+        xs, ys = flakes["x"], flakes["y"]
+        radii, blurs, smears = flakes["radius"], flakes["blur_radius"], flakes["smear"]
+        dir_xs, dir_ys = flakes["dir_x"], flakes["dir_y"]
+        for i in range(len(xs)):
             _paste_flake_sprite(
                 flake_layer,
-                x,
-                y,
-                size,
-                depth_factor,
-                bokeh_strength,
-                self.aperture_blades,
+                float(xs[i]),
+                float(ys[i]),
+                float(radii[i]),
+                float(blurs[i]),
+                float(smears[i]),
+                (float(dir_xs[i]), float(dir_ys[i])),
+                blades,
                 blade_rotation,
                 rim_gain,
-                self.cats_eye_strength,
+                cats_eye,
                 frame_centre,
             )
-
-        if flakes:
-            avg_size = float(np.mean([f[2] for f in flakes]))
-            blur_length = max(3, int(avg_size * (1.0 + motion_blur_amount * 2)))
-            kernel = directional_blur_kernel(blur_length, angle)
-            blurred: np.ndarray = cv2.filter2D(flake_layer, -1, kernel)
-            streaked = blurred * (0.6 + motion_blur_amount)
-            flake_layer = np.clip(np.maximum(flake_layer, streaked), 0.0, 1.0)
 
         linear, scale, is_integer = to_linear_unit(img)
 
@@ -372,28 +756,41 @@ class RandomSnow(WeatherTransform):
         # white. That makes them disappear into a bright overcast sky and
         # stand out against dark trees, exactly as real snow does, with no
         # special-casing.
-        flake_radiance = sky_radiance_linear(linear)
+        # A flake is a directly-lit object in front of the scene, so its
+        # radiance is the *illuminant* — which the frame may not contain, if
+        # no sky is in view. The veil is different: it is scattered skylight
+        # accumulated along the path, so it saturates at the sky's own
+        # recorded radiance and must not be lifted the same way, or a bright
+        # sky blows out to flat white.
+        flake_radiance = illuminant_radiance_linear(linear)
+        airlight = sky_radiance_linear(linear)
 
         # Heavy snow scatters hard: the veil is most of what says "snowing".
         t_veil = veil_transmission[..., None]
-        out = linear * t_veil + flake_radiance[None, None, :] * (1.0 - t_veil)
+        out = linear * t_veil + airlight[None, None, :] * (1.0 - t_veil)
 
         alpha = np.clip(flake_layer, 0.0, 1.0)[..., None]
         out = out * (1.0 - alpha) + flake_radiance[None, None, :] * alpha
 
-        if draw_accumulation:
-            accumulation = _srgb_to_linear_color(_ACCUMULATION_COLOR / 255.0)
+        if accumulation_strength > 0.0:
+            snow_albedo = srgb_to_linear(
+                (_ACCUMULATION_COLOR / 255.0).reshape(1, 1, 3).astype(np.float32)
+            )
+            # Settled snow replaces a surface's *albedo*, not its
+            # illumination. Compositing toward a constant white throws the
+            # scene's lighting away and flattens everything it touches into
+            # one dead tone; a real snow-covered road still has its shadows,
+            # its bright and dull patches, and whatever the sky is doing to
+            # it. So the snow is lit by a low-frequency estimate of the local
+            # illumination, normalised so an averagely-lit patch renders at
+            # the nominal snow colour.
+            illumination = cv2.GaussianBlur(
+                luminance(out), (0, 0), sigmaX=max(2.0, 0.02 * max(height, width))
+            )
+            mean_illumination = max(float(illumination.mean()), 1e-4)
+            shading = np.clip(illumination / mean_illumination, 0.25, 2.5)[..., None]
 
-            def blend(band: np.ndarray) -> np.ndarray:
-                keep = 1.0 - accumulation_strength
-                return band * keep + accumulation * accumulation_strength
-
-            out = feathered_band_blend(out, self.accumulation_band_fraction, blend)
+            coverage = np.clip(settled * accumulation_strength, 0.0, 1.0)[..., None]
+            out = out * (1.0 - coverage) + snow_albedo * shading * coverage
 
         return from_linear_unit(out, scale, is_integer, img.dtype)
-
-
-def _srgb_to_linear_color(color: np.ndarray) -> np.ndarray:
-    from weathermentations.utils.photometry import srgb_to_linear
-
-    return srgb_to_linear(color.reshape(1, 1, -1)).reshape(-1)

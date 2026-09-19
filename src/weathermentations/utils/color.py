@@ -43,3 +43,43 @@ def estimate_airlight(image: np.ndarray, top_percent: float = 0.1) -> np.ndarray
     n = max(1, int(len(intensity) * top_percent / 100.0))
     brightest_idx = np.argpartition(intensity, -n)[-n:]
     return flat[brightest_idx].mean(axis=0)
+
+
+# Grey-world: an average outdoor scene reflects roughly this fraction of the
+# light falling on it.
+TYPICAL_SCENE_ALBEDO = 0.20
+
+
+def illuminant_radiance_linear(linear_rgb: np.ndarray, percentile: float = 97.0) -> np.ndarray:
+    """Estimate the radiance a particle *in front of* the scene is lit by.
+
+    Rain streaks and snowflakes image the sky, and the sky is frequently not
+    in the frame — a camera angled down at a road sees none of it. Taking the
+    particle's radiance from the scene's own brightest pixels then reads the
+    brightest patch of *asphalt* as the illuminant, which is several times too
+    dark, and the precipitation quietly disappears. That failure is worst
+    exactly where these transforms are most used.
+
+    So the estimate is the brighter of two readings:
+
+    * the scene's bright/sky percentile, which is right whenever sky or a
+      specular highlight is actually visible, and
+    * the grey-world inversion ``mean_luminance / typical_albedo``, which
+      recovers the illuminant from a surface-only frame — if an average scene
+      reflects about a fifth of what falls on it, the light falling on it is
+      about five times as bright as the scene looks.
+
+    Taking the maximum means the sky wins when it is visible and the
+    grey-world floor only applies when nothing bright is in frame.
+    """
+    sky = sky_radiance_linear(linear_rgb, percentile)
+
+    mean_colour = linear_rgb.reshape(-1, linear_rgb.shape[-1]).mean(axis=0)
+    mean_luma = float(luminance(mean_colour.reshape(1, 1, -1)).ravel()[0])
+    sky_luma = float(luminance(sky.reshape(1, 1, -1)).ravel()[0])
+
+    implied = mean_luma / TYPICAL_SCENE_ALBEDO
+    if sky_luma >= implied or sky_luma < 1e-6:
+        return sky
+    # Keep the scene's own colour balance; only lift the level.
+    return (sky * (implied / sky_luma)).astype(np.float32)

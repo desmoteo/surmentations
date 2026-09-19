@@ -6,13 +6,42 @@ import pytest
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
+from weathermentations.camera import (
+    AcFlicker,
+    ExposureTransient,
+    NightIrMode,
+    RollingShutter,
+    TemporalDenoiseArtifacts,
+    VideoCodecArtifacts,
+    WdrToneMapping,
+)
+from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, SunFlare, WaterDroplets
+from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
 from weathermentations.presets.severity import SEVERITY
+from weathermentations.scene import CastShadows
 
-_DEPTH_FREE = {"WaterDroplets": WaterDroplets, "DirtSoil": DirtSoil, "SunFlare": SunFlare}
-_DEPTH_CONDITIONED = {"RandomFog": RandomFog, "RandomRain": RandomRain, "RandomSnow": RandomSnow}
+_DEPTH_FREE = {
+    "WaterDroplets": WaterDroplets,
+    "DirtSoil": DirtSoil,
+    "SunFlare": SunFlare,
+    "HousingOccluders": HousingOccluders,
+    "AcFlicker": AcFlicker,
+    "RollingShutter": RollingShutter,
+    "ExposureTransient": ExposureTransient,
+    "WdrToneMapping": WdrToneMapping,
+    "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts,
+}
+_DEPTH_CONDITIONED = {
+    "RandomFog": RandomFog,
+    "RandomRain": RandomRain,
+    "RandomSnow": RandomSnow,
+    "NightIrMode": NightIrMode,
+    "CastShadows": CastShadows,
+}
+# Needs the ffmpeg binary, so it is covered separately and skipped without it.
+_EXTERNAL_TOOL = {"VideoCodecArtifacts": VideoCodecArtifacts}
 
 
 class _LinearDepthEstimator(DepthEstimator):
@@ -51,10 +80,18 @@ def test_every_transform_accepts_its_preset_at_every_severity(
         assert out.shape == scene.shape
 
 
-def test_all_six_transforms_present_at_every_severity() -> None:
-    expected = set(_DEPTH_FREE) | set(_DEPTH_CONDITIONED)
+def test_every_transform_present_at_every_severity() -> None:
+    expected = set(_DEPTH_FREE) | set(_DEPTH_CONDITIONED) | set(_EXTERNAL_TOOL)
     for severity, kwargs_by_name in SEVERITY.items():
         assert set(kwargs_by_name) == expected, f"severity {severity} missing/extra transforms"
+
+
+@pytest.mark.skipif(ffmpeg_path() is None, reason="VideoCodecArtifacts needs the ffmpeg binary")
+@pytest.mark.parametrize("severity", [1, 2, 3, 4, 5])
+def test_codec_preset_runs_at_every_severity(severity: int, scene: np.ndarray) -> None:
+    warnings.simplefilter("error", UserWarning)
+    transform = VideoCodecArtifacts(p=1.0, **SEVERITY[severity]["VideoCodecArtifacts"])
+    assert transform(image=scene)["image"].shape == scene.shape
 
 
 def test_fog_severity_is_monotonically_denser() -> None:

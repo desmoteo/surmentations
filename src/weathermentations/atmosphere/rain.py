@@ -68,15 +68,84 @@ from pydantic import AfterValidator, Field
 from weathermentations.base import WeatherTransform, require_depth_provider
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.depth.scale import to_pseudo_metric
-from weathermentations.utils.color import sky_radiance_linear
+from weathermentations.diagnostics import record_draw
+from weathermentations.utils.color import illuminant_radiance_linear, sky_radiance_linear
 from weathermentations.utils.compositing import feathered_band_blend
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
+from weathermentations.utils.precipitation import (
+    focal_length_px,
+    frustum_volume,
+    marshall_palmer_slope,
+    rain_extinction_coefficient,
+    rain_number_density,
+    raindrop_terminal_velocity,
+    resolvable_fraction,
+    sample_resolvable_particles,
+    width_cut_for_budget,
+)
+
+# Lowest rain rate the transform will accept. Named so presets and the docs
+# generator can clamp to it instead of hard-coding a number that silently
+# drifts out of step with the validation.
+MIN_RAIN_RATE_MM_H = 2.0
+
+# Cross-section softening applied to the accumulated streak layer, in pixels.
+#
+# Kept small deliberately. Streaks are already rasterised anti-aliased, so this
+# only takes the edge off the accumulation — and a typical streak is one or two
+# pixels wide, so blurring it is not a cosmetic touch but a direct division of
+# its peak opacity. Measured at sigma 0.7 (the previous value) against 0.3: the
+# peak alpha fell from 0.100 to 0.058 and the fraction of the frame carrying a
+# visible streak fell by two thirds. Most of the rain was being erased by its
+# own anti-aliasing pass.
+_CROSS_SECTION_SOFTEN_PX = 0.35
 
 
-def terminal_velocity(radius_mm: float) -> float:
-    """Raindrop terminal velocity in m/s (Garg & Nayar's fit to Gunn & Kinzer)."""
-    radius_m = radius_mm * 1e-3
-    return 9.40 * (1.0 - float(np.exp(-3.45e6 * radius_m**1.31)))
+def _perspective_angles(
+    x: np.ndarray,
+    y: np.ndarray,
+    width: int,
+    height: int,
+    focal: float,
+    camera_pitch_deg: float,
+    wind_angle_deg: float,
+) -> np.ndarray:
+    """Per-streak slant angle (degrees from vertical) under perspective.
+
+    Rain falls along a single direction in the world. Parallel 3-D lines
+    project to lines through one vanishing point, so a streak's direction in
+    the image is the direction from that point — which means streaks
+    **splay** rather than staying parallel whenever the camera is tilted.
+    That splay is one of the strongest cues that rain is falling through a
+    scene instead of being drawn over it, and it is free: it follows from
+    the projection, with no extra parameter.
+
+    With the camera level the fall direction is perpendicular to the optical
+    axis, its vanishing point is at infinity, and the streaks come out
+    exactly parallel — so the parallel case is recovered rather than
+    special-cased.
+    """
+    pitch = np.deg2rad(camera_pitch_deg)
+    wind = np.deg2rad(wind_angle_deg)
+
+    # World "down" in camera coordinates (+x right, +y down, +z forward),
+    # tilted by the wind slant in the image plane.
+    direction = np.array(
+        [np.sin(wind), np.cos(pitch) * np.cos(wind), np.sin(pitch)], dtype=np.float64
+    )
+
+    # A direction with no forward component has its vanishing point at
+    # infinity: every streak is parallel to the projected direction.
+    if abs(direction[2]) < 1e-4:
+        return np.full_like(x, np.rad2deg(np.arctan2(direction[0], direction[1])), dtype=np.float32)
+
+    vanishing_x = width / 2.0 + focal * direction[0] / direction[2]
+    vanishing_y = height / 2.0 + focal * direction[1] / direction[2]
+
+    # Drops travel toward the vanishing point of their direction of motion.
+    delta_x = vanishing_x - x
+    delta_y = vanishing_y - y
+    return np.rad2deg(np.arctan2(delta_x, delta_y)).astype(np.float32)
 
 
 def streak_alpha(drop_diameter_px: float, streak_length_px: float) -> float:
@@ -99,28 +168,62 @@ class RandomRain(WeatherTransform):
 
     Args:
         depth_provider: shared :class:`~weathermentations.depth.provider.SharedDepthProvider`.
-        streak_density_range: number of streaks to render.
-        drop_diameter_range: apparent drop diameter at the nearest depth, as
-            a fraction of the image diagonal. Together with the streak length
-            this sets streak opacity: ``alpha = diameter / length``.
-        streak_length_range: streak length at the nearest depth, as a
-            fraction of the image diagonal. This stands in for exposure
-            time — a longer streak is a longer exposure, and is
-            correspondingly *fainter* per pixel.
-        angle_range: slant angle in degrees from vertical (wind).
-        angle_jitter_range: per-streak random deviation from ``angle``, so
-            streaks are not perfectly parallel (gust turbulence).
+        rain_rate_range_mm_h: rainfall rate, drawn per call. This is the
+            *physical* intensity knob:
+            it sets the Marshall-Palmer slope, so heavier rain means a longer
+            tail of large, fast, conspicuous drops rather than simply more of
+            the same drop. It also sets how many drops are in frame, since
+            the count is derived from the drop concentration and the volume
+            of air being simulated.
+        drop_diameter_range_mm: truncation window for the drop-size
+            distribution, in millimetres.
+        distance_range_m: near and far bounds of the column of air in front
+            of the lens whose drops are drawn individually. Drops beyond it
+            are sub-pixel in width and are represented by the veil instead.
+        exposure_time_range: shutter time in seconds. With the drop's
+            terminal velocity this fixes the streak length, and therefore the
+            opacity ``alpha = D / (v T)``: a longer exposure draws a longer
+            *and proportionally fainter* streak, conserving deposited light.
+        horizontal_fov_range_deg: camera field of view, drawn per call. Used
+            to project physical
+            drop sizes and distances into pixels.
+        aperture_diameter_range_mm: lens aperture diameter, which sets the
+            circle of confusion for drops away from the focal plane. Small
+            values are both realistic for a surveillance or dash camera (f/1.6
+            on a 4 mm lens is a 2.5 mm aperture) and what makes rain *visible*
+            in such footage: the deep depth of field keeps streaks narrow, and
+            since defocus spreads a streak's fixed light over a wider band, a
+            narrower streak is a proportionally more opaque one. It is the
+            only lever that raises streak contrast without also shortening the
+            streaks, which shutter time does.
+        focus_distance_range_m: what the camera is focused on, drawn per call.
+        camera_pitch_range_deg: how far the camera is tilted **down** from
+            level, drawn per call.
+            Rain falls along parallel lines in the world, and parallel lines
+            project to lines through a common vanishing point, so a tilted
+            camera makes the streaks visibly *splay*. A level camera puts
+            that point at infinity and the streaks come out parallel.
+        wind_angle_range: slant of the fall direction in degrees, from wind.
+        angle_jitter_range: per-streak random deviation from the perspective
+            direction, so streaks are not perfectly regular (gust
+            turbulence).
         wobble_range: per-streak mid-point bend, as a fraction of its length.
-        defocus_range: how much nearer streaks spread and dim through
-            defocus. 0 keeps every streak equally crisp.
-        definition_softness: how soft a fully-defocused streak's edges get,
-            as a multiple of its own defocus spread. Drops sit at a range of
-            distances from the focal plane, so some land as crisp strokes and
-            others as soft smears; a single sharpness for all of them reads
-            as a hatch pattern.
+        definition_softness: how soft a defocused streak's edges get, as a
+            multiple of its own defocus spread.
+        max_streaks: hard cap on individually-rendered streaks, so an extreme
+            rain rate cannot make one call unboundedly slow.
+        min_streak_width_px: drops projecting narrower than this are not drawn
+            individually — they are what the veil represents.
         veil_beta_range: extinction coefficient for the distant rain veil.
+            ``None`` (the default) derives it from ``rain_rate_mm_h`` via the
+            standard visibility-in-rain relation, which is the physically
+            consistent choice: the veil *is* the drops too small to draw
+            individually, so setting it independently permits a frame with a
+            downpour's haze and a drizzle's streaks. Pass an explicit range
+            only to override that deliberately.
         wetness_probability: chance of rendering the ground-wetness pass.
-        wetness_band_fraction: fraction of image height treated as ground.
+        wetness_band_fraction_range: fraction of image height treated as
+            ground.
 
     Targets:
         image
@@ -131,22 +234,49 @@ class RandomRain(WeatherTransform):
 
     class InitSchema(BaseTransformInitSchema):
         depth_provider: SharedDepthProvider
-        streak_density_range: Annotated[
-            tuple[int, int],
-            AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0, 20000)),
-        ]
-        drop_diameter_range: Annotated[
+        rain_rate_range_mm_h: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.0005, 0.02)),
+            AfterValidator(check_range_bounds(MIN_RAIN_RATE_MM_H, 300.0)),
         ]
-        streak_length_range: Annotated[
+        drop_diameter_range_mm: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.002, 0.4)),
+            AfterValidator(check_range_bounds(0.1, 8.0)),
         ]
-        angle_range: Annotated[
+        distance_range_m: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.05, 500.0)),
+        ]
+        exposure_time_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1e-5, 1.0)),
+        ]
+        horizontal_fov_range_deg: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(5.0, 175.0)),
+        ]
+        aperture_diameter_range_mm: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.1, 100.0)),
+        ]
+        focus_distance_range_m: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.2, 1000.0)),
+        ]
+        camera_pitch_range_deg: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(-89.0, 89.0)),
+        ]
+        max_streaks: int = Field(ge=0, le=200000)
+        min_streak_width_px: float = Field(ge=0.0, le=20.0)
+        wind_angle_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(-45.0, 45.0)),
@@ -162,118 +292,226 @@ class RandomRain(WeatherTransform):
             AfterValidator(check_range_bounds(0.0, 0.5)),
         ]
         definition_softness: float = Field(ge=0.0, le=2.0)
-        defocus_range: Annotated[
-            tuple[float, float],
-            AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.0, 4.0)),
-        ]
-        veil_beta_range: Annotated[
-            tuple[float, float],
-            AfterValidator(nondecreasing),
-            AfterValidator(check_range_bounds(0.0, 2.0)),
-        ]
+        veil_beta_range: (
+            Annotated[
+                tuple[float, float],
+                AfterValidator(nondecreasing),
+                AfterValidator(check_range_bounds(0.0, 2.0)),
+            ]
+            | None
+        )
         wetness_probability: float = Field(ge=0.0, le=1.0)
-        wetness_band_fraction: float = Field(ge=0.0, le=1.0)
+        wetness_band_fraction_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
 
     def __init__(
         self,
         depth_provider: SharedDepthProvider,
-        streak_density_range: tuple[int, int] = (1500, 4000),
-        drop_diameter_range: tuple[float, float] = (0.005, 0.009),
-        streak_length_range: tuple[float, float] = (0.04, 0.08),
-        angle_range: tuple[float, float] = (-10.0, 10.0),
+        rain_rate_range_mm_h: tuple[float, float] = (5.0, 200.0),
+        drop_diameter_range_mm: tuple[float, float] = (0.8, 6.0),
+        distance_range_m: tuple[float, float] = (0.4, 6.0),
+        exposure_time_range: tuple[float, float] = (0.003, 0.010),
+        horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
+        aperture_diameter_range_mm: tuple[float, float] = (0.9, 2.6),
+        focus_distance_range_m: tuple[float, float] = (8.0, 40.0),
+        camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
+        max_streaks: int = 16000,
+        min_streak_width_px: float = 0.40,
+        wind_angle_range: tuple[float, float] = (-10.0, 10.0),
         angle_jitter_range: tuple[float, float] = (2.0, 8.0),
         wobble_range: tuple[float, float] = (0.05, 0.2),
-        defocus_range: tuple[float, float] = (0.0, 0.9),
         definition_softness: float = 0.45,
-        veil_beta_range: tuple[float, float] = (0.008, 0.03),
+        veil_beta_range: tuple[float, float] | None = None,
         wetness_probability: float = 0.4,
-        wetness_band_fraction: float = 0.2,
+        wetness_band_fraction_range: tuple[float, float] = (0.12, 0.32),
         p: float = 0.5,
     ):
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
-        self.streak_density_range = streak_density_range
-        self.drop_diameter_range = drop_diameter_range
-        self.streak_length_range = streak_length_range
-        self.angle_range = angle_range
+        self.rain_rate_range_mm_h = rain_rate_range_mm_h
+        self.drop_diameter_range_mm = drop_diameter_range_mm
+        self.distance_range_m = distance_range_m
+        self.exposure_time_range = exposure_time_range
+        self.horizontal_fov_range_deg = horizontal_fov_range_deg
+        self.aperture_diameter_range_mm = aperture_diameter_range_mm
+        self.focus_distance_range_m = focus_distance_range_m
+        self.camera_pitch_range_deg = camera_pitch_range_deg
+        self.max_streaks = max_streaks
+        self.min_streak_width_px = min_streak_width_px
+        self.wind_angle_range = wind_angle_range
         self.angle_jitter_range = angle_jitter_range
         self.wobble_range = wobble_range
-        self.defocus_range = defocus_range
         self.definition_softness = definition_softness
         self.veil_beta_range = veil_beta_range
         self.wetness_probability = wetness_probability
-        self.wetness_band_fraction = wetness_band_fraction
+        self.wetness_band_fraction_range = wetness_band_fraction_range
+
+    def _veil_beta_bounds(self, rain_rate_mm_h: float) -> tuple[float, float]:
+        """Veil extinction range, derived from the rain rate unless overridden."""
+        if self.veil_beta_range is not None:
+            return self.veil_beta_range
+        beta = rain_extinction_coefficient(rain_rate_mm_h)
+        return (beta * 0.75, beta * 1.3)
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
         image = data["image"]
         height, width = params["shape"][:2]
-        diagonal = float(np.hypot(width, height))
+        rng = self.random_generator
 
         relative_depth = self.depth_provider.get_depth(image)
         depth_pm = to_pseudo_metric(relative_depth, None)
 
-        count = self.py_random.randint(*self.streak_density_range)
-        angle = self.py_random.uniform(*self.angle_range)
+        # Every physical quantity is drawn per call. A scalar here would make
+        # a whole dataset share one rain rate, one camera geometry and one
+        # shutter speed, which is the opposite of what an augmentation is for.
+        rain_rate = self.py_random.uniform(*self.rain_rate_range_mm_h)
+        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        focus_distance = self.py_random.uniform(*self.focus_distance_range_m)
+        camera_pitch = self.py_random.uniform(*self.camera_pitch_range_deg)
+
+        veil_beta = self.py_random.uniform(*self._veil_beta_bounds(rain_rate))
+        exposure = self.py_random.uniform(*self.exposure_time_range)
+        aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
+        wind_angle = self.py_random.uniform(*self.wind_angle_range)
         angle_jitter = self.py_random.uniform(*self.angle_jitter_range)
         wobble_strength = self.py_random.uniform(*self.wobble_range)
-        veil_beta = self.py_random.uniform(*self.veil_beta_range)
-        base_length = self.py_random.uniform(*self.streak_length_range) * diagonal
-        drop_diameter_px = self.py_random.uniform(*self.drop_diameter_range) * diagonal
+        focal = focal_length_px(width, height, horizontal_fov)
 
-        # Every per-streak quantity is drawn as one array rather than in a
-        # Python loop. With a few thousand streaks per frame, the scalar
-        # `np.sin`/`round`/`uniform` calls that a loop needs cost several
-        # times more than the rasterisation they feed.
-        rng = self.random_generator
+        # How many drops belong in frame follows from the rain rate and the
+        # volume of air being simulated — it is not an independent knob that
+        # could contradict them. Of those, only the ones projecting wider than
+        # `min_streak_width_px` are drawn individually; the rest are what the
+        # veil represents.
+        #
+        # The cut is on *projected width*, not on diameter. Diameter alone
+        # cannot tell a resolvable drop from an unresolvable one, because a
+        # large distant drop and a small near one subtend the same angle — and
+        # cutting by diameter discards exactly the near drops that carry the
+        # visible streaks while keeping far ones that cannot be seen at all.
+        volume = frustum_volume(
+            width, height, horizontal_fov, *self.distance_range_m
+        )
+        slope = marshall_palmer_slope(rain_rate)
+        visible = resolvable_fraction(
+            slope,
+            *self.drop_diameter_range_mm,
+            *self.distance_range_m,
+            focal,
+            self.min_streak_width_px,
+        )
+        density = rain_number_density(rain_rate, self.drop_diameter_range_mm[0])
+        population = density * volume * visible
+
+        # When the budget binds, raise the *width* threshold rather than
+        # truncating the field, so the streaks drawn stay the most visible
+        # ones and intensity keeps tracking the rain rate instead of the
+        # render budget.
+        width_cut = width_cut_for_budget(
+            population,
+            self.max_streaks,
+            slope,
+            *self.drop_diameter_range_mm,
+            *self.distance_range_m,
+            focal,
+            self.min_streak_width_px,
+        )
+        count = int(min(self.max_streaks, round(population)))
+
+        record_draw(
+            rain_rate_mm_h=rain_rate,
+            horizontal_fov_deg=horizontal_fov,
+            focus_distance_m=focus_distance,
+            camera_pitch_deg=camera_pitch,
+            exposure_s=exposure,
+            aperture_mm=aperture_m * 1e3,
+            wind_angle_deg=wind_angle,
+            veil_beta=veil_beta,
+            mp_slope=slope,
+            focal_px=focal,
+            volume_m3=volume,
+            resolvable_fraction=visible,
+            population=population,
+            width_cut_px=width_cut,
+            count_requested=count,
+        )
+
+        # Marshall-Palmer sizes, Gunn-Kinzer speeds. Everything a streak looks
+        # like follows from these two plus the drop's distance: nothing
+        # downstream picks length, width and opacity separately, because in a
+        # real photograph they are not separate.
+        diameter_mm, distance_m = sample_resolvable_particles(
+            rng,
+            count,
+            slope,
+            *self.drop_diameter_range_mm,
+            *self.distance_range_m,
+            focal,
+            width_cut,
+        )
+        count = len(diameter_mm)
+        speed = raindrop_terminal_velocity(diameter_mm)
+
+        # A falling drop is in the air *in front of* the scene, so its
+        # distance has nothing to do with the depth map's value behind it.
+        # Reading the drop's scale off the scene depth — the previous model —
+        # made streaks shrink over distant sky and swell over near road, i.e.
+        # pasted onto surfaces rather than falling through the air.
+        drop_width = focal * (diameter_mm * 1e-3) / distance_m
+        length = focal * (speed * exposure) / distance_m
+
+        # Defocus spreads a streak across the circle of confusion without
+        # adding light, so it gets wider *and proportionally fainter*. This is
+        # the opposite of the intuitive "closer is brighter".
+        blur_radius = (
+            0.5 * focal * aperture_m * np.abs(1.0 / distance_m - 1.0 / focus_distance)
+        )
+        thickness = drop_width + 2.0 * blur_radius
+
         x = rng.uniform(0.0, width, count).astype(np.float32)
         y = rng.uniform(0.0, height, count).astype(np.float32)
-        px = np.clip(x.astype(np.int32), 0, width - 1)
-        py = np.clip(y.astype(np.int32), 0, height - 1)
-        # nearer (small relative_depth) projects larger
-        depth_factor = np.maximum(0.15, 1.0 - relative_depth[py, px])
 
-        # Both the streak's length and the drop's apparent width scale with
-        # proximity, so alpha = width/length stays depth-invariant — but near
-        # streaks cover far more pixels, which is why rain reads as rain at
-        # all. Real rain is not one drop size repeated either: the
-        # Marshall-Palmer distribution is broad, drops sit at a range of
-        # distances from the focal plane, and each crosses a different part of
-        # the exposure. So length, width and sharpness all vary streak to
-        # streak — without that, a field of identical strokes reads as a hatch
-        # pattern rather than as rain.
-        length = base_length * depth_factor * rng.uniform(0.55, 1.7, count)
-        drop_width = drop_diameter_px * depth_factor * rng.uniform(0.7, 1.5, count)
-        # Defocus varies *per drop*, because each sits at its own distance
-        # from the focal plane. One circle of confusion then drives all three
-        # of width, brightness and edge softness together, so a near-focus
-        # drop is a thin bright crisp stroke and an off-focus one is a wide,
-        # dim, soft smear. Blurring on top of a separately chosen width would
-        # double-count the same defocus and wash the whole field out.
-        coc = 1.0 + rng.uniform(*self.defocus_range, count) * depth_factor
-        blur_sigma = self.definition_softness * (coc - 1.0) * np.maximum(1.0, drop_width)
+        # Rain falls along one direction in the world, and parallel 3-D lines
+        # project to lines through a single vanishing point. So the streaks in
+        # a tilted camera's frame are not parallel — they splay out from that
+        # point, which is one of the strongest cues that rain is falling
+        # *through* a scene rather than being drawn on top of it. A level
+        # camera puts the vanishing point at infinity and recovers the
+        # parallel case exactly.
+        angle = _perspective_angles(
+            x, y, width, height, focal, camera_pitch, wind_angle
+        )
+        angle = angle + rng.uniform(-angle_jitter, angle_jitter, count)
 
         return {
             "streaks": {
                 "x": x,
                 "y": y,
+                # Carried through for introspection and testing: length,
+                # width and opacity all derive from it together.
+                "distance": distance_m.astype(np.float32),
                 "length": length.astype(np.float32),
-                "thickness": np.maximum(1, np.round(drop_width * coc)).astype(np.int32),
-                "angle": (angle + rng.uniform(-angle_jitter, angle_jitter, count)).astype(
-                    np.float32
-                ),
+                "thickness": np.maximum(1, np.round(thickness)).astype(np.int32),
+                "angle": angle.astype(np.float32),
                 "bend": rng.uniform(-wobble_strength, wobble_strength, count).astype(np.float32),
+                # Garg & Nayar: a drop occupies a pixel for diameter/length of
+                # the exposure. Widening it by defocus divides that back down,
+                # conserving the light the drop actually deposits.
                 "alpha": (
-                    np.clip(drop_width / np.maximum(length, 1e-3), 0.0, 1.0) / coc
+                    np.clip(drop_width / np.maximum(length, 1e-3), 0.0, 1.0)
+                    * (drop_width / np.maximum(thickness, 1e-3))
                 ).astype(np.float32),
                 "phase": rng.uniform(0.0, 2 * np.pi, count).astype(np.float32),
-                "blur_sigma": blur_sigma.astype(np.float32),
+                "blur_sigma": (self.definition_softness * blur_radius).astype(np.float32),
             },
-            "angle": angle,
+            "angle": wind_angle,
             "veil_transmission": np.exp(-veil_beta * depth_pm).astype(np.float32),
             "draw_wetness": self.py_random.random() < self.wetness_probability,
+            "wetness_band_fraction": self.py_random.uniform(*self.wetness_band_fraction_range),
         }
 
     def apply(
@@ -283,6 +521,7 @@ class RandomRain(WeatherTransform):
         angle: float,
         veil_transmission: np.ndarray,
         draw_wetness: bool,
+        wetness_band_fraction: float,
         **params: Any,
     ) -> np.ndarray:
         height, width = img.shape[:2]
@@ -291,7 +530,11 @@ class RandomRain(WeatherTransform):
 
         # A drop images a ~165 degree field of view, so a streak is basically
         # a picture of the sky. Take its radiance from the scene itself.
-        streak_radiance = sky_radiance_linear(linear)
+        # A streak is a lens imaging the sky, which may be out of frame, so
+        # it takes the illuminant. The veil is scattered skylight and
+        # saturates at the sky's own recorded radiance instead.
+        streak_radiance = illuminant_radiance_linear(linear)
+        airlight = sky_radiance_linear(linear)
 
         occupancy = render_streak_layer(height, width, streaks)
 
@@ -299,7 +542,9 @@ class RandomRain(WeatherTransform):
         # motion blur, so smearing it again along its own axis would divide
         # its (already only a few percent) alpha by the kernel length and
         # erase the rain entirely.
-        softened: np.ndarray = cv2.GaussianBlur(occupancy, (0, 0), sigmaX=0.7)
+        softened: np.ndarray = cv2.GaussianBlur(
+            occupancy, (0, 0), sigmaX=_CROSS_SECTION_SOFTEN_PX
+        )
         # Occupancy -> coverage. See the module docstring: drops crossing one
         # pixel during the exposure occlude independently, so the fractions of
         # the exposure they are *absent* for multiply.
@@ -309,14 +554,14 @@ class RandomRain(WeatherTransform):
         # scatters into a veil, the same Koschmieder compositing as fog but
         # with the rain's own (sky-coloured) radiance.
         t = veil_transmission[..., None]
-        out = linear * t + streak_radiance[None, None, :] * (1.0 - t)
+        out = linear * t + airlight[None, None, :] * (1.0 - t)
 
         # Time-averaged streaks: I = (1-a)*I_bg + a*L_streak.
         a = alpha_layer[..., None]
         out = out * (1.0 - a) + streak_radiance[None, None, :] * a
 
         if draw_wetness:
-            out = _apply_ground_wetness(out, self.wetness_band_fraction)
+            out = _apply_ground_wetness(out, wetness_band_fraction)
 
         # Stand-in for the camera's auto-exposure pulling the frame back to a
         # normal level after the scene got brighter/hazier.

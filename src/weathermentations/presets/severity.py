@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H
+
 
 def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
@@ -57,8 +59,22 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "water_spot_count_range": (0, int(_lerp(5, 30, t))),
             },
             "SunFlare": {
-                "intensity_range": (_lerp(0.2, 1.2, t), _lerp(0.45, 1.9, t)),
-                "ghost_count_range": (int(_lerp(1, 6, t)), int(_lerp(3, 11, t))),
+                # Level 1 has to be *mild*, not *absent*. The previous floor
+                # of 0.2 changed the image by about a third of an 8-bit level
+                # on average, which is invisible — a severity ladder whose
+                # bottom rung does nothing wastes a rung and reads as a bug.
+                "intensity_range": (_lerp(0.55, 1.3, t), _lerp(0.95, 2.1, t)),
+                "ghost_count_range": (int(_lerp(2, 6, t)), int(_lerp(5, 11, t))),
+                "dispersion_ring_probability": _lerp(0.3, 0.7, t),
+                # Severity here doubles as "how neglected is this camera".
+                # A scuffed dome, a saturating older sensor and a failing
+                # IR-cut filter all arrive together in practice, because they
+                # are all symptoms of age rather than independent choices.
+                "scratch_count_range": (int(_lerp(0, 3, t)), int(_lerp(3, 10, t))),
+                "scratch_strength_range": (_lerp(0.03, 0.1, t), _lerp(0.15, 0.4, t)),
+                "sensor_smear_probability": _lerp(0.1, 0.45, t),
+                "ir_leak_probability": _lerp(0.15, 0.5, t),
+                "window_ghost_probability": _lerp(0.2, 0.5, t),
             },
             "RandomFog": {
                 # MOR = 3.912 / beta, so this spans roughly 800 m down to 30 m
@@ -67,17 +83,92 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "scattering_gamma_range": (_lerp(0.8, 0.0, t), _lerp(2.0, 0.4, t)),
                 "forward_scatter_range": (_lerp(0.0005, 0.003, t), _lerp(0.002, 0.008, t)),
             },
+            # Rain and snow are driven by their *precipitation rate*, which
+            # is the single physical quantity severity means here: it sets
+            # the drop/flake size distribution, how many are in frame, and
+            # (via the visibility relations) how dense the veil is. Nothing
+            # else needs a ladder, because everything else follows from it.
             "RandomRain": {
-                "streak_density_range": (int(_lerp(400, 4000, t)), int(_lerp(1200, 9000, t))),
-                "drop_diameter_range": (_lerp(0.002, 0.004, t), _lerp(0.003, 0.006, t)),
-                "veil_beta_range": (_lerp(0.002, 0.03, t), _lerp(0.01, 0.09, t)),
+                # Rate only. Exposure time is a property of the *camera*, not
+                # of the weather, and tying it to severity made the ladder
+                # non-monotonic: a longer exposure draws longer and therefore
+                # proportionally fainter streaks, so past the middle of the
+                # ladder the extra rain was cancelled by the extra blur.
+                #
+                # Note these stay *ranges*, narrowed around the level rather
+                # than collapsed to a point. A preset picks how bad the
+                # weather is; it must not turn the transform deterministic,
+                # or every image at a given severity gets identical rain.
+                # Floor stays at RandomRain's own validated minimum, so level
+                # 1 is "light rain" rather than drizzle.
+                "rain_rate_range_mm_h": (
+                    _lerp(MIN_RAIN_RATE_MM_H, 55.0, t),
+                    _lerp(8.0, 100.0, t),
+                ),
                 "wetness_probability": _lerp(0.15, 0.9, t),
             },
             "RandomSnow": {
-                "flake_density_range": (int(_lerp(300, 2500, t)), int(_lerp(900, 5000, t))),
-                "bokeh_strength_range": (_lerp(0.4, 1.2, t), _lerp(1.2, 3.0, t)),
-                "veil_beta_range": (_lerp(0.004, 0.06, t), _lerp(0.02, 0.16, t)),
-                "accumulation_strength_range": (_lerp(0.05, 0.45, t), _lerp(0.18, 0.75, t)),
+                # Water-equivalent rate: a few tenths of a mm/h is a light
+                # flurry, 10 mm/h (roughly 100 mm/h of actual snow depth) is a
+                # blizzard whose veil alone drops visibility to tens of metres.
+                "snowfall_rate_range_mm_h": (_lerp(0.2, 6.0, t), _lerp(1.2, 14.0, t)),
+                # Heavier falls tend to be the big wet aggregates, which are
+                # also the lowest-density and so the largest on screen.
+                "snow_density_range_g_cm3": (_lerp(0.07, 0.03, t), _lerp(0.14, 0.07, t)),
+                "aperture_diameter_range_mm": (_lerp(3.0, 6.0, t), _lerp(9.0, 20.0, t)),
+                "accumulation_strength_range": (_lerp(0.1, 0.6, t), _lerp(0.35, 0.95, t)),
+            },
+            # --- Surveillance-stream effects (plan.md 6.2). Severity here is
+            # "how degraded is this camera and its link", which in practice
+            # co-varies: a neglected site has a scuffed dome, an old sensor,
+            # a failing IR-cut filter *and* a starved uplink.
+            "AcFlicker": {
+                "modulation_depth_range": (_lerp(0.02, 0.2, t), _lerp(0.12, 0.6, t)),
+            },
+            "RollingShutter": {
+                "pan_shift_range_px": (_lerp(-3.0, -30.0, t), _lerp(3.0, 30.0, t)),
+                "wobble_amplitude_range_px": (0.0, _lerp(1.5, 12.0, t)),
+            },
+            "ExposureTransient": {
+                "exposure_error_stops_range": (_lerp(-0.4, -2.2, t), _lerp(0.4, 2.2, t)),
+                "actual_temperature_range_k": (_lerp(4800, 2400, t), _lerp(6200, 9500, t)),
+                "tint_error_range": (_lerp(-0.02, -0.16, t), _lerp(0.02, 0.16, t)),
+            },
+            "WdrToneMapping": {
+                "compression_range": (_lerp(0.8, 0.3, t), _lerp(0.95, 0.6, t)),
+                "halo_strength_range": (_lerp(0.05, 0.5, t), _lerp(0.35, 1.0, t)),
+                "detail_gain_range": (_lerp(0.95, 1.2, t), _lerp(1.2, 2.0, t)),
+            },
+            "TemporalDenoiseArtifacts": {
+                "strength_range": (_lerp(0.15, 0.7, t), _lerp(0.5, 1.0, t)),
+                "iterations_range": (1, int(_lerp(1, 4, t))),
+                "edge_threshold_range": (_lerp(8.0, 35.0, t), _lerp(25.0, 90.0, t)),
+                "chroma_blur_range": (_lerp(0.002, 0.008, t), _lerp(0.008, 0.035, t)),
+            },
+            "NightIrMode": {
+                # Severity is how little light there is to work with: a
+                # shorter illuminator reach and more gain, hence more noise.
+                "illuminator_range_m": (_lerp(10.0, 2.5, t), _lerp(22.0, 7.0, t)),
+                "gain_range": (_lerp(0.8, 1.4, t), _lerp(1.3, 3.0, t)),
+                "read_noise_range": (_lerp(0.002, 0.012, t), _lerp(0.012, 0.055, t)),
+                "ambient_range": (_lerp(0.05, 0.002, t), _lerp(0.2, 0.03, t)),
+            },
+            "VideoCodecArtifacts": {
+                "crf_range": (int(_lerp(20, 34, t)), int(_lerp(28, 46, t))),
+                "stale_block_probability": _lerp(0.05, 0.5, t),
+                "stale_block_fraction_range": (_lerp(0.01, 0.08, t), _lerp(0.08, 0.35, t)),
+            },
+            "HousingOccluders": {
+                "insect_count_range": (0, int(_lerp(1, 6, t))),
+                "web_count_range": (0, int(_lerp(1, 3, t))),
+                "opacity_range": (_lerp(0.3, 0.6, t), _lerp(0.6, 1.0, t)),
+            },
+            "CastShadows": {
+                "shadow_count_range": (int(_lerp(1, 3, t)), int(_lerp(3, 9, t))),
+                # Harder light means deeper shadows *and* crisper edges, which
+                # is why these two move together rather than independently.
+                "direct_fraction_range": (_lerp(0.25, 0.6, t), _lerp(0.55, 0.92, t)),
+                "penumbra_range": (_lerp(0.004, 0.001, t), _lerp(0.03, 0.008, t)),
             },
         }
     return severities

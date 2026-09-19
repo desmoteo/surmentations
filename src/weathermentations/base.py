@@ -42,6 +42,8 @@ from typing import Any
 
 from albumentations.core.transforms_interface import ImageOnlyTransform
 
+from weathermentations.diagnostics import instrument
+
 RangeF = tuple[float, float]
 RangeI = tuple[int, int]
 
@@ -52,7 +54,22 @@ class WeatherTransform(ImageOnlyTransform):
     Subclasses implement ``apply`` and (when a parameter needs per-call
     randomization or depends on image shape) ``get_params_dependent_on_data``
     per the standard Albumentations ``ImageOnlyTransform`` contract.
+
+    Every subclass's ``get_params_dependent_on_data`` is wrapped automatically
+    so that, when :func:`~weathermentations.diagnostics.recording` is active,
+    the parameters it sampled are captured. Subclasses do not opt in and need
+    know nothing about it; the wrapper is a single flag check when recording
+    is off. See ``diagnostics.py`` for why the draws are worth recording
+    separately from the rendered image.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        method = cls.__dict__.get("get_params_dependent_on_data")
+        if method is not None and not getattr(
+            method, "__weathermentations_instrumented__", False
+        ):
+            cls.get_params_dependent_on_data = instrument(method)
 
 
 def require_depth_provider(depth_provider: Any, *, cls_name: str) -> Any:

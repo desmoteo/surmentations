@@ -52,9 +52,78 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
 from weathermentations.base import WeatherTransform
+from weathermentations.diagnostics import record_draw
+from weathermentations.utils.grids import centered_grid
 from weathermentations.utils.noise import value_noise
 
 _WATER_IOR = 1.33  # refractive index of water relative to air
+
+# Water against air at room temperature.
+_SURFACE_TENSION_N_PER_M = 0.072
+_WATER_DENSITY_KG_PER_M3 = 1000.0
+_GRAVITY_M_PER_S2 = 9.81
+
+# Exponent of the dropwise-condensation size distribution. Coalescence-driven
+# growth on a surface reaches a self-similar regime whose drop-size
+# distribution is a power law N(r) ~ r^-tau with tau close to 2 (Family &
+# Meakin; Rose's dropwise-condensation work). That is a far heavier tail than
+# any reshaped uniform: it is what puts hundreds of fine drops on the glass
+# for every large one, which is the texture the Codrops/Heartfelt rain-on-
+# glass look is built from.
+_CONDENSATION_TAU = 2.0
+
+
+def capillary_length_mm() -> float:
+    """``sqrt(sigma / (rho g))`` for water, in millimetres: about 2.7 mm.
+
+    The length at which surface tension and gravity balance, and therefore
+    the scale that decides whether a drop on a vertical pane stays put or
+    runs. Every "does this drop slide?" question reduces to a comparison
+    against it.
+    """
+    length_m = np.sqrt(
+        _SURFACE_TENSION_N_PER_M / (_WATER_DENSITY_KG_PER_M3 * _GRAVITY_M_PER_S2)
+    )
+    return float(length_m * 1e3)
+
+
+def shedding_radius_mm(contact_angle_hysteresis: float = 0.35) -> float:
+    """Base radius above which a drop on a vertical surface starts to slide.
+
+    A sessile drop is pinned by contact-angle hysteresis: the contact line
+    resists motion with a force proportional to the surface tension, the
+    drop's width and ``cos(theta_receding) - cos(theta_advancing)``. Gravity
+    pulls with the drop's weight, which grows as the cube of its size. Volume
+    beating perimeter is the whole story, and setting the two equal leaves
+    the capillary length scaled by the hysteresis term.
+
+    This is why a window in rain shows a great many small drops sitting
+    still and only a handful of large ones running: sliding is not a
+    property some drops randomly have, it is what happens once a drop grows
+    past this size. Deriving it removes ``streak_probability`` as a free
+    knob — the fraction of drops that slide now follows from the size
+    distribution.
+    """
+    return capillary_length_mm() * float(np.sqrt(max(contact_angle_hysteresis, 1e-3)))
+
+
+def power_law_radii(
+    rng: np.random.Generator, count: int, r_min: float, r_max: float, tau: float
+) -> np.ndarray:
+    """Sample ``count`` radii from ``N(r) ~ r^-tau`` truncated to ``[r_min, r_max]``.
+
+    Inverted analytically; for ``tau == 1`` the inverse is logarithmic and is
+    handled separately.
+    """
+    if count <= 0:
+        return np.zeros(0, dtype=np.float64)
+    u = rng.random(count)
+    low = max(r_min, 1e-6)
+    high = max(r_max, low * (1.0 + 1e-9))
+    if abs(tau - 1.0) < 1e-6:
+        return low * (high / low) ** u
+    exponent = 1.0 - tau
+    return (low**exponent + u * (high**exponent - low**exponent)) ** (1.0 / exponent)
 
 
 def _droplet_rim_bend(
@@ -115,10 +184,12 @@ def _render_droplet(
     source-image coordinates.
     """
     size = max(4, int(round(radius_px * 2.4)))
-    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
     centre = size / 2.0
-    dx = xx - centre
-    dy = yy - centre
+    # Broadcastable axes rather than np.mgrid: mgrid materialises two full
+    # int64 grids and then converts them, which is four times the memory
+    # traffic needed and showed up as a measurable share of this transform's
+    # cost once the drop count rose into the hundreds. See utils/grids.py.
+    dy, dx = centered_grid(size, scale=1.0)
     dist_px = np.sqrt(dx**2 + dy**2)
     angle = np.arctan2(dy, dx)
     local_radius = _local_radius(angle, radius_px, irregularity, phase)
@@ -146,7 +217,7 @@ def _render_droplet(
     # bright crescent on the opposite side where light refracts through the
     # meniscus — both are what make a droplet read as a 3D bead rather than a
     # flat distorted disc.
-    normal_xy = np.stack([dx, dy], axis=-1) / (radius_px + 1e-6)
+    normal_xy = np.stack(np.broadcast_arrays(dx, dy), axis=-1) / (radius_px + 1e-6)
     normal_z = np.sqrt(np.clip(1.0 - np.sum(normal_xy**2, axis=-1), 0.0, 1.0))
     normal = np.concatenate([normal_xy, normal_z[..., None]], axis=-1)
     normal /= np.linalg.norm(normal, axis=-1, keepdims=True) + 1e-6
@@ -177,14 +248,43 @@ def _render_droplet(
     return patch.astype(sharp_source.dtype), alpha, x0, y0
 
 
+def _taper_trailing_edge(alpha: np.ndarray) -> np.ndarray:
+    """Narrow the *upper* half of a sliding drop into a tapering tail.
+
+    A drop running down glass is not a symmetric ellipse. Its advancing
+    (lower) contact line is blunt and nearly circular, because it is
+    continually wetting fresh glass, while the receding (upper) one is
+    dragged out into a narrowing tail behind it. Stretching a round drop
+    symmetrically — the previous behaviour — produces a capsule, which reads
+    as a drawn pill rather than as water under gravity.
+
+    Implemented as a per-row horizontal squeeze rather than a remap, which
+    keeps it a couple of array operations on a small patch.
+    """
+    height, width = alpha.shape[:2]
+    if height < 4:
+        return alpha
+
+    rows = np.arange(height, dtype=np.float32) / max(height - 1, 1)
+    # 1 across the lower (advancing) half, narrowing toward the top.
+    narrowing = np.clip(rows / 0.55, 0.0, 1.0)
+    narrowing = 0.35 + 0.65 * (narrowing * narrowing * (3.0 - 2.0 * narrowing))
+
+    centre = (width - 1) / 2.0
+    columns = np.arange(width, dtype=np.float32) - centre
+    # Distance from the drop's axis, in units of that row's half-width.
+    normalised = np.abs(columns[None, :]) / (narrowing[:, None] * centre + 1e-6)
+    return (alpha * np.clip(1.5 - normalised * 0.5, 0.0, 1.0)).astype(np.float32)
+
+
 def _sample_positions(
     rng: np.random.Generator,
     count: int,
     width: int,
     height: int,
     radius_range: tuple[float, float],
-    size_bias: float,
-    streak_probability: float,
+    tau: float,
+    shedding_radius_px: float,
     streak_length_range: tuple[float, float],
     min_gap_ratio: float,
     footprint_inflation: float = 1.0,
@@ -194,22 +294,30 @@ def _sample_positions(
     Returns ``(cx, cy, radius, stretch)`` tuples. Candidates are drawn in one
     batch and accepted greedily: a candidate is kept only if its footprint
     clears every already-accepted footprint by ``min_gap_ratio`` of their
-    combined radii, so no two droplets ever touch. Radii follow
-    ``r = r_min + (r_max - r_min) * u**size_bias`` with ``size_bias > 1``,
-    biasing towards many small droplets and few large ones the way real rain
-    on glass does.
+    combined radii, so no two droplets ever touch.
+
+    Radii follow the ``r^-tau`` power law of dropwise condensation, and
+    whether a drop is drawn as a sliding streak is decided by whether it
+    exceeds ``shedding_radius_px`` — not by a coin flip. Both together are
+    what produce the real pattern: a dense spatter of fine stationary beads
+    with a few large runners through it.
     """
     oversample = 6
     n_candidates = max(count * oversample, count + 32)
 
-    u = rng.random(n_candidates)
-    radii = radius_range[0] + (radius_range[1] - radius_range[0]) * u**size_bias
+    radii = power_law_radii(rng, n_candidates, radius_range[0], radius_range[1], tau)
     xs = rng.uniform(0, width, n_candidates)
     ys = rng.uniform(0, height, n_candidates)
-    is_streak = rng.random(n_candidates) < streak_probability
+
+    # Sliding is not random: a drop runs once it outgrows the size at which
+    # gravity beats contact-line pinning. How elongated it becomes still is,
+    # since that depends on how far past the threshold it has grown and on
+    # how long it has been running.
+    is_streak = radii > shedding_radius_px
     stretches = np.where(
         is_streak, rng.uniform(streak_length_range[0], streak_length_range[1], n_candidates), 1.0
     )
+
     # Gravity elongates every drop after placement, so reserve room for it
     # here or drops that only just fitted will overlap once stretched.
     footprints = radii * np.maximum(1.0, stretches) * footprint_inflation
@@ -339,9 +447,25 @@ class WaterDroplets(WeatherTransform):
             may render if the canvas cannot fit them without overlap.
         droplet_radius_range: droplet radius, as a fraction of the image
             diagonal (0.01 on a 1000px-diagonal image is a 10px radius).
-        size_bias: exponent biasing the radius distribution towards the small
-            end (1 = uniform, higher = many small droplets and few large
-            ones, as real rain on glass looks).
+        size_exponent_range: exponent ``tau`` of the ``N(r) ~ r^-tau``
+            drop-size power law, drawn per call. Coalescence-driven dropwise
+            condensation settles into a self-similar regime near ``tau = 2``;
+            larger values push the
+            distribution further toward fine spatter, smaller ones toward a
+            few big beads.
+        pane_width_range_mm: physical width of the piece of glass the frame
+            covers, drawn per call.
+            This is what gives droplet sizes a real scale, and the only
+            reason it matters is the shedding threshold: whether a drop runs
+            depends on its size in millimetres against the capillary length,
+            not on its size in pixels. Larger values mean the frame spans
+            more glass, so a drop of a given pixel size is physically
+            smaller and less likely to slide.
+        contact_angle_hysteresis_range: ``cos(theta_receding) -
+            cos(theta_advancing)`` for the glass, drawn per call. Higher means
+            a stickier surface that pins larger drops in place; lower (a
+            freshly waxed or hydrophobic pane) lets
+            smaller drops run.
         cap_height_ratio_range: droplet "bulge" as a fraction of its radius
             (spherical-cap height / radius) — higher bends rays harder at the
             rim. Typical sessile water droplets: 0.3-0.6.
@@ -374,11 +498,14 @@ class WaterDroplets(WeatherTransform):
             resolve the droplets, only the milky veil they scatter into.
         condensation_blur_range: how much a fogged patch scatters/softens
             what is behind it, as a fraction of the image diagonal.
-        trail_probability: chance that a drop has slid down and left a trail.
+        trail_probability: chance that a drop which has passed the shedding
+            threshold has already started running, and so left a trail. Drops
+            below the threshold are pinned and never leave one.
         trail_length_range: trail length, as a fraction of image height.
-        streak_probability: chance a droplet renders as a vertically
-            elongated sliding streak (gravity trail) instead of a round bead.
-        streak_length_range: vertical elongation multiplier for such streaks.
+        streak_length_range: vertical elongation multiplier for drops that
+            have passed the shedding threshold and are running. Which drops
+            those are is *derived*, not sampled — see
+            ``contact_angle_hysteresis``.
         vertical_stretch_range: how much gravity elongates a resting drop.
         shape_irregularity_range: how far a droplet's outline deviates from a
             perfect circle, as a fraction of its radius.
@@ -403,7 +530,21 @@ class WaterDroplets(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0005, 0.25)),
         ]
-        size_bias: float = Field(ge=0.5, le=8.0)
+        size_exponent_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.5, 4.0)),
+        ]
+        pane_width_range_mm: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1.0, 2000.0)),
+        ]
+        contact_angle_hysteresis_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.01, 2.0)),
+        ]
         cap_height_ratio_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -455,7 +596,6 @@ class WaterDroplets(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
-        streak_probability: float = Field(ge=0.0, le=1.0)
         streak_length_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -475,9 +615,11 @@ class WaterDroplets(WeatherTransform):
 
     def __init__(
         self,
-        droplet_count_range: tuple[int, int] = (30, 90),
-        droplet_radius_range: tuple[float, float] = (0.003, 0.028),
-        size_bias: float = 2.5,
+        droplet_count_range: tuple[int, int] = (180, 520),
+        droplet_radius_range: tuple[float, float] = (0.0016, 0.030),
+        size_exponent_range: tuple[float, float] = (1.7, 2.4),
+        pane_width_range_mm: tuple[float, float] = (30.0, 190.0),
+        contact_angle_hysteresis_range: tuple[float, float] = (0.15, 0.65),
         cap_height_ratio_range: tuple[float, float] = (0.35, 0.65),
         scene_compression_range: tuple[float, float] = (3.0, 7.0),
         background_blur_range: tuple[float, float] = (0.0, 0.0),
@@ -489,7 +631,6 @@ class WaterDroplets(WeatherTransform):
         condensation_blur_range: tuple[float, float] = (0.006, 0.02),
         trail_probability: float = 0.35,
         trail_length_range: tuple[float, float] = (0.08, 0.35),
-        streak_probability: float = 0.15,
         streak_length_range: tuple[float, float] = (1.5, 3.0),
         vertical_stretch_range: tuple[float, float] = (1.15, 1.5),
         shape_irregularity_range: tuple[float, float] = (0.03, 0.12),
@@ -499,7 +640,9 @@ class WaterDroplets(WeatherTransform):
         super().__init__(p=p)
         self.droplet_count_range = droplet_count_range
         self.droplet_radius_range = droplet_radius_range
-        self.size_bias = size_bias
+        self.size_exponent_range = size_exponent_range
+        self.pane_width_range_mm = pane_width_range_mm
+        self.contact_angle_hysteresis_range = contact_angle_hysteresis_range
         self.cap_height_ratio_range = cap_height_ratio_range
         self.scene_compression_range = scene_compression_range
         self.background_blur_range = background_blur_range
@@ -511,7 +654,6 @@ class WaterDroplets(WeatherTransform):
         self.condensation_blur_range = condensation_blur_range
         self.trail_probability = trail_probability
         self.trail_length_range = trail_length_range
-        self.streak_probability = streak_probability
         self.streak_length_range = streak_length_range
         self.vertical_stretch_range = vertical_stretch_range
         self.shape_irregularity_range = shape_irregularity_range
@@ -528,14 +670,35 @@ class WaterDroplets(WeatherTransform):
             self.droplet_radius_range[0] * diagonal,
             self.droplet_radius_range[1] * diagonal,
         )
+        # Shedding is a physical size threshold, so it has to be compared in
+        # physical units: convert the capillary criterion into pixels using
+        # how much glass the frame actually spans.
+        # Drawn per call: how much glass the frame covers and how sticky it
+        # is both vary shot to shot, and together they decide what fraction of
+        # the drops are large enough to run.
+        pane_width_mm = self.py_random.uniform(*self.pane_width_range_mm)
+        hysteresis = self.py_random.uniform(*self.contact_angle_hysteresis_range)
+        mm_per_px = pane_width_mm / max(width, 1)
+        shedding_px = shedding_radius_mm(hysteresis) / mm_per_px
+
+        record_draw(
+            pane_width_mm=pane_width_mm,
+            contact_angle_hysteresis=hysteresis,
+            mm_per_px=mm_per_px,
+            shedding_radius_px=shedding_px,
+            shedding_radius_mm=shedding_radius_mm(hysteresis),
+            count_requested=count,
+            radius_px_min=radius_px_range[0],
+            radius_px_max=radius_px_range[1],
+        )
         placements = _sample_positions(
             self.random_generator,
             count,
             width,
             height,
             radius_px_range,
-            self.size_bias,
-            self.streak_probability,
+            self.py_random.uniform(*self.size_exponent_range),
+            shedding_px,
             self.streak_length_range,
             self.min_gap_ratio,
             footprint_inflation=self.vertical_stretch_range[1],
@@ -546,16 +709,36 @@ class WaterDroplets(WeatherTransform):
         # Every droplet that lands on the pane, trail remnants included, is
         # checked against everything already placed: the no-touching rule has
         # to hold for the whole field, not just the drops placed first.
-        occupied_x = [p[0] for p in placements]
-        occupied_y = [p[1] for p in placements]
-        occupied_r = [p[2] * max(1.0, p[3]) * self.vertical_stretch_range[1] for p in placements]
+        # Kept as growing numpy buffers rather than Python lists: this check
+        # runs once per trail droplet against every droplet already placed,
+        # and with hundreds of drops on the pane a per-element Python loop
+        # here dominated the whole transform.
+        capacity = max(len(placements) * 8, 64)
+        occupied_x = np.empty(capacity, dtype=np.float64)
+        occupied_y = np.empty(capacity, dtype=np.float64)
+        occupied_r = np.empty(capacity, dtype=np.float64)
+        n_occupied = len(placements)
+        for i, placement in enumerate(placements):
+            occupied_x[i] = placement[0]
+            occupied_y[i] = placement[1]
+            occupied_r[i] = placement[2] * max(1.0, placement[3]) * self.vertical_stretch_range[1]
 
         def _fits(x: float, y: float, r: float) -> bool:
-            for ox, oy, orad in zip(occupied_x, occupied_y, occupied_r, strict=True):
-                min_dist = (r + orad) * (1.0 + self.min_gap_ratio)
-                if (x - ox) ** 2 + (y - oy) ** 2 < min_dist**2:
-                    return False
-            return True
+            min_dist = (occupied_r[:n_occupied] + r) * (1.0 + self.min_gap_ratio)
+            dx = occupied_x[:n_occupied] - x
+            dy = occupied_y[:n_occupied] - y
+            return not bool(np.any(dx * dx + dy * dy < min_dist * min_dist))
+
+        def _occupy(x: float, y: float, r: float) -> None:
+            nonlocal n_occupied, occupied_x, occupied_y, occupied_r
+            if n_occupied == len(occupied_x):
+                occupied_x = np.concatenate([occupied_x, np.empty_like(occupied_x)])
+                occupied_y = np.concatenate([occupied_y, np.empty_like(occupied_y)])
+                occupied_r = np.concatenate([occupied_r, np.empty_like(occupied_r)])
+            occupied_x[n_occupied] = x
+            occupied_y[n_occupied] = y
+            occupied_r[n_occupied] = r
+            n_occupied += 1
 
         # Where a drop has slid down it squeegees the mist away, leaving a
         # visibly clearer track behind it. That wiped track is as much of the
@@ -564,7 +747,14 @@ class WaterDroplets(WeatherTransform):
 
         for cx, cy, radius, stretch in placements:
             trail = []
-            if self.py_random.random() < self.trail_probability:
+            # Only a drop that has actually shed leaves a trail. A trail *is*
+            # the record of a drop sliding — the shrinking remnants it left
+            # behind and the track it wiped through the condensation — so
+            # letting pinned beads sprout them put wiped tracks all over the
+            # pane with nothing that could have made them (and cost most of
+            # the transform's render time drawing the remnants).
+            is_sliding = stretch > 1.0
+            if is_sliding and self.py_random.random() < self.trail_probability:
                 trail_length = self.py_random.uniform(*self.trail_length_range) * height
                 trail = _trail_droplets(rng, cx, cy, radius, trail_length, (0.25, 0.5))
                 cv2.line(
@@ -585,14 +775,21 @@ class WaterDroplets(WeatherTransform):
                 ),
             )
             gravity_stretch = self.py_random.uniform(*self.vertical_stretch_range)
-            droplets.append((cx, cy, radius, shared[0], stretch * gravity_stretch, *shared[1:]))
+            # Every drop sags a little under gravity, but a pinned one stays
+            # symmetric — only a *running* drop is drawn out into a teardrop,
+            # so the two elongations must not be conflated.
+            droplets.append(
+                (cx, cy, radius, shared[0], stretch * gravity_stretch, *shared[1:], is_sliding)
+            )
             for tx, ty, tr in trail:
                 if not _fits(tx, ty, tr * gravity_stretch):
                     continue
-                occupied_x.append(tx)
-                occupied_y.append(ty)
-                occupied_r.append(tr * gravity_stretch)
-                droplets.append((tx, ty, tr, shared[0], gravity_stretch, shared[1], shared[2]))
+                _occupy(tx, ty, tr * gravity_stretch)
+                # Trail remnants are shed *behind* a runner and are pinned
+                # again once left behind, so they are round beads.
+                droplets.append(
+                    (tx, ty, tr, shared[0], gravity_stretch, shared[1], shared[2], False)
+                )
 
         condensation = _condensation_field(
             height,
@@ -624,7 +821,9 @@ class WaterDroplets(WeatherTransform):
     def apply(
         self,
         img: np.ndarray,
-        droplets: list[tuple[float, float, float, float, float, float, tuple[float, float]]],
+        droplets: list[
+            tuple[float, float, float, float, float, float, tuple[float, float], bool]
+        ],
         condensation: np.ndarray,
         scene_compression: float,
         background_blur: float,
@@ -665,7 +864,7 @@ class WaterDroplets(WeatherTransform):
             c = condensation[..., None]
             out = np.clip(base * (1.0 - c) + milky * c, 0, 255).astype(img.dtype)
 
-        for cx, cy, radius, cap_ratio, stretch, irregularity, phase in droplets:
+        for cx, cy, radius, cap_ratio, stretch, irregularity, phase, is_sliding in droplets:
             patch, alpha, x0, y0 = _render_droplet(
                 img, cx, cy, radius, cap_ratio, irregularity, phase, scene_compression
             )
@@ -673,6 +872,8 @@ class WaterDroplets(WeatherTransform):
                 new_h = int(round(patch.shape[0] * stretch))
                 patch = cv2.resize(patch, (patch.shape[1], new_h), interpolation=cv2.INTER_LINEAR)
                 alpha = cv2.resize(alpha, (alpha.shape[1], new_h), interpolation=cv2.INTER_LINEAR)
+                if is_sliding:
+                    alpha = _taper_trailing_edge(alpha)
                 y0 = int(round(cy - new_h / 2.0))
 
             if droplet_defocus > 0.01:
