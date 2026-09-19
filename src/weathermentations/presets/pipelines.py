@@ -44,15 +44,18 @@ from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDr
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
 
-#: Severity the pipelines build at by default. Level 2 is "an ordinary bad
-#: day" — clearly visible, still readable. The transforms' own constructor
+#: Severity the pipelines build at by default. Level 1 is "a slightly bad
+#: day" — present in every frame it touches, never the subject of the frame.
+#: A pipeline stacks two or three effects, so per-effect severity compounds:
+#: level 2 on each of three effects is not an ordinary frame, it is a bad one.
+#: Raise it deliberately if your deployment really is that harsh. The transforms' own constructor
 #: defaults are deliberately *not* used here: they span the whole physically
 #: plausible range, so ``RandomRain`` reaches 200 mm/h, a tropical cloudburst,
 #: where severity 1 is 2-8 mm/h. Those wide defaults exist so a single
 #: transform can explore its parameter space; they are the wrong thing for a
 #: pipeline that stacks three or four effects at once, where each needs to be
 #: typical rather than extreme.
-DEFAULT_SEVERITY = 2
+DEFAULT_SEVERITY = 1
 
 
 def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
@@ -249,15 +252,19 @@ def surveillance(
                             # Night under street or shop lighting, camera still
                             # in colour: under-exposed, with the warm cast of
                             # sodium or low-CRI LED against a daylight AWB.
-                            # Kept mild deliberately — a -2.6 stop, 2000 K
-                            # version reads as a sepia filter over a daylit
-                            # frame rather than as night, because this branch
-                            # cannot relight the scene.
+                            # Kept mild deliberately. This branch cannot
+                            # relight the scene, so a strong version does not
+                            # read as night — it reads as a sepia filter over
+                            # a daylit frame, sky and all. Measured at
+                            # -1.5 stops / 2900 K it put a 65-level red-blue
+                            # cast on the frame, which dominated everything
+                            # else the pipeline did. Under-exposure carries
+                            # the impression; the tint only needs to hint.
                             ExposureTransient(
                                 p=1.0,
-                                exposure_error_stops_range=(-1.5, -0.6),
-                                assumed_temperature_range_k=(4600.0, 5600.0),
-                                actual_temperature_range_k=(2900.0, 3900.0),
+                                exposure_error_stops_range=(-0.9, -0.35),
+                                assumed_temperature_range_k=(4900.0, 5400.0),
+                                actual_temperature_range_k=(3900.0, 4600.0),
                             ),
                             *_stream(lit_by_mains=True, severity=severity, **tail),
                         ],
@@ -309,9 +316,11 @@ def surveillance_lite(
     in the input pipeline, when your data already contains real weather, or as
     the cheap majority of a mixed pipeline.
 
-    What it cannot do: no fog, rain or snow, no cast shadows, and no infrared
-    night. The ``night`` fraction here only turns the mains-lit artefacts on;
-    it does not darken the frame.
+    What it cannot do: no fog, rain or snow, no cast shadows, and **no night**
+    at all. The ``night`` fraction only turns the mains-lit artefacts on — the
+    flicker banding and the denoiser — because nothing here can relight a
+    daylit frame, and tinting one does not approximate night. Use
+    :func:`surveillance` if you need night as a domain.
 
     Args:
         night: fraction of frames treated as artificially lit, which raises
@@ -336,15 +345,18 @@ def surveillance_lite(
                         ],
                         p=1.0 - night,
                     ),
+                    # Deliberately *not* an under-exposed, warm-cast copy of
+                    # the day branch. Without `NightIrMode` there is nothing
+                    # here that can render night, and a colour shift on a
+                    # daylit frame does not approximate one — measured, it put
+                    # a 29-level median red-blue cast across the pipeline and
+                    # dominated every other effect. All "night" means here is
+                    # that the lighting is artificial, which raises the mains
+                    # flicker and the denoiser's workload. Use `surveillance`
+                    # if you need night as a domain.
                     A.Sequential(
                         [
                             _at(WaterDroplets, "WaterDroplets", droplets, severity),
-                            ExposureTransient(
-                                p=1.0,
-                                exposure_error_stops_range=(-1.5, -0.6),
-                                assumed_temperature_range_k=(4600.0, 5600.0),
-                                actual_temperature_range_k=(2900.0, 3900.0),
-                            ),
                             *_stream(lit_by_mains=True, severity=severity, **tail),
                         ],
                         p=night,

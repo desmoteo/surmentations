@@ -182,20 +182,27 @@ Two pipelines that cannot are importable directly:
 ```python
 from weathermentations.presets import surveillance, surveillance_lite
 
-transform = surveillance(provider, severity=2, codec=0.0)   # needs CUDA
-transform = surveillance_lite(severity=2)                   # CPU only
+transform = surveillance(provider, codec=0.0)   # needs CUDA
+transform = surveillance_lite()                 # CPU only, no night
 ```
 
-**`severity` is the dial for how degraded a frame gets** (1-5, default 2) and
-the first thing to change if the output looks too heavy. It matters more than
+**`severity` is the dial for how degraded a frame gets** (1-5, default 1) and
+the first thing to change if the output looks too heavy. It defaults low
+because a pipeline stacks two or three effects and per-effect severity
+compounds — level 2 on each of three effects is not an ordinary frame. It matters more than
 it sounds: without it the transforms run on their own constructor defaults,
 which span the whole physically plausible range — `RandomRain` reaches
 200 mm/h, a tropical cloudburst, where severity 1 is 2-8 mm/h. Those wide
 defaults are right for exploring one transform and wrong for stacking three.
 
-Measured at 512 px: `surveillance` 127 ms median, `surveillance_lite` 57 ms
-and no GPU. At severity 2 a typical frame keeps ~80% of its high-frequency
-detail. Every probability is a keyword argument, because the defaults
+Measured at 512 px: `surveillance` 124 ms median, `surveillance_lite` 78 ms
+and no GPU. A typical frame keeps 75-81% of its high-frequency detail.
+
+`surveillance_lite` renders no night at all — nothing in it can relight a
+daylit frame, and tinting one does not approximate night. Its `night`
+fraction only raises the mains-flicker and denoiser artefacts. Use
+`surveillance` if you need night as a domain, or `ir_night=0.0` there if you
+do not. Every probability is a keyword argument, because the defaults
 encode a temperate maritime climate on a mixed camera fleet and will not match
 your footage. [`docs/pipelines.md`](docs/pipelines.md) explains what each
 encodes and which to change first.
