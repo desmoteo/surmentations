@@ -45,14 +45,41 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow  # noqa: E402
+from weathermentations.camera import (  # noqa: E402
+    AcFlicker,
+    ExposureTransient,
+    NightIrMode,
+    RollingShutter,
+    TemporalDenoiseArtifacts,
+    VideoCodecArtifacts,
+    WdrToneMapping,
+)
+from weathermentations.camera.codec import ffmpeg_path  # noqa: E402
 from weathermentations.depth import (  # noqa: E402
     DepthAnythingV2Estimator,
     SharedDepthProvider,
 )
-from weathermentations.lens import DirtSoil, SunFlare, WaterDroplets  # noqa: E402
+from weathermentations.lens import (  # noqa: E402
+    DirtSoil,
+    HousingOccluders,
+    SunFlare,
+    WaterDroplets,
+)
+from weathermentations.scene import CastShadows  # noqa: E402
 
-DEPTH_FREE = ("water_droplets", "dirt_soil", "sun_flare")
-DEPTH_CONDITIONED = ("fog", "rain", "snow")
+DEPTH_FREE = (
+    "water_droplets",
+    "dirt_soil",
+    "sun_flare",
+    "housing_occluders",
+    "ac_flicker",
+    "rolling_shutter",
+    "exposure_transient",
+    "wdr_tone_mapping",
+    "denoise_artifacts",
+    "video_codec",
+)
+DEPTH_CONDITIONED = ("fog", "rain", "snow", "night_ir", "cast_shadows")
 
 
 @dataclass
@@ -76,12 +103,24 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "water_droplets": WaterDroplets(p=1.0),
         "dirt_soil": DirtSoil(p=1.0),
         "sun_flare": SunFlare(p=1.0),
+        "housing_occluders": HousingOccluders(p=1.0),
+        "ac_flicker": AcFlicker(p=1.0),
+        "rolling_shutter": RollingShutter(p=1.0),
+        "exposure_transient": ExposureTransient(p=1.0),
+        "wdr_tone_mapping": WdrToneMapping(p=1.0),
+        "denoise_artifacts": TemporalDenoiseArtifacts(p=1.0),
     }
+    # Two ffmpeg subprocesses per call, so it is both the slowest transform
+    # here and the one whose cost is least about this library.
+    if ffmpeg_path() is not None:
+        transforms["video_codec"] = VideoCodecArtifacts(p=1.0)
     if depth_provider is not None:
         transforms |= {
             "fog": RandomFog(depth_provider=depth_provider, p=1.0),
             "rain": RandomRain(depth_provider=depth_provider, p=1.0),
             "snow": RandomSnow(depth_provider=depth_provider, p=1.0),
+            "night_ir": NightIrMode(depth_provider=depth_provider, p=1.0),
+            "cast_shadows": CastShadows(depth_provider=depth_provider, p=1.0),
         }
     return transforms
 

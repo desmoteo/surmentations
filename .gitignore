@@ -15,3 +15,7 @@ htmlcov/
 *.pt
 *.safetensors
 .DS_Store
+
+# Diagnostic sweeps and benchmark output (scripts/diagnose.py, scripts/benchmark.py)
+draws.jsonl
+diagnostics/
