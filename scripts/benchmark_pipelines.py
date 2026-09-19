@@ -44,13 +44,21 @@ def _scene(size: int) -> np.ndarray:
     return cv2.cvtColor(cv2.resize(image, (size, size)), cv2.COLOR_BGR2RGB)
 
 
-def _contact_sheet(frames: list[np.ndarray], columns: int, tile: int) -> np.ndarray:
+def _contact_sheet(frames: list[np.ndarray], columns: int) -> np.ndarray:
+    """Tiles at native resolution, deliberately.
+
+    Downscaling the tiles hides exactly the effects that are hardest to judge:
+    a rain streak is one pixel wide, so 2:1 area averaging removes it
+    entirely, and snow flakes go the same way. A sheet built that way said
+    "rain and snow are missing" about frames that contained a thousand
+    streaks. The file is large; that is the cost of it being honest.
+    """
+    tile = frames[0].shape[0]
     rows = (len(frames) + columns - 1) // columns
     sheet = np.zeros((rows * tile, columns * tile, 3), dtype=np.uint8)
     for index, frame in enumerate(frames):
-        small = cv2.resize(frame, (tile, tile), interpolation=cv2.INTER_AREA)
         y, x = divmod(index, columns)
-        sheet[y * tile : (y + 1) * tile, x * tile : (x + 1) * tile] = small
+        sheet[y * tile : (y + 1) * tile, x * tile : (x + 1) * tile] = frame
     return sheet
 
 
@@ -98,7 +106,7 @@ def _run(
 
     cv2.imwrite(
         str(out / f"{name}_sheet.png"),
-        cv2.cvtColor(_contact_sheet(frames, columns=5, tile=256), cv2.COLOR_RGB2BGR),
+        cv2.cvtColor(_contact_sheet(frames, columns=5), cv2.COLOR_RGB2BGR),
     )
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=1))
 
@@ -119,10 +127,16 @@ def _run(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--runs", type=int, default=20, help="renders per pipeline")
+    parser.add_argument("--runs", type=int, default=50, help="renders per pipeline")
     parser.add_argument("--size", type=int, default=512, help="square frame size")
     parser.add_argument("--out", type=Path, default=Path("pipeline_samples"))
     parser.add_argument("--seed", type=int, default=7, help="seed, set once per pipeline")
+    parser.add_argument(
+        "--no-weather-demo",
+        action="store_true",
+        help="skip the weather-forced variant (the default priors put weather on 12%% of "
+        "frames, so a 20-frame sample shows almost none)",
+    )
     parser.add_argument("--no-depth", action="store_true", help="skip the CUDA pipeline")
     args = parser.parse_args()
 
@@ -136,6 +150,19 @@ def main() -> int:
 
         provider = SharedDepthProvider(DepthAnythingV2Estimator())
         builders.append(("surveillance", surveillance(provider)))
+        if not args.no_weather_demo:
+            # The shipped priors are climatological: 12% of frames carry
+            # weather, so a 20-frame sample typically shows one rain and no
+            # snow at all, which reads as "the weather is broken". This
+            # variant raises the three states so they can actually be looked
+            # at. It is a demo of the effects, not a recommended setting.
+            builders.append(
+                (
+                    "surveillance_weather",
+                    surveillance(provider, rain=0.33, snow=0.32, fog=0.32, ir_night=0.0,
+                                 lit_night=0.0, day=1.0),
+                )
+            )
 
     summaries = [_run(name, t, scene, args.runs, args.out, args.seed) for name, t in builders]
 

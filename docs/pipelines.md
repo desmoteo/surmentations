@@ -341,6 +341,41 @@ under-represent how often a real camera applies those three.
 | `DirtSoil` `p` | 0.25 | How much of your fleet is overdue for cleaning. Rises steeply with maintenance interval. |
 | `RollingShutter` `p` | 0.50 | Not "how many cameras have a rolling shutter" (all of them) but how often there is enough motion — wind, a passing vehicle — for the artefact to show. |
 
+## Why rain looks like haze and not like streaks
+
+Worth knowing before concluding the rain is broken, because it is the most
+common thing to misread about this library.
+
+A raindrop's streak is **one pixel wide** with an opacity of 0.02-0.08 (see
+F7 in [`physical_review.md`](physical_review.md)), and it carries the *sky's*
+radiance because a drop is a wide-angle lens pointed at the sky. Against a
+bright overcast sky that is almost no contrast. A 512 px frame at severity 2
+genuinely contains **1076 streaks**; you cannot see them, and neither can a
+camera.
+
+Lengthening the shutter does not help, which is the part worth measuring
+rather than assuming. Going from 1/333-1/100 s to 1/50-1/22 s takes the
+median streak from 10 px to 52 px — and the high-frequency energy the rain
+adds stays flat, 4.21 against 4.13. That is `α = D/(vT)` doing its job: a
+longer exposure spreads one drop's light over more pixels, so the streak gets
+longer and proportionally fainter. There is no shutter speed at which
+daylight rain becomes dramatic.
+
+What actually says "rain" in a daylit frame is the **wet road** and water on
+the glass, which is why this pipeline raises `wetness_probability` to 0.85
+inside the rain branch rather than leaving it at the severity preset's value.
+Streaks become visible against dark backgrounds — night, dark buildings,
+shadowed foliage — so they carry the effect at night and the veil and the wet
+road carry it by day. Both are correct; only one is photogenic.
+
+**Snow is different and is visible**, roughly 180 flakes at severity 2 on a
+512 px frame. If it appears to be missing, check whether you are looking at a
+downscaled image: a flake and a streak are both about a pixel across, so any
+2:1 area averaging removes them entirely. `scripts/benchmark_pipelines.py`
+writes its contact sheets at native resolution for exactly this reason — an
+earlier version downscaled them and made a frame containing a thousand
+streaks look untouched.
+
 ## Caveats
 
 **Neither night branch relights the scene.** This is the weakest part of the
