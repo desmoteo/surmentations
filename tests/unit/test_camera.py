@@ -410,3 +410,70 @@ def test_codec_is_not_jpeg(scene: np.ndarray) -> None:
     jpeg_out = cv2.imdecode(buffer, cv2.IMREAD_COLOR).astype(np.float32)
 
     assert np.abs(codec_out - jpeg_out).mean() > 3.0
+
+
+def test_flicker_harmonics_all_cancel_at_an_anti_flicker_exposure() -> None:
+    """Modelling the lamp's harmonics must not break the cancellation.
+
+    Each harmonic is box-filtered by the exposure independently, so each
+    carries its own ``sinc(n * T * f)``. When ``T * f`` is a whole number so
+    is every multiple of it, so the entire profile has to vanish together —
+    not just the fundamental. A model that left harmonics ringing at an
+    anti-flicker exposure would contradict the reason that setting exists.
+    """
+    scene = np.full((96, 128, 3), 120, dtype=np.uint8)
+    flicker_hz = 100.0
+    for periods in (1, 2, 3):
+        exposure = periods / flicker_hz
+        t = AcFlicker(
+            p=1.0,
+            mains_frequency_hz=flicker_hz / 2.0,
+            exposure_time_range_s=(exposure, exposure),
+            modulation_depth_range=(0.6, 0.6),
+            pulse_exponent_range=(5.0, 5.0),  # strongly harmonic lamp
+        )
+        t.set_random_seed(0)
+        np.testing.assert_array_equal(t(image=scene)["image"], scene)
+
+
+def test_flicker_lamp_waveform_harmonics_match_the_named_lamp_types() -> None:
+    """The exponent is the only knob for waveform shape, so it has to land on
+    the right physics at the values the docstring names."""
+    from weathermentations.camera.flicker import lamp_waveform_harmonics
+
+    # sin^2 *is* a sinusoid at the flicker frequency: no harmonics at all.
+    sinusoid = lamp_waveform_harmonics(2.0)
+    assert sinusoid[0] == pytest.approx(1.0)
+    assert np.allclose(sinusoid[1:], 0.0, atol=1e-6)
+
+    # A discharge lamp and an LED pulse both carry harmonics; the pulse more.
+    discharge = lamp_waveform_harmonics(1.0)
+    led = lamp_waveform_harmonics(6.0)
+    assert discharge[1] > 0.1
+    assert led[1] > discharge[1]
+
+    # Normalised so peak modulation equals the caller's nominal depth.
+    for exponent in (1.0, 2.0, 4.0, 6.0):
+        assert lamp_waveform_harmonics(exponent).sum() == pytest.approx(1.0, abs=1e-6)
+
+
+def test_flicker_band_count_follows_readout_time() -> None:
+    """Band count, not depth, is what makes the artefact legible — two broad
+    bands read as an exposure difference however deep they are. It must
+    follow `flicker_hz * readout` rather than being a free parameter."""
+    scene = np.full((256, 64, 3), 120, dtype=np.uint8)
+    counts = []
+    for readout in (0.02, 0.06):
+        t = AcFlicker(
+            p=1.0,
+            readout_time_range_s=(readout, readout),
+            exposure_time_range_s=(1e-4, 1e-4),
+            modulation_depth_range=(0.3, 0.3),
+            pulse_exponent_range=(2.0, 2.0),
+        )
+        t.set_random_seed(0)
+        profile = t(image=scene)["image"].astype(np.float32).mean(axis=(1, 2))
+        centred = profile - profile.mean()
+        counts.append(int(np.sum(np.diff(np.sign(centred)) != 0) / 2))
+    assert counts[0] == pytest.approx(2, abs=1), counts
+    assert counts[1] == pytest.approx(6, abs=1), counts
