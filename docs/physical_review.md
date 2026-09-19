@@ -173,6 +173,13 @@ effective bands for levels 3–5 overlap heavily. The ladder still orders
 correctly on average, but it is looser than it claims. This is a gallery
 concern, not a library one — the transforms themselves are unaffected.
 
+> **Resolved (2026-09-15).** `_jitter_band` now clamps at both ends, with 10%
+> headroom above the preset band. Re-measured over a fresh 300-frame sweep:
+> severity 5's effective band tops out at 110 mm/h and draws reach 104.7,
+> against 137 / 130.6 before. Bands still overlap a little, deliberately — the
+> jitter exists to stop two samples sharing a rate — but each now stays inside
+> the level it belongs to.
+
 ### F4 — `NightIrMode` severity is invisible to any whole-frame metric
 
 Mean |Δ| by severity: **114, 112, 113, 111, 107** — flat, and mildly
@@ -183,7 +190,7 @@ ladder for this effect cannot be validated the way the others were, and the
 monotonicity test used elsewhere would be meaningless here. It needs its own
 metric — noise floor in the shadows, or the near/far falloff gradient.
 
-### F5 — Non-monotonic severity: three real causes, only one worth fixing
+### F5 — Non-monotonic severity: three real causes, none a code defect
 
 Five effects came out non-monotonic over three seeds. Separating them matters,
 because two are correct behaviour being measured badly:
@@ -209,6 +216,13 @@ Nothing here needs a code change. It does mean **the severity ladders are not
 currently verified for most effects** — only rain and snow have monotonicity
 tests, and those were added because their ladders actually broke.
 
+> **Resolved (2026-09-15).** `tests/unit/test_severity_ladders.py` now covers
+> all 14 (the codec keeps its own CRF test, since two ffmpeg subprocesses per
+> render would make the suite minutes long). Re-measured at **12 seeds instead
+> of 3, every one is monotonic** — including `exposure_transient` and
+> `ac_flicker`, confirming both were sampling noise rather than defects, which
+> is what the diagnosis above predicted.
+
 ### F6 — Severity 1 is below the visible threshold for three effects
 
 Mean |Δ| at severity 1: `dirt_soil` 0.94, `denoise_artifacts` 0.71,
@@ -217,6 +231,21 @@ fixed for `SunFlare` (which was 0.33 before its floor was raised). A bottom
 rung that does nothing wastes a rung and reads as a bug rather than a setting.
 `ac_flicker` is partly excused by F5, but `dirt_soil` and `denoise_artifacts`
 are simply set too low.
+
+> **Resolved (2026-09-15).** Floors raised for all three; measured on the
+> reference photograph they now read **1.79, 2.21 and 1.38** levels, and
+> `tests/unit/test_severity_ladders.py` pins the property so it cannot
+> regress silently.
+>
+> Calibrating this surfaced something worth recording. `DirtSoil` measures
+> 0.75 levels on a synthetic sky-over-ground scene and 1.79 on a photograph at
+> the *same* settings, because it scatters light rather than tinting it and so
+> is near-invisible in flat light **by design** — its own unit test pins
+> exactly that behaviour. Tuning the preset until it passed on the synthetic
+> scene would have over-driven it everywhere real. The severity tests
+> therefore calibrate against the reference photograph, while the golden tests
+> keep their synthetic scene, where the requirement is reproducibility rather
+> than realism.
 
 ### F7 — Rain streaks are 1 px wide in every frame
 
@@ -270,16 +299,20 @@ Worth stating explicitly, since the above is a list of complaints:
    measured on the reference frame the output went from 11.6% saturated /
    24.1% black to 6.5% / 8.0%, with scene structure surviving across the whole
    depth range instead of only in a narrow band.
-4. **Clamp `_jitter_band` at both ends** (F3).
-5. **Raise the severity-1 floor for `dirt_soil` and `denoise_artifacts`** (F6),
-   and measure it rather than eyeballing — the check is one line against a
-   clean frame.
-6. **Add severity-monotonicity tests for the remaining effects** (F5), with
-   enough seeds to be meaningful and an effect-appropriate metric for
-   `night_ir` (F4) and `ac_flicker`.
+4. **Clamp `_jitter_band` at both ends** (F3). — **done**
+5. **Raise the severity-1 floor** for `dirt_soil`, `denoise_artifacts` and
+   `ac_flicker` (F6). — **done**, and now pinned by a test.
+6. **Add severity-monotonicity tests for the remaining effects** (F5/F4). —
+   **done**, 12 seeds, with a noise-floor metric for `night_ir` whose
+   auto-exposure makes any whole-frame metric run backwards.
 7. **Reconsider the night-mode noise floor** (F8) once F2 is addressed, since
    the two interact.
 
 None of these is a correctness bug in the sense of a broken formula. F1 and F2
 are calibration and bookkeeping issues that change how the output *looks* at
 scale; the rest are test coverage and preset tuning.
+
+**Status:** F1 withdrawn (the claim was wrong, see the correction); F2–F6
+resolved; F7 and F8 recorded as known characteristics rather than defects —
+F7 is the documented sub-pixel handling and F8 should be re-examined now that
+F2 has changed the depth gradient it interacts with.
