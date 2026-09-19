@@ -316,3 +316,228 @@ scale; the rest are test coverage and preset tuning.
 resolved; F7 and F8 recorded as known characteristics rather than defects —
 F7 is the documented sub-pixel handling and F8 should be re-examined now that
 F2 has changed the depth gradient it interacts with.
+
+---
+
+# Second pass (2026-09-15)
+
+A fresh audit after F2–F6 landed, on an **independent 300-record sweep** (15
+effects × 5 severities × 4 seeds, new seed stream) plus a reading of the
+rendered gallery in `docs/examples/`. The first pass audited the arithmetic;
+this one re-runs those checks against new draws and then looks harder at the
+places where correct arithmetic can still produce an inconsistent picture.
+
+## The first pass's checks still hold on new draws
+
+Re-derived from scratch on the new log, nothing carried over:
+
+| Check | Result |
+| --- | --- |
+| Every sampled value lies inside the range it was drawn from | **180 draws, 0 violations** |
+| Rain: `count == (N₀/Λ)e^(−ΛD_min) × V × f_resolvable` | max rel. error **5.8e-5** |
+| Snow: `count == n × V × f_resolvable` | residual **< 0.5 particles** (count is an int) |
+| Snow: melted→physical `== (ρ_w/ρ_s)^(1/3)` | max abs. error **7.8e-6** |
+| Flicker: `depth == nominal × \|sinc(T·f)\|` | max abs. error **7.8e-7** |
+| Rain and snow veil β derived from the rate, ±[0.75, 1.3] | **20/20 and 20/20** |
+| Streak opacity `α = D/(vT)` | p50 **0.0155–0.0455** (median 0.027), vs Garg & Nayar ~0.017 |
+
+Fog does not log its extinction coefficient (see F11), but it can be recovered
+from the logged transmission field, and the ladder it implies is sensible:
+
+| severity | β (1/m) | Koschmieder visibility `3.912/β` |
+| --- | --- | --- |
+| 1 | 0.0125 | 381 m — light haze |
+| 2 | 0.0569 | 74 m |
+| 3 | 0.0666 | 61 m |
+| 4 | 0.1035 | 40 m — dense fog |
+| 5 | 0.1015 | 42 m |
+
+**A note on my own method first.** Three of these checks failed on the first
+attempt — rain's count chain by 60%, snow's by 4.9% — and in all three cases
+the error was in *my check*, not the code. The rain one is instructive: I
+reused the first pass's formula, which assumed a 1 mm minimum drop diameter,
+but the gallery now jitters `drop_diameter_range_mm` per variant (0.60–0.80 mm
+across the sweep). Reading the bound out of each record instead closed the
+check to 5.8e-5. Same failure mode as the withdrawn F1 claim, in the opposite
+direction: there I trusted a proxy and reported a defect that did not exist;
+here I nearly did it again. **A failing check is a claim about the checker
+too.**
+
+## New findings
+
+### F9 — Road wetness is a screen-space band, not the ground
+
+`_apply_ground_wetness` takes no depth argument. It wets the bottom 12–32% of
+*image rows* and fakes the reflection by mirroring the band immediately above
+it. `RandomRain` cannot be constructed without a depth provider, and this is
+the one part of it that ignores the depth map entirely.
+
+On the reference frame, measured against the surface normals the library
+already computes:
+
+- the band it does wet **is** ground — mean upward-facing weight **0.82–0.86**
+  against 0.65 for the whole frame, so there are few false positives;
+- but the widest band covers only **49% of the ground pixels**. Real ground
+  runs from row 45 to row 477 (9%–99% of frame height). **51% of the wet road
+  is left dry**, with a horizontal seam where the band ends.
+
+This is the failure mode this document exists to hunt: on a bridge-mounted
+camera the bottom of the frame *is* the near road, so the picture looks right
+and the chain behind it does not hold. Point a camera further down — the
+normal CCTV mounting — and the ground fills the frame while the wet band stays
+pinned to the bottom third.
+
+The fix is already in the codebase and already used by the neighbouring
+effect: `depth/normals.py::upward_facing` is what `RandomSnow` masks
+accumulation with. Wetness should read the same mask.
+
+Two smaller things in the same pass. The reflection mirrors about the band's
+top edge rather than about the horizon the depth map knows, and
+`wetness_probability` is decoupled from the drawn rain rate — the severity
+preset ladders it 0.15→0.9, but a caller writing
+`RandomRain(rain_rate_range_mm_h=(5, 200))` gets the same 40% chance of a wet
+road whether the call drew 5 mm/h or 200. Some decoupling is right (a road
+stays wet after the rain stops, and is dry in the first seconds of a
+downpour), so this is worth a documented note more than a coupling.
+
+### F10 — Night mode still clips a quarter of the frame (F8, re-measured)
+
+F2 gave the depth map a near plane and F8 was left open pending exactly this
+re-measurement. Across the full ladder, 4 seeds per level:
+
+| severity | % saturated (≥250) | % black (≤5) | mean | noise floor |
+| --- | --- | --- | --- | --- |
+| 1 | 10.4 | 1.7 | 115.1 | 39.3 |
+| 2 | 12.4 | 3.6 | 119.0 | 53.8 |
+| 3 | 16.9 | 6.2 | 131.7 | 76.5 |
+| 4 | **24.4** | 10.6 | 135.6 | 94.4 |
+| 5 | 17.8 | 15.5 | 123.7 | 108.8 |
+
+F8's original complaint — **24.1% of the frame at pure black** — is fixed: the
+worst level is now 15.5% and the typical one 6%. The noise floor rises cleanly
+across the ladder, which is why the severity test uses it.
+
+But the problem moved rather than went away. Clipping now runs to **24.4% of
+the frame at severity 4**, and the gallery images show why: the near road
+washes to featureless white across the bottom third. A real IR installation
+clips on nearby plates and the closest metre or two of tarmac, not on a
+quarter of the scene. The earlier "6.5% saturated / 8.0% black" figure quoted
+under F2 was a single severity and seed, so it was real but narrower than it
+read; the ladder average is the honest number.
+
+The remaining cause is not the depth gradient but the auto-exposure target:
+it meters for the whole frame, so an illuminator that blows out the near field
+still hits its target and nothing pulls the exposure back. Metering on a
+high percentile rather than the mean, or clamping the illuminator's near-field
+gain, would fix it. **Open.**
+
+### F11 — Eight of fifteen transforms log no draws at all
+
+The Method section says the log records "the physical quantities actually
+sampled, including ones that are local variables and never reach the
+renderer". That is true for 7 of 15 transforms. `drew` is absent for
+`fog`, `dirt_soil`, `cast_shadows`, `housing_occluders`, `rolling_shutter`,
+`denoise_artifacts`, `wdr_tone_mapping` and `video_codec`.
+
+For four of them nothing is actually lost — `rolling_shutter`,
+`denoise_artifacts`, `wdr_tone_mapping` and `video_codec` sample their
+parameters and hand all of them straight to the renderer, so `out` *is* the
+draw list. The gap is real for the other four:
+
+- **`fog`** logs `transmission`, `airlight` and `scatter_sigma` but neither the
+  visibility it drew nor the β it derived — so the one chain worth auditing
+  (visibility → β → `exp(−βz)`) has to be reconstructed backwards from the
+  transmission field, as above, and cannot be closed exactly.
+- **`cast_shadows`** logs `direct_fraction` but not the sun elevation or
+  azimuth behind it.
+- **`housing_occluders`** logs the composited mask but not the insect count or
+  sizes.
+- **`dirt_soil`** logs the deposit albedo field but not the species it drew.
+
+This bounds what the first pass could have verified, so it belongs in the
+record as a limit on the method rather than as a defect in the effects.
+
+### F12 — The recorder changed a field's schema with the particle count — fixed
+
+`_summarise` returned a `{n, shape, min, p50, max, mean}` dict for arrays
+larger than 4 elements and a **bare list** for smaller ones. So
+`out.flakes.radius.p50` read correctly on a heavy snow frame and raised
+`TypeError` on a light one — and the light frames are exactly the ones an
+audit of "is severity 1 doing anything" has to read. It broke three of this
+pass's own analysis scripts before I noticed it was the log and not the data.
+
+Fixed: every array now summarises to the same dict, with small ones
+additionally carrying a `values` key. `tests/unit/test_diagnostics.py` pins
+the schema across sizes 1 → 1000.
+
+## What I checked and did not find
+
+Recorded because a measurement that refutes a suspicion is worth as much as
+one that confirms it, and three of the four below came from looking at the
+gallery and guessing wrong.
+
+- **Particles rendered behind scene geometry.** Distances are sampled
+  volume-uniformly over 0.4–6 m while the scene starts at 3 m, so naively
+  ~87% of the column sits past the near plane and streaks should be painting
+  over solid road. Measured against the depth map at each particle's own
+  pixel: **1.6% of rain streaks and 1.8% of snow flakes**. The resolvability
+  cut concentrates particles near the camera (median distance 1.5 m), which
+  the naive volume argument misses entirely. Not worth an occlusion test.
+- **Snow flakes looked like hard-edged white discs** in the gallery. They are
+  not: logged `blur_radius / radius` runs **0.68–2.2** (p50 ≈ 1.3), so flakes
+  are softened by at least their own width. The hard edges were an artefact of
+  the nearest-neighbour upscale in my own inspection crop.
+- **Dirt looked colourless.** The palette is genuinely varied — measured over
+  16 seeds, deposit albedo spans hue **30°–52°** (grey through yellow to
+  brown) at saturations **0.8%–45.5%**, which is what was asked for. The
+  rendered result looks neutral at severity 3 because coverage and veil
+  strength are low there, not because the palette is narrow. Dirt also carries
+  real high-frequency structure, not just a veil: high-pass/low-pass energy
+  ratio **0.87–1.37** across the ladder.
+- **Precipitation leaving the scene contrast untouched.** It does not — near
+  road detail contrast falls to **83% / 64% / 50%** of clear-sky at rain
+  severities 1/3/5, and to 34% for fog severity 5. I had also expected to find
+  hard sun shadows surviving under heavy rain; the reference photograph is
+  diffusely lit to begin with, so there was nothing to find and the question
+  needs a different scene.
+
+## Severity ladders: preset vs gallery
+
+`tests/unit/test_severity_ladders.py` (12 seeds, clean presets) has all 14
+ladders monotonic. This sweep, on **gallery-jittered** configs at 4 seeds,
+shows 6 non-monotonic: `ac_flicker`, `dirt_soil` (6.51 → 6.49), `sun_flare`
+(4.24 → 4.23), `exposure_transient`, `video_codec` and `night_ir`.
+
+These do not contradict each other and both are wanted. The presets must
+ladder cleanly; the gallery deliberately jitters each level's band so two
+samples never share a configuration, which lets adjacent levels cross. Two of
+the six cross by under 0.02 levels. The rest are the causes already diagnosed
+under F4 and F5 — signed-symmetric error, `sinc` cancellation, auto-exposure —
+none of which the jitter creates.
+
+## Status after the second pass
+
+| | |
+| --- | --- |
+| F1 | Withdrawn — the claim was wrong; documentation corrected |
+| F2 | Resolved — near plane added |
+| F3 | Resolved — jitter clamped |
+| F4 | Resolved — noise-floor metric |
+| F5 | Resolved — all 14 ladders tested |
+| F6 | Resolved — severity-1 floors raised |
+| F7 | Confirmed, not a defect — and it extends to snow: flake radius p50 is **0.89–1.00 px** in 19 of 19 frames, so flake size reaches the image through opacity and defocus, not width |
+| F8 | Superseded by F10 — the black crush is fixed, the clipping is not |
+| F9 | **Open** — wetness ignores the depth map; 51% of the ground left dry |
+| F10 | **Open** — 24% of the frame clipped at severity 4; auto-exposure meters the mean |
+| F11 | **Open** — 4 transforms log neither their draws nor enough to reconstruct them |
+| F12 | Resolved — recorder schema made consistent and pinned by a test |
+
+Ranked by what they cost: **F9** is the only one that makes a physically wrong
+picture on a camera geometry the library explicitly targets, and its fix is to
+reuse a mask the neighbouring transform already uses. **F10** is a tuning
+problem with a clear cause. **F11** is a gap in the instrument, which matters
+mostly because it silently bounds what any future pass of this document can
+claim.
+
+Still nothing here is a broken formula. Every derived chain that can be
+checked, checks — twice now, on independent draws.

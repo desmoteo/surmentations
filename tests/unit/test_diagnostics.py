@@ -115,3 +115,25 @@ def test_recording_is_reentrant_and_restores_state() -> None:
         transform.set_random_seed(2)
         transform(image=_image())
     assert len(outer) == 2
+
+
+def test_array_summaries_have_the_same_shape_whatever_the_array_size() -> None:
+    """A field's schema must not depend on how many particles were drawn.
+
+    Summarising a small array as a bare list and a large one as a dict made
+    ``out.flakes.radius.p50`` work on a heavy frame and raise ``TypeError`` on
+    a light one — and the light frames are precisely the ones an audit of
+    "is severity 1 doing anything at all" has to read.
+    """
+    from weathermentations.diagnostics import _summarise
+
+    keys = {"n", "shape", "min", "p50", "max", "mean"}
+    for size in (1, 3, 4, 5, 1000):
+        summary = _summarise(np.arange(size, dtype=np.float32))
+        assert isinstance(summary, dict), f"size {size} was not summarised as a dict"
+        assert keys <= set(summary), f"size {size} is missing {keys - set(summary)}"
+        assert summary["n"] == size
+
+    # Small arrays additionally keep their values; large ones do not.
+    assert _summarise(np.array([1.0, 2.0]))["values"] == [1.0, 2.0]
+    assert "values" not in _summarise(np.arange(1000, dtype=np.float32))
