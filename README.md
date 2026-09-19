@@ -173,6 +173,30 @@ deep bands read as an exposure difference. `NightIrMode`'s `gain_range` scales
 the **noise**, not the signal — the auto-exposure has already placed the
 level, and gain is one of the levers it used to get there.
 
+### Ready-made pipelines
+
+Listing every effect with an independent probability produces frames that
+could not exist — fog and snow at once, a sun flare under an IR night sky.
+Two pipelines that cannot are importable directly:
+
+```python
+from weathermentations.presets import surveillance, surveillance_lite
+
+transform = surveillance(provider, codec=0.0)   # needs CUDA
+transform = surveillance_lite()                 # CPU only, no depth
+```
+
+Measured at 512 px: `surveillance` 112 ms median, `surveillance_lite` 60 ms
+and no GPU. Every probability is a keyword argument, because the defaults
+encode a temperate maritime climate on a mixed camera fleet and will not match
+your footage. [`docs/pipelines.md`](docs/pipelines.md) explains what each
+encodes and which to change first.
+
+> **Seed once, not per frame.** `set_random_seed` before every call correlates
+> every transform's probability check, so frames come out with nearly all
+> effects or nearly none — 27% of frames untouched against 8%. Set the seed on
+> the `Compose` once and stream samples through it.
+
 ### Severity presets
 
 For ImageNet-C-style sweeps, unpack a preset instead of picking ranges by

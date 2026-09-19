@@ -8,10 +8,25 @@ camera is lighting with its infrared illuminator, hard midday shadows under
 an IR-mode night sky.
 
 This is a worked composite that does not, with measured frequencies and a
-measured cost. **It is a recipe to copy and edit, not a library function** —
-the probabilities encode how often each condition occurs in *your* footage,
-which depends on climate, latitude, camera model and mounting. Baked-in
-priors would be wrong for almost everyone.
+measured cost. It ships as
+[`weathermentations.presets.surveillance`](../src/weathermentations/presets/pipelines.py),
+alongside a CPU-only `surveillance_lite`:
+
+```python
+from weathermentations.presets import surveillance, surveillance_lite
+```
+
+Every probability below is a keyword argument, because the defaults encode how
+often each condition occurs in a temperate maritime climate on a mixed camera
+fleet, and **that will not match your footage**. The rest of this document is
+why the numbers are what they are, so you can change them deliberately.
+
+> **Seed once, not per frame.** Calling `set_random_seed` before every frame
+> correlates every transform's probability check: frames then come out with
+> nearly all effects or nearly none. Measured on `surveillance_lite`, 27% of
+> frames are left untouched with a variance of 7.25 effects per frame, against
+> 8% and 1.81 when the seed is set once and samples are streamed through. This
+> is the behaviour a training loop wants anyway.
 
 ## What the naive pipeline gets wrong
 
