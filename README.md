@@ -13,6 +13,9 @@ than exposed.
 
 - **[`docs/how_it_works.md`](docs/how_it_works.md)** — what each effect
   models and why, with diagrams. Start here to decide which knobs matter.
+- **[`docs/pipelines.md`](docs/pipelines.md)** — a worked composite whose
+  effects cannot contradict each other, with measured frequencies and cost.
+  Start here if you want a pipeline rather than a transform.
 - **[`docs/physical_review.md`](docs/physical_review.md)** — a critical audit
   of whether the implementation lives up to that, including where it did not.
 - **[`optimizations.md`](optimizations.md)** — where the CPU time actually
