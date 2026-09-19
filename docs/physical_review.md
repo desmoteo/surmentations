@@ -87,22 +87,44 @@ weather, varying only image size:
 A **6× swing in snow coverage and 8× in rain** across a range of sizes a
 training pipeline hits routinely with random crops and multi-scale training.
 
-It is worth being careful about what is wrong here, because the underlying
-behaviour is *correct physics*: a higher-resolution sensor at the same field
-of view genuinely does resolve more individual drops. Two things are wrong
-anyway:
+> **Correction (2026-09-15).** The first version of this section claimed the
+> veil double-counts the rendered particles by "up to 7.4% for rain and 14.2%
+> for snow", and recommended scaling the veil by `1 − resolvable_fraction`.
+> **That number was wrong and the recommendation was unnecessary.** It used
+> the *count* fraction of particles inside the simulated column as a proxy for
+> their share of the *extinction* — two different quantities. Extinction is an
+> optical depth accumulated along the whole path, and the rendered particles
+> occupy only a few metres of a 50 m one.
+>
+> Measured directly instead, by comparing the rendered layer's occupancy
+> against the veil's optical depth (they add, since the two are composited
+> sequentially):
+>
+> | rain rate | veil τ | rendered occupancy | rendered share |
+> | --- | --- | --- | --- |
+> | 5 mm/h | 0.154 | 0.00019 | 0.12% |
+> | 20 mm/h | 0.368 | 0.00075 | 0.20% |
+> | 60 mm/h | 0.735 | 0.00203 | 0.28% |
+> | 120 mm/h | 1.138 | 0.00363 | 0.32% |
+>
+> The double-count is **0.12–0.32%** — a rounding error. The veil was left
+> alone. The lesson is the one this document exists to make: a plausible
+> proxy is not a measurement, and I should have measured the quantity I was
+> making a claim about rather than one correlated with it.
 
-1. **The documented claim is false** as written, for these two effects.
-2. **The veil does not compensate.** The veil is defined as the particles too
-   small to draw individually, but its extinction is derived from the rate
-   alone, independent of how many were actually drawn. So particles that
-   *are* rendered are also still counted in the veil. Measured over-count:
-   up to **7.4% for rain and 14.2% for snow** of the extinction. Small, but it
-   is double-counting, and it is the mechanism that lets apparent intensity
-   drift with resolution instead of being conserved.
+What remains true is that the underlying behaviour is *correct physics* — a
+higher-resolution sensor at the same field of view genuinely does resolve more
+individual drops — while **the documented claim is false as written**. The
+resolution dependence is not an energy-conservation error. It is that the
+share of precipitation visible as *discrete particles* rises with resolution,
+while the veil (correctly) does not change. Since the rendered particles carry
+a third of a percent of the extinction but most of the visual signature, the
+image changes a lot while the physics barely does.
 
-Fixing (2) — scaling the veil by `1 − resolvable_fraction` — makes total
-extinction conserved and largely removes the resolution dependence for free.
+There is accordingly nothing to fix in the renderer. The documentation needs
+to stop claiming otherwise, and a caller doing multi-scale training should
+know that `min_streak_width_px` / `min_flake_width_px` are the knobs that
+control it.
 
 ### F2 — The pseudo-metric depth scale puts the scene 0.3 m from the camera
 
@@ -124,6 +146,15 @@ This is a **pre-existing limitation of the depth calibration**, documented in
 `depth/scale.py` as "a documented, overridable guess", now with a measured
 consequence. It affects every depth-conditioned effect but bites hardest where
 the dependence is quadratic.
+
+> **Resolved (2026-09-15).** `to_pseudo_metric` now maps onto `[near, far]`
+> with `DEFAULT_MIN_DISTANCE_METERS = 3.0`, so the nearest scene point lands
+> on a near plane instead of at zero. The near:far irradiance ratio fell from
+> **27 778× to 278×**, and on the reference frame the night-mode output went
+> from 11.6% saturated / 24.1% black to **6.5% / 8.0%**, with scene structure
+> surviving across the whole depth range rather than only in a narrow band.
+> Every depth-conditioned effect reads through this function, so fog, rain,
+> snow and cast shadows all changed slightly too; goldens were regenerated.
 
 ### F3 — The docs generator's jitter escapes its own severity band
 
@@ -228,16 +259,17 @@ Worth stating explicitly, since the above is a list of complaints:
 
 ## Recommendations, in priority order
 
-1. **Scale the veil by `1 − resolvable_fraction`** (F1). Removes the
-   double-count, conserves total extinction, and largely fixes the resolution
-   dependence. Small change, and the recorded `resolvable_fraction` is already
-   there to do it with.
+1. ~~Scale the veil by `1 − resolvable_fraction`~~ — **withdrawn**, see the
+   correction under F1. The double-count is 0.3%, not 7–14%.
 2. **Correct the README's resolution-independence claim** (F1) to say that
    geometry is resolution-independent while the resolved/veiled split is not.
+   — **done**
 3. **Give `to_pseudo_metric` a near-plane** (F2) instead of mapping relative
-   depth onto `[0, max]`. A `(near, far)` calibration would stop the nearest
-   scene point landing at 0 m and would fix the exaggerated gradient for every
-   depth-conditioned effect at once.
+   depth onto `[0, max]`. — **done**: `DEFAULT_MIN_DISTANCE_METERS = 3.0`.
+   The night-mode near:far irradiance ratio went from 27 778× to 278×, and
+   measured on the reference frame the output went from 11.6% saturated /
+   24.1% black to 6.5% / 8.0%, with scene structure surviving across the whole
+   depth range instead of only in a narrow band.
 4. **Clamp `_jitter_band` at both ends** (F3).
 5. **Raise the severity-1 floor for `dirt_soil` and `denoise_artifacts`** (F6),
    and measure it rather than eyeballing — the check is one line against a

@@ -83,8 +83,18 @@ Three rules apply across every transform:
 - **Sizes are resolution-independent.** Camera-local effects express sizes
   as fractions of the image diagonal; effects with a real scene scale
   (rain, snow) work in metres and millimetres and project through a stated
-  field of view. Either way an effect looks the same on a 256px crop and a
+  field of view. So a feature's *geometry* is the same on a 256px crop and a
   4K frame.
+
+  One caveat, measured rather than assumed. For rain and snow the amount of
+  precipitation visible as **discrete particles** does rise with resolution
+  (roughly 6-8x over 256-1920px), because the cut deciding what is drawn
+  individually rather than left to the veil is in pixels — a bigger sensor
+  really does resolve more drops. Total extinction is unaffected (the
+  rendered particles carry ~0.3% of it), but the look changes. If you train
+  multi-scale and want that held constant, `min_streak_width_px` and
+  `min_flake_width_px` are the knobs. See
+  [`docs/physical_review.md`](docs/physical_review.md).
 
 Compositing happens in linear light throughout, because scattering, flare
 and bloom add *radiance* — summing them onto gamma-encoded sRGB values is a

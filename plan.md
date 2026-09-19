@@ -1268,14 +1268,16 @@ factor equals `(rho_w/rho_s)^(1/3)` (1.2e-5), flicker depth equals
 Open items it raised, not yet actioned:
 
 - **Apparent precipitation intensity is resolution-dependent** (6x for snow,
-  8x for rain across 256-1920 px), because the resolvability cut is in pixels
-  while the veil's extinction is not scaled by how much was rendered. Scaling
-  the veil by `1 - resolvable_fraction` removes the double-count (measured at
-  up to 7.4% rain / 14.2% snow) and largely fixes it.
-- **`to_pseudo_metric` maps relative depth onto `[0, max]`**, so the nearest
-  scene point lands at 0 m and is saved only by a clamp. On the reference
-  frame that gives `NightIrMode` a 27 778x near:far irradiance ratio. A
-  `(near, far)` calibration would fix every depth-conditioned effect at once.
+  8x for rain across 256-1920 px), because the cut deciding what is drawn
+  individually rather than left to the veil is in pixels. Investigated and
+  **left as-is**: it is correct physics (a bigger sensor resolves more drops)
+  and the rendered particles carry only 0.12-0.32% of the extinction, so
+  nothing is being double-counted. An earlier claim here of a 7-14%
+  double-count was wrong — it used a count fraction as a proxy for an
+  extinction fraction. The README now documents the behaviour instead.
+- ~~`to_pseudo_metric` maps relative depth onto `[0, max]`~~ — **fixed**.
+  It now maps onto `[near, far]` with a 3 m default near plane, taking
+  `NightIrMode`'s near:far irradiance ratio from 27 778x to 278x.
 - Severity monotonicity is only tested for rain and snow; `night_ir` needs an
   effect-appropriate metric because auto-exposure normalises away any
   whole-frame one.
