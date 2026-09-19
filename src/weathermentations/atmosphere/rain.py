@@ -66,11 +66,11 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
 from weathermentations.base import WeatherTransform, require_depth_provider
+from weathermentations.depth.normals import horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.depth.scale import to_pseudo_metric
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import illuminant_radiance_linear, sky_radiance_linear
-from weathermentations.utils.compositing import feathered_band_blend
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import (
     focal_length_px,
@@ -222,8 +222,19 @@ class RandomRain(WeatherTransform):
             downpour's haze and a drizzle's streaks. Pass an explicit range
             only to override that deliberately.
         wetness_probability: chance of rendering the ground-wetness pass.
-        wetness_band_fraction_range: fraction of image height treated as
-            ground.
+            Deliberately not tied to the drawn rain rate: a road stays wet
+            long after the rain stops and is dry for the first seconds of a
+            downpour, so wetness follows the rain's *history*, which a
+            single-frame transform cannot know.
+        wetness_darkening_range: diffuse albedo of wet ground relative to
+            dry. Water fills the surface pores and traps light in the film by
+            total internal reflection, so wet asphalt scatters back much less
+            than dry: measured albedos run about 0.10-0.15 dry against
+            0.05-0.08 wet, i.e. roughly a halving, which is what this
+            brackets.
+        wetness_falloff_range: exponent on the upward-facing cosine. Water
+            sheets on horizontal surfaces and runs off anything steeper, more
+            sharply than snow settles, so this sits above snow's equivalent.
 
     Targets:
         image
@@ -301,10 +312,15 @@ class RandomRain(WeatherTransform):
             | None
         )
         wetness_probability: float = Field(ge=0.0, le=1.0)
-        wetness_band_fraction_range: Annotated[
+        wetness_darkening_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
+        wetness_falloff_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1.0, 16.0)),
         ]
 
     def __init__(
@@ -326,7 +342,8 @@ class RandomRain(WeatherTransform):
         definition_softness: float = 0.45,
         veil_beta_range: tuple[float, float] | None = None,
         wetness_probability: float = 0.4,
-        wetness_band_fraction_range: tuple[float, float] = (0.12, 0.32),
+        wetness_darkening_range: tuple[float, float] = (0.4, 0.7),
+        wetness_falloff_range: tuple[float, float] = (4.0, 9.0),
         p: float = 0.5,
     ):
         super().__init__(p=p)
@@ -347,7 +364,8 @@ class RandomRain(WeatherTransform):
         self.definition_softness = definition_softness
         self.veil_beta_range = veil_beta_range
         self.wetness_probability = wetness_probability
-        self.wetness_band_fraction_range = wetness_band_fraction_range
+        self.wetness_darkening_range = wetness_darkening_range
+        self.wetness_falloff_range = wetness_falloff_range
 
     def _veil_beta_bounds(self, rain_rate_mm_h: float) -> tuple[float, float]:
         """Veil extinction range, derived from the rain rate unless overridden."""
@@ -487,6 +505,46 @@ class RandomRain(WeatherTransform):
         )
         angle = angle + rng.uniform(-angle_jitter, angle_jitter, count)
 
+        # Wet ground is *ground*, not "the bottom of the frame". The screen-
+        # space band this replaced covered only 49% of the reference frame's
+        # road surface and left a seam where it ended; on a camera pitched
+        # further down — the normal CCTV mounting — the ground fills the
+        # frame while a bottom band stays pinned to the bottom third.
+        draw_wetness = self.py_random.random() < self.wetness_probability
+        wetness_darkening = self.py_random.uniform(*self.wetness_darkening_range)
+        wetness_falloff = self.py_random.uniform(*self.wetness_falloff_range)
+        wetness = np.zeros((height, width), dtype=np.float32)
+        horizon = 0.0
+        if draw_wetness:
+            cosine = upward_facing(
+                depth_pm,
+                horizontal_fov_deg=horizontal_fov,
+                camera_pitch_deg=camera_pitch,
+            )
+            # Water runs off a slope rather than lying on it, and does so more
+            # decisively than snow, which is why this exponent is higher than
+            # snow's accumulation falloff.
+            wetness = (cosine**wetness_falloff).astype(np.float32)
+            # Fit the horizon on the surface actually being wet, not on the
+            # raw cosine. A distant flat plane's normal points at the camera,
+            # so `n . up` there is sin(pitch) and crosses a lenient threshold
+            # at about 18 degrees of downward pitch -- past which the raw mask
+            # swallows the sky and the fitted horizon jumped from row 120 to
+            # row 49 on the reference frame. The falloff exponent already
+            # excludes those pixels from the render (they carry 1-3% weight
+            # against the road's 41-73%), so fitting on the same mask the
+            # renderer uses keeps the two consistent and holds the estimate at
+            # 123 +- 4 rows across the whole pitch range.
+            horizon = horizon_row(depth_pm, wetness, min_weight=0.05)
+
+        record_draw(
+            draw_wetness=draw_wetness,
+            wetness_darkening=wetness_darkening,
+            wetness_falloff=wetness_falloff,
+            horizon_row=horizon,
+            ground_fraction=float((wetness > 0.05).mean()),
+        )
+
         return {
             "streaks": {
                 "x": x,
@@ -510,8 +568,11 @@ class RandomRain(WeatherTransform):
             },
             "angle": wind_angle,
             "veil_transmission": np.exp(-veil_beta * depth_pm).astype(np.float32),
-            "draw_wetness": self.py_random.random() < self.wetness_probability,
-            "wetness_band_fraction": self.py_random.uniform(*self.wetness_band_fraction_range),
+            "draw_wetness": draw_wetness,
+            "wetness": wetness,
+            "wetness_darkening": wetness_darkening,
+            "horizon_px": horizon,
+            "focal_px": focal,
         }
 
     def apply(
@@ -521,7 +582,10 @@ class RandomRain(WeatherTransform):
         angle: float,
         veil_transmission: np.ndarray,
         draw_wetness: bool,
-        wetness_band_fraction: float,
+        wetness: np.ndarray,
+        wetness_darkening: float,
+        horizon_px: float,
+        focal_px: float,
         **params: Any,
     ) -> np.ndarray:
         height, width = img.shape[:2]
@@ -561,7 +625,7 @@ class RandomRain(WeatherTransform):
         out = out * (1.0 - a) + streak_radiance[None, None, :] * a
 
         if draw_wetness:
-            out = _apply_ground_wetness(out, wetness_band_fraction)
+            out = _apply_ground_wetness(out, wetness, wetness_darkening, horizon_px, focal_px)
 
         # Stand-in for the camera's auto-exposure pulling the frame back to a
         # normal level after the scene got brighter/hazier.
@@ -725,24 +789,60 @@ def render_streak_layer(
     return layer
 
 
-def _apply_ground_wetness(linear: np.ndarray, band_fraction: float) -> np.ndarray:
-    """Wet ground: a darker diffuse base plus a blurred specular reflection."""
+# Water's normal-incidence reflectance, ((n - 1)/(n + 1))^2 for n = 1.33.
+_WATER_R0 = 0.02
+
+
+def _apply_ground_wetness(
+    linear: np.ndarray,
+    wetness: np.ndarray,
+    darkening: float,
+    horizon_px: float,
+    focal_px: float,
+) -> np.ndarray:
+    """Wet ground: a darker diffuse base plus a Fresnel-weighted mirror image.
+
+    Two things here that the previous screen-space band could not express.
+
+    **Where the reflection comes from.** A horizontal mirror flips a ray's
+    vertical angle about the horizontal, so the reflection seen at row ``y``
+    is the scene at row ``2 * horizon - y``. Mirroring about anything else —
+    the band's own top edge, as this used to — puts the reflection of a car
+    somewhere the car is not.
+
+    **How strong it is.** Reflectance is not a constant: at grazing incidence
+    water approaches a perfect mirror and at normal incidence it reflects 2%.
+    Schlick's approximation over the depression angle below the horizon gives
+    the familiar look of a wet road — mirror-bright toward the horizon,
+    merely dark and matte at your feet — which a single blend weight cannot.
+    """
     height, width = linear.shape[:2]
-    band_start = int(height * (1.0 - band_fraction))
-    if band_start >= height:
-        return linear
+    rows = np.arange(height, dtype=np.float32)
 
-    band_height = height - band_start
-    reflect_start = max(0, band_start - band_height)
-    reflection_source = linear[reflect_start:band_start]
-    if reflection_source.shape[0] == 0:
-        return linear
-    reflection: np.ndarray = reflection_source[::-1]
-    if reflection.shape[0] != band_height:
-        reflection = cv2.resize(reflection, (width, band_height), interpolation=cv2.INTER_LINEAR)
-    reflection = cv2.GaussianBlur(reflection, (0, 0), sigmaX=3.0, sigmaY=1.0)
+    # Mirror about the horizon, sampling with replication for the rows whose
+    # reflection looks above the top of the frame (they see open sky).
+    source_y = np.clip(2.0 * horizon_px - rows, 0.0, height - 1.0)
+    map_y = np.broadcast_to(source_y.reshape(height, 1), (height, width))
+    map_x = np.broadcast_to(np.arange(width, dtype=np.float32), (height, width))
+    reflection = cv2.remap(
+        linear,
+        map_x.copy(),
+        map_y.copy(),
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    # A road is a rough mirror: it smears the reflection along the direction
+    # of travel far more than across it.
+    reflection = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=4.0)
 
-    def blend(ground: np.ndarray) -> np.ndarray:
-        return ground * 0.85 * 0.6 + reflection * 0.4
+    # Schlick: R = R0 + (1 - R0)(1 - cos t)^5, where t is measured from the
+    # surface normal, i.e. from vertical. cos t is the *sine* of the ray's
+    # depression below the horizon.
+    drop = np.maximum(rows - horizon_px, 0.0)
+    cos_theta = drop / np.sqrt(drop * drop + focal_px * focal_px)
+    fresnel = _WATER_R0 + (1.0 - _WATER_R0) * (1.0 - cos_theta) ** 5
+    fresnel_map = np.broadcast_to(fresnel.reshape(height, 1, 1), linear.shape)
 
-    return feathered_band_blend(linear, band_fraction, blend)
+    wet = linear * darkening * (1.0 - fresnel_map) + reflection * fresnel_map
+    w = wetness[..., None]
+    return (linear * (1.0 - w) + wet * w).astype(linear.dtype)

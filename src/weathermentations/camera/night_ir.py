@@ -100,8 +100,11 @@ class NightIrMode(WeatherTransform):
             lower frame saturates. Auto-exposure fixes the *level* while
             leaving the ``1/z^2`` **ratio** between near and far intact, and
             that ratio is the part that makes night footage recognisable.
-        gain_range: extra sensor gain on top of the auto-exposure, which sets
-            how far the noise floor is lifted with the signal.
+        gain_range: sensor gain, which sets how far the noise floor is
+            lifted. It does not scale the signal: the auto-exposure has
+            already placed that, and gain is one of the levers it used to get
+            there. Higher gain therefore means a noisier frame at the same
+            brightness, which is what raising ISO actually buys you.
         read_noise_range: signal-independent noise, as a fraction of unit
             exposure. Unlike shot noise this does not shrink in the shadows,
             which is why a gained-up night frame is noisiest where it is
@@ -241,7 +244,15 @@ class NightIrMode(WeatherTransform):
         reference_level = float(np.percentile(signal, 80.0))
         if reference_level > 1e-6:
             signal = signal * (target_level / reference_level)
-        signal = signal * gain
+
+        # Gain deliberately does *not* rescale the signal here. On a real
+        # camera gain is one of the things the AE loop uses to *reach* its
+        # target, not something applied on top of a level it already hit.
+        # Multiplying here as well drove the 80th percentile to
+        # target x gain -- up to 0.6 x 1.6 = 0.96 -- so a fifth of the frame
+        # sat against the clipping point and the near road washed out to a
+        # featureless white plate covering 24% of the image. What gain does
+        # control is the noise, below.
 
         # Shot noise scales as sqrt(signal); read noise does not scale at all,
         # which is why the shadows of a gained-up frame are the noisy part.

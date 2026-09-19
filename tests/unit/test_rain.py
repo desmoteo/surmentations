@@ -231,19 +231,66 @@ def test_tilted_camera_makes_streaks_converge() -> None:
     assert angles[0] == pytest.approx(-angles[2], abs=1e-3)
 
 
-def test_ground_wetness_feathers_without_hard_seam() -> None:
-    # A smooth image (not noise) so row-to-row differences reflect the effect
-    # itself, not pre-existing pixel variance.
+def test_ground_wetness_only_touches_the_ground_mask() -> None:
+    """Wetness is masked by the surface, not by image rows.
+
+    The screen-space band this replaced wet the bottom 12-32% of rows, which
+    covered only 49% of the reference frame's road and left the rest dry.
+    """
     height, width = 100, 60
-    img = np.tile(np.linspace(50.0, 200.0, height)[:, None, None], (1, width, 3)).astype(np.float32)
-    out = _apply_ground_wetness(img.copy(), band_fraction=0.3)
-    band_start = int(height * 0.7)
-    # The row just above the band and the first row inside it should not
-    # differ by much more than the smooth image's own natural row-to-row step
-    # (no abrupt seam from the wetness effect switching on).
-    natural_step = np.abs(img[band_start] - img[band_start - 1]).mean()
-    seam_diff = np.abs(out[band_start] - out[band_start - 1]).mean()
-    assert seam_diff <= natural_step + 5.0
+    img = np.full((height, width, 3), 0.4, dtype=np.float32)
+    wetness = np.zeros((height, width), dtype=np.float32)
+    wetness[:, :30] = 1.0  # a vertical split: no relationship to rows at all
+
+    out = _apply_ground_wetness(img.copy(), wetness, 0.6, horizon_px=10.0, focal_px=80.0)
+
+    np.testing.assert_allclose(out[:, 30:], img[:, 30:], rtol=1e-6)
+    assert np.all(out[:, :30] != img[:, :30])
+
+
+def test_ground_wetness_mirrors_the_scene_about_the_horizon() -> None:
+    """The reflection at row y must be the scene at row 2*horizon - y.
+
+    Mirroring about anything else - the band's own top edge, as this used to -
+    puts the reflection of a car somewhere the car is not.
+    """
+    height, width, horizon = 120, 40, 20.0
+    # A single bright bar; everything else black, so the reflection's position
+    # is unambiguous.
+    img = np.zeros((height, width, 3), dtype=np.float32)
+    img[8:12] = 1.0
+    wetness = np.ones((height, width), dtype=np.float32)
+
+    out = _apply_ground_wetness(img.copy(), wetness, 0.0, horizon_px=horizon, focal_px=60.0)
+
+    # Source rows 8-12 mirror to 2*20 - [8, 12] = [32, 28].
+    profile = out.mean(axis=(1, 2))
+    below = profile[int(horizon) + 1 :]
+    peak = int(np.argmax(below)) + int(horizon) + 1
+    assert 27 <= peak <= 33, f"reflection peaked at row {peak}, expected near 30"
+
+
+def test_ground_wetness_reflectance_is_strongest_at_grazing_incidence() -> None:
+    """A wet road is mirror-bright toward the horizon and matte at your feet.
+
+    That is Fresnel, and it is the part a single blend weight cannot express.
+    """
+    height, width = 200, 40
+    img = np.full((height, width, 3), 0.5, dtype=np.float32)
+    img[:60] = 1.0  # bright sky to be reflected
+    wetness = np.ones((height, width), dtype=np.float32)
+
+    out = _apply_ground_wetness(img.copy(), wetness, 0.5, horizon_px=60.0, focal_px=100.0)
+
+    near_horizon = float(out[65:85].mean())
+    far_below = float(out[175:195].mean())
+    assert near_horizon > far_below, (
+        f"reflection should fade away from the horizon: {near_horizon:.3f} "
+        f"near vs {far_below:.3f} far"
+    )
+    # Far below the horizon the surface is close to Lambertian, so the result
+    # should approach the darkened diffuse value rather than the reflection.
+    assert far_below == pytest.approx(0.5 * 0.5, abs=0.06)
 
 
 def test_rain_rate_drives_visible_streak_coverage(

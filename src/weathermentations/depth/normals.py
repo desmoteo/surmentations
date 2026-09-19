@@ -128,3 +128,57 @@ def upward_facing(
     up = np.array([0.0, -np.cos(pitch), -np.sin(pitch)], dtype=np.float32)
 
     return np.clip(normals @ up, 0.0, 1.0).astype(np.float32)
+
+
+def horizon_row(
+    depth_m: np.ndarray,
+    ground_weight: np.ndarray,
+    min_weight: float = 0.3,
+) -> float:
+    """Image row where the ground plane recedes to infinity, from the depth map.
+
+    A specular reflection in wet ground is not a flip about an arbitrary line.
+    For a horizontal plane the outgoing ray's vertical angle is the incoming
+    one mirrored about the horizontal, so the reflection seen at row ``y``
+    comes from row ``2 * y_horizon - y``. Everything therefore hinges on where
+    the horizon actually is, and the depth map knows: on a ground plane at
+    height ``h`` under a camera of focal length ``f``,
+
+        z = h * f / (y - y_horizon)   =>   1/z = (y - y_horizon) / (h * f)
+
+    so **inverse** depth is linear in the row index and crosses zero at the
+    horizon. Fitting that line over the ground pixels and reading off its root
+    recovers the horizon without knowing ``h``, ``f`` or the camera pitch.
+
+    Args:
+        depth_m: metric (or pseudo-metric) depth.
+        ground_weight: ``(H, W)`` in ``[0, 1]``, e.g. from :func:`upward_facing`.
+        min_weight: pixels below this weight are not ground and are ignored.
+
+    Returns:
+        The horizon row, which is routinely **negative** — a camera pitched
+        down puts the horizon above the top of the frame. Falls back to just
+        above the topmost ground pixel when the fit is degenerate (too few
+        ground pixels, or a ground plane so flat in inverse depth that the
+        line has no usable slope).
+    """
+    height = depth_m.shape[0]
+    mask = ground_weight >= min_weight
+    if mask.sum() < 32:
+        return -float(height)
+
+    rows = np.broadcast_to(
+        np.arange(height, dtype=np.float64).reshape(height, 1), depth_m.shape
+    )[mask]
+    inverse = 1.0 / np.maximum(depth_m[mask].astype(np.float64), 1e-6)
+
+    row_spread = rows.var()
+    if row_spread < 1e-6:
+        return -float(height)
+    slope = ((rows - rows.mean()) * (inverse - inverse.mean())).mean() / row_spread
+    if slope <= 1e-12:
+        # Inverse depth must *increase* down the frame for a ground plane. A
+        # flat or inverted fit means whatever was masked is not one.
+        top = int(np.argmax(mask.any(axis=1)))
+        return float(top) - 1.0
+    return float(rows.mean() - inverse.mean() / slope)

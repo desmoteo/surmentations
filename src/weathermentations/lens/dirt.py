@@ -76,6 +76,7 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
 from weathermentations.base import WeatherTransform
+from weathermentations.diagnostics import record_draw
 from weathermentations.utils.noise import colored_blob_cluster
 from weathermentations.utils.photometry import (
     from_linear_unit,
@@ -391,6 +392,15 @@ class DirtSoil(WeatherTransform):
                 takes_over[..., None], np.array(color, dtype=np.float32), albedo
             )
             mask = np.maximum(mask, layer)
+
+        # Which substances were deposited, not just how much: the whole point
+        # of the palette is that a pane carries several at once, and that is
+        # invisible in the composited albedo field.
+        record_draw(
+            smudge_count=smudge_count,
+            deposits=",".join(sorted(set(chosen))),
+            deposit_albedo_mean=smudge_albedos.mean(axis=0),
+        )
 
         arc_count = self.py_random.randint(*self.wipe_arc_count_range)
         if arc_count:
