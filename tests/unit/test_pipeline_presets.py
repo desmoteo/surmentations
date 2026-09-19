@@ -98,11 +98,45 @@ def test_weather_state_rejects_probabilities_that_leave_no_clear_weather() -> No
         weather_state(provider, rain=0.6, snow=0.3, fog=0.2)
 
 
-@pytest.mark.parametrize("build", [lambda: surveillance_lite()])
-def test_pipelines_are_in_physical_order(build) -> None:
+def test_pipelines_are_in_physical_order() -> None:
     """`physical_order` cannot sort containers, so the order is written by hand
     and has to be checked."""
     from weathermentations.presets.pipelines import _stream
 
-    stages = [stage_of(t) for t in _stream(lit_by_mains=False, dirt=0.2, occluders=0.1, codec=0.1)]
+    tail = _stream(
+        lit_by_mains=False, dirt=0.2, occluders=0.1, codec=0.1, severity=2
+    )
+    stages = [stage_of(t) for t in tail]
     assert stages == sorted(stages), stages
+
+
+def test_effects_per_frame_is_not_all_or_nothing() -> None:
+    """Effects must fire roughly independently, not in lockstep.
+
+    Albumentations seeds every child of a `Compose` from the same stream, and
+    a `OneOf` that declines to fire consumes exactly one number — so a
+    pipeline built from same-shaped `OneOf` gates never desynchronises and
+    they all fire together whenever the shared draw falls below the smallest
+    `p`. An earlier version picked each effect's severity with such a gate and
+    turned an expected 2.4 effects per frame into 64% of frames with one or
+    none and 12% with nine or more. The marginals stayed correct throughout,
+    which is why only the joint distribution catches it.
+    """
+    drawn = _draws(surveillance_lite(), samples=900)
+    counts = np.array([len(s) for s in drawn])
+    # Independent Bernoulli draws give variance <= mean; lockstep firing sends
+    # it far above. The bug measured 8.76 against a mean of 2.37.
+    assert counts.var() < 1.6 * counts.mean(), (
+        f"effects per frame: mean {counts.mean():.2f}, variance {counts.var():.2f} — "
+        f"too clustered to be independent draws. Histogram: "
+        f"{np.bincount(counts).tolist()}"
+    )
+    # Not eliminated, only made rare: the containers that pick the lighting
+    # and weather state still share the stream, so a heavily stacked frame
+    # turns up occasionally. Measured across three seeds it is 0.0-0.3% of
+    # frames, against 12% when every effect was gated this way.
+    heavy = (counts >= 8).mean()
+    assert heavy < 0.015, (
+        f"{heavy:.1%} of frames stacked 8+ effects; expected well under 1%. "
+        f"Histogram: {np.bincount(counts).tolist()}"
+    )

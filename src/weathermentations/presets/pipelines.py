@@ -41,7 +41,38 @@ from weathermentations.camera import (
 )
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
+
+#: Severity the pipelines build at by default. Level 2 is "an ordinary bad
+#: day" — clearly visible, still readable. The transforms' own constructor
+#: defaults are deliberately *not* used here: they span the whole physically
+#: plausible range, so ``RandomRain`` reaches 200 mm/h, a tropical cloudburst,
+#: where severity 1 is 2-8 mm/h. Those wide defaults exist so a single
+#: transform can explore its parameter space; they are the wrong thing for a
+#: pipeline that stacks three or four effects at once, where each needs to be
+#: typical rather than extreme.
+DEFAULT_SEVERITY = 2
+
+
+def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
+    """One transform at a severity level, built directly.
+
+    Deliberately **not** wrapped in a container to pick the severity per
+    frame. Albumentations seeds every child of a ``Compose`` from the same
+    stream, and a ``OneOf`` that declines to fire consumes exactly one number,
+    so a pipeline of same-shaped ``OneOf`` gates never desynchronises: they
+    all fire together whenever the shared draw falls below the smallest ``p``.
+    Measured, that turned an expected 2.4 effects per frame into 64% of frames
+    with one effect or none and 12% with nine or more — the all-or-nothing
+    distribution that makes a pipeline look far too destructive on the frames
+    where it does fire. Adding a ``NoOp`` arm does not fix it either.
+
+    So severity is fixed per pipeline rather than drawn per frame. Build two
+    pipelines and alternate if you want a mixture; that composes correctly
+    because the choice is then outside Albumentations' RNG.
+    """
+    return factory(p=probability, **SEVERITY[severity][name], **extra)
 
 
 def _stream(
@@ -50,28 +81,34 @@ def _stream(
     dirt: float,
     occluders: float,
     codec: float,
+    severity: int,
 ) -> list[Any]:
     """Glass, sensor, ISP and transmission: independent draws, physical order.
 
     Written in order by hand rather than through
     :func:`~weathermentations.presets.pipeline.physical_order`, which sorts a
     flat list and cannot see inside the containers these pipelines are built
-    from. ``tests/unit/test_pipeline_recipe.py`` checks the order still holds.
+    from. ``tests/unit/test_pipeline_presets.py`` checks the order still holds.
     """
     return [
         # Optics: on the glass, in front of everything the sensor does.
-        DirtSoil(p=dirt),
-        HousingOccluders(p=occluders),
+        _at(DirtSoil, "DirtSoil", dirt, severity),
+        _at(HousingOccluders, "HousingOccluders", occluders, severity),
         # Sensor. Mains banding needs artificial light, so outdoors it belongs
         # to the night branches; indoors it would apply all day.
-        AcFlicker(p=0.45 if lit_by_mains else 0.05),
-        RollingShutter(p=0.50),
+        _at(AcFlicker, "AcFlicker", 0.45 if lit_by_mains else 0.05, severity),
+        _at(RollingShutter, "RollingShutter", 0.50, severity),
         # ISP.
-        ExposureTransient(p=0.10),
-        WdrToneMapping(p=0.12),
-        TemporalDenoiseArtifacts(p=0.30 if lit_by_mains else 0.12),
+        _at(ExposureTransient, "ExposureTransient", 0.10, severity),
+        _at(WdrToneMapping, "WdrToneMapping", 0.12, severity),
+        _at(
+            TemporalDenoiseArtifacts,
+            "TemporalDenoiseArtifacts",
+            0.30 if lit_by_mains else 0.12,
+            severity,
+        ),
         # Transmission, last: it acts on the finished picture.
-        VideoCodecArtifacts(p=codec),
+        _at(VideoCodecArtifacts, "VideoCodecArtifacts", codec, severity),
     ]
 
 
@@ -85,6 +122,7 @@ def weather_state(
     wet_snow: float = 0.10,
     wet_fog: float = 0.30,
     wet_clear: float = 0.06,
+    severity: int = DEFAULT_SEVERITY,
 ) -> A.OneOf:
     """Exactly one atmospheric state per frame, including "clear".
 
@@ -96,6 +134,8 @@ def weather_state(
         wet_rain, wet_snow, wet_fog, wet_clear: ``P(water on the glass | state)``.
             ``wet_clear`` covers dew, residual drops after the rain stops and
             wind-blown spray, which is why it is not zero.
+        severity: level 1-5 from
+            :data:`~weathermentations.presets.severity.SEVERITY`.
 
     Raises:
         ValueError: if the three weather probabilities sum to 1 or more.
@@ -109,18 +149,30 @@ def weather_state(
     return A.OneOf(
         [
             A.Sequential(
-                [RandomRain(depth_provider=depth_provider, p=1.0), WaterDroplets(p=wet_rain)],
+                [
+                    _at(RandomRain, "RandomRain", 1.0, severity, depth_provider=depth_provider),
+                    _at(WaterDroplets, "WaterDroplets", wet_rain, severity),
+                ],
                 p=rain,
             ),
             A.Sequential(
-                [RandomSnow(depth_provider=depth_provider, p=1.0), WaterDroplets(p=wet_snow)],
+                [
+                    _at(RandomSnow, "RandomSnow", 1.0, severity, depth_provider=depth_provider),
+                    _at(WaterDroplets, "WaterDroplets", wet_snow, severity),
+                ],
                 p=snow,
             ),
             A.Sequential(
-                [RandomFog(depth_provider=depth_provider, p=1.0), WaterDroplets(p=wet_fog)],
+                [
+                    _at(RandomFog, "RandomFog", 1.0, severity, depth_provider=depth_provider),
+                    _at(WaterDroplets, "WaterDroplets", wet_fog, severity),
+                ],
                 p=fog,
             ),
-            A.Sequential([WaterDroplets(p=wet_clear)], p=1.0 - total),
+            A.Sequential(
+                [_at(WaterDroplets, "WaterDroplets", wet_clear, severity)],
+                p=1.0 - total,
+            ),
         ],
         p=1.0,
     )
@@ -135,6 +187,7 @@ def surveillance(
     codec: float = 0.15,
     dirt: float = 0.25,
     occluders: float = 0.12,
+    severity: int = DEFAULT_SEVERITY,
     **weather: float,
 ) -> A.Compose:
     """The full pipeline: weather, optics and the camera chain. **Needs CUDA.**
@@ -157,6 +210,12 @@ def surveillance(
             decoded from video, where the artefacts are already in the pixels.
         dirt, occluders: probability of grime and of insects/webs on the
             housing. Both rise steeply with maintenance interval.
+        severity: level 1-5, from
+            :data:`~weathermentations.presets.severity.SEVERITY`. **This is
+            the knob that decides how degraded a typical frame is**, and the
+            first one to change if the output looks too heavy. 1 is barely
+            visible, 2 an ordinary bad day, 5 a frame you would file a fault
+            report about.
         **weather: forwarded to :func:`weather_state`.
 
     Example:
@@ -174,38 +233,48 @@ def surveillance(
                 [
                     A.Sequential(
                         [
-                            CastShadows(depth_provider=depth_provider, p=0.30),
-                            weather_state(depth_provider, **weather),
-                            SunFlare(p=0.12),
-                            *_stream(lit_by_mains=False, **tail),
+                            _at(
+                                CastShadows, "CastShadows", 0.30, severity,
+                                depth_provider=depth_provider,
+                            ),
+                            weather_state(depth_provider, severity=severity, **weather),
+                            _at(SunFlare, "SunFlare", 0.12, severity),
+                            *_stream(lit_by_mains=False, severity=severity, **tail),
                         ],
                         p=day,
                     ),
                     A.Sequential(
                         [
-                            weather_state(depth_provider, **weather),
+                            weather_state(depth_provider, severity=severity, **weather),
                             # Night under street or shop lighting, camera still
                             # in colour: under-exposed, with the warm cast of
                             # sodium or low-CRI LED against a daylight AWB.
+                            # Kept mild deliberately — a -2.6 stop, 2000 K
+                            # version reads as a sepia filter over a daylit
+                            # frame rather than as night, because this branch
+                            # cannot relight the scene.
                             ExposureTransient(
                                 p=1.0,
-                                exposure_error_stops_range=(-2.6, -1.0),
-                                assumed_temperature_range_k=(5000.0, 6500.0),
-                                actual_temperature_range_k=(2000.0, 3200.0),
+                                exposure_error_stops_range=(-1.5, -0.6),
+                                assumed_temperature_range_k=(4600.0, 5600.0),
+                                actual_temperature_range_k=(2900.0, 3900.0),
                             ),
-                            *_stream(lit_by_mains=True, **tail),
+                            *_stream(lit_by_mains=True, severity=severity, **tail),
                         ],
                         p=lit_night,
                     ),
                     A.Sequential(
                         [
-                            weather_state(depth_provider, **weather),
+                            weather_state(depth_provider, severity=severity, **weather),
                             # p=1.0 because the branch *is* the IR state, and
                             # its weight is what says how often that occurs. A
                             # camera that has cut to monochrome has done so
                             # completely; there is no 30% of an IR frame.
-                            NightIrMode(depth_provider=depth_provider, p=1.0),
-                            *_stream(lit_by_mains=True, **tail),
+                            _at(
+                                NightIrMode, "NightIrMode", 1.0, severity,
+                                depth_provider=depth_provider,
+                            ),
+                            *_stream(lit_by_mains=True, severity=severity, **tail),
                         ],
                         p=ir_night,
                     ),
@@ -223,6 +292,7 @@ def surveillance_lite(
     dirt: float = 0.25,
     occluders: float = 0.12,
     droplets: float = 0.10,
+    severity: int = DEFAULT_SEVERITY,
 ) -> A.Compose:
     """Everything that does not need depth. **CPU only, no GPU required.**
 
@@ -251,6 +321,7 @@ def surveillance_lite(
         dirt, occluders: grime and insects on the housing.
         droplets: water on the front element from dew, spray or rain this
             pipeline is not rendering.
+        severity: level 1-5, as for :func:`surveillance`.
     """
     tail = {"dirt": dirt, "occluders": occluders, "codec": codec}
     return A.Compose(
@@ -259,22 +330,22 @@ def surveillance_lite(
                 [
                     A.Sequential(
                         [
-                            WaterDroplets(p=droplets),
-                            SunFlare(p=0.12),
-                            *_stream(lit_by_mains=False, **tail),
+                            _at(WaterDroplets, "WaterDroplets", droplets, severity),
+                            _at(SunFlare, "SunFlare", 0.12, severity),
+                            *_stream(lit_by_mains=False, severity=severity, **tail),
                         ],
                         p=1.0 - night,
                     ),
                     A.Sequential(
                         [
-                            WaterDroplets(p=droplets),
+                            _at(WaterDroplets, "WaterDroplets", droplets, severity),
                             ExposureTransient(
                                 p=1.0,
-                                exposure_error_stops_range=(-2.6, -1.0),
-                                assumed_temperature_range_k=(5000.0, 6500.0),
-                                actual_temperature_range_k=(2000.0, 3200.0),
+                                exposure_error_stops_range=(-1.5, -0.6),
+                                assumed_temperature_range_k=(4600.0, 5600.0),
+                                actual_temperature_range_k=(2900.0, 3900.0),
                             ),
-                            *_stream(lit_by_mains=True, **tail),
+                            *_stream(lit_by_mains=True, severity=severity, **tail),
                         ],
                         p=night,
                     ),

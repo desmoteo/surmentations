@@ -21,6 +21,34 @@ often each condition occurs in a temperate maritime climate on a mixed camera
 fleet, and **that will not match your footage**. The rest of this document is
 why the numbers are what they are, so you can change them deliberately.
 
+> **`severity` decides how degraded a frame gets** (1-5, default 2), and it is
+> the first thing to change if the output looks too heavy. Omitting it is not
+> neutral: the transforms then run on their own constructor defaults, which
+> span the whole physically plausible range, so `RandomRain` reaches 200 mm/h
+> — a tropical cloudburst — where severity 1 is 2-8 mm/h. Those wide defaults
+> exist so one transform can explore its parameter space; they are the wrong
+> thing for a pipeline that stacks three or four effects at once. At severity
+> 2 a typical frame keeps about 80% of its high-frequency detail; on the
+> library defaults the median frame kept 77% and the worst kept 9%.
+
+> **Severity is fixed per pipeline, not drawn per frame**, and that is
+> deliberate. Picking it per frame with a `OneOf` gate looks obvious and is
+> wrong: Albumentations seeds every child of a `Compose` from the same stream,
+> and a `OneOf` that declines to fire consumes exactly one number, so a
+> pipeline of same-shaped gates never desynchronises — they all fire together
+> whenever the shared draw falls below the smallest `p`. Measured, that turned
+> an expected 2.4 effects per frame into 64% of frames with one effect or none
+> and 12% with nine or more stacked, which is exactly the "too invasive" look.
+> Build two pipelines and alternate if you want a mixture; that composes
+> correctly because the choice is then outside Albumentations' RNG.
+>
+> Applying severity directly rather than through a gate brings the effect
+> count back to 2.3 with a variance of 1.85 — what independent draws give —
+> and heavily stacked frames from 12% to **0.0-0.3%** across seeds. It is
+> reduced rather than eliminated: the containers choosing the lighting and
+> weather state still share the stream, so a frame with eight or more effects
+> turns up occasionally. `tests/unit/test_pipeline_presets.py` pins the rate.
+
 > **Seed once, not per frame.** Calling `set_random_seed` before every frame
 > correlates every transform's probability check: frames then come out with
 > nearly all effects or nearly none. Measured on `surveillance_lite`, 27% of
