@@ -1,0 +1,126 @@
+# Why rain streaks are faint, and what actually changes that
+
+Rain rendered by this library reads as haze, a wet road and drops on the
+glass, but rarely as streaks. This is the investigation into whether that is a
+modelling error, and what the levers really are. Short version: **the streak
+photometry is correct, the drop-size distribution is not the lever, and the
+binding constraint is that a raindrop is sub-pixel at surveillance
+resolutions.**
+
+Everything here is measured on the reference photograph at 512 px unless
+stated.
+
+## The photometry checks out
+
+A streak's opacity is `α = w² / L` — drop image width `w` px, streak length
+`L` px. That follows from Garg & Nayar: the drop's image sweeps `L` pixels
+during the exposure while covering `w²` px² at any instant, so each pixel
+along the path sees it for `w²/L` of the exposure. Light per streak is
+`α · L · w = w²`, independent of exposure, which is the conservation the
+model needs.
+
+Measured against the implementation at 50 mm/h: α p50 **0.027**, streak
+length p50 **9.6 px**, thickness p50 **1 px**. Garg & Nayar's reference case
+is ~0.017 for a 1 mm drop at 1/60 s. The radiance is generous rather than
+mean: a streak takes the illuminant, **6.0× the road's radiance** and 3.3×
+the sky's on this frame.
+
+So a streak lifts the pixels it crosses by about **8 sRGB levels**.
+
+## Why that is invisible
+
+The asphalt's own texture is **17 sRGB levels** at one sigma.
+
+> A correct streak sits **0.48 σ** into the background texture, on a line one
+> pixel wide.
+
+That is the whole finding. Nothing is missing from the render; the signal is
+genuinely below the scene's own variation.
+
+## Four levers, three of which do not work
+
+**Exposure does not help.** Lengthening the shutter from 1/333–1/100 s to
+1/30–1/15 s takes the median streak from 10 px to 76 px — and drops α from
+0.027 to 0.0034, because `α = w²/L`. Measured high-frequency energy added by
+the rain: **4.21 → 4.13**. Flat. A longer exposure spreads one drop's light
+further; it does not produce more of it.
+
+**Rendering more of the column does not help much.** Dropping the
+resolvability cut from 0.40 px to 0.08 px and raising the budget takes the
+drawn count from 1 756 to 60 000 — 34× — for a high-frequency change of
+**5.14 → 6.29**, 22%. Each extra drop is fainter in exactly the proportion
+that there are more of them.
+
+**The drop-size distribution does not help.** Replacing Marshall & Palmer's
+exponential with Ulbrich's gamma at `mu = 3`, at a fixed rain rate:
+
+| | drops > 2 mm | Σ D² (projected area) | resolvable fraction |
+| --- | --- | --- | --- |
+| exponential (`mu = 0`) | 11.5% | 2040 | 0.04% |
+| gamma `mu = 3` | **14.8%** | 2092 (**+2.5%**) | 0.04% |
+
+The shape is genuinely better — see below — but visibility follows the summed
+projected area, and that barely moves.
+
+**Resolution and focal length are the real lever, and they are constrained.**
+`w = f·D/z`, so a 2 mm drop reaches 1 px only within `z = f·D`:
+
+| sensor / field of view | focal (px) | 2 mm drop is 1 px wide within |
+| --- | --- | --- |
+| 512 px, 60° | 443 | **0.44 m** |
+| 2048 px, 60° | 1774 | 1.8 m |
+| 4000 px, 60° | 3464 | 3.5 m |
+
+This is why photographs show rain and 512 px CCTV crops do not. But rendering
+at 2048 px does not recover it either, because **defocus eats the gain**: at
+1.4 m with the lens focused at 20 m the circle of confusion is ~2 px, so a
+2 px drop is drawn 4 px wide at half the opacity. That is correct optics for a
+wide-angle lens focused at distance — the same deep depth of field that keeps
+the scene sharp is what smears the near drops.
+
+## So when *is* CCTV rain visible?
+
+Against a dark background, which is where the 8-level lift stops competing
+with 17 levels of asphalt texture — and above all **at night under the
+camera's own illuminator**, where drops a metre from the lens are lit
+directly while the scene behind them is not. That is the footage everyone
+pictures when they picture visible CCTV rain.
+
+This library does not render that case: `RandomRain` composites before
+`NightIrMode`, and the streaks take the *scene* illuminant rather than the
+IR illuminator's inverse-square falloff. Making rain streaks take the
+illuminator's radiance when the two are composed is the single change most
+likely to produce recognisably rainy frames, and it is not a fudge — it is
+the same `1/z²` term `NightIrMode` already applies to the scene.
+
+## What changed
+
+`RandomRain` gained `dsd_shape_mu`, defaulting to **0** — Marshall & Palmer,
+exactly as before, because every published measurement in this repository was
+taken against it. Setting it to 2–4 selects Ulbrich's gamma, which is the
+better fit to observed spectra: it removes the pile-up of very small drops an
+exponential predicts and puts the mode at a finite diameter.
+
+Two details worth recording, both found while implementing it:
+
+**Marshall & Palmer's constants are not self-consistent.** Integrating their
+own `N(D) = 8000 exp(-ΛD)` with `Λ = 4.1 R^-0.21` returns a rain rate 4% high
+at 100 mm/h and **20% high at 5 mm/h**, because the intercept and the slope
+relation were fitted separately. Calibrating the gamma path absolutely would
+therefore have put a 10% step at `mu = 0` that is an artefact of that
+inconsistency, not a property of the shape. The gamma density is calibrated
+*relative* to Marshall & Palmer at the same rate instead, so `mu = 0` is exact.
+
+**The sampler and the resolvable fraction share one description.** The gamma
+has no closed-form inverse CDF, so it is inverted on a grid — and the
+survival function used to size the sample is built by quadrature on the same
+grid. Keeping those in separate closed forms is how a sampler and its
+acceptance rate drift apart.
+
+## Verifying
+
+`tests/unit/test_rain.py` pins all three: that `mu = 0` reproduces the
+exponential exactly and without a step in the calibration, that `mu = 3`
+carries meaningfully more large drops, and that the projected area — the
+quantity that actually decides visibility — varies by under 10% across
+`mu = 0..4`, which is the claim this document rests on.

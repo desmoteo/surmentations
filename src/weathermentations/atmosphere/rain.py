@@ -75,7 +75,7 @@ from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import (
     focal_length_px,
     frustum_volume,
-    marshall_palmer_slope,
+    gamma_dsd_slope,
     rain_extinction_coefficient,
     rain_number_density,
     raindrop_terminal_velocity,
@@ -177,6 +177,19 @@ class RandomRain(WeatherTransform):
             of air being simulated.
         drop_diameter_range_mm: truncation window for the drop-size
             distribution, in millimetres.
+        dsd_shape_mu: shape parameter of the drop-size distribution.
+            ``0`` is Marshall & Palmer's exponential, the default and what
+            every published number in this library was measured against.
+            Ulbrich (1983) showed observed spectra are better fitted by a
+            gamma, ``N(D) = N0 D^mu exp(-Lambda D)``, with ``mu`` near 2-4: it
+            removes the pile-up of very small drops an exponential predicts
+            and puts the mode at a finite diameter. At 50 mm/h, ``mu = 3``
+            raises the share of drops above 2 mm from 11.5% to 14.8%.
+
+            It will not make rain more visible, and that is worth stating
+            plainly: what decides visibility is the summed projected area of
+            the drops, and at a fixed rain rate that moves by 2.5% across the
+            whole useful range of ``mu``. See ``docs/rain_visibility.md``.
         distance_range_m: near and far bounds of the column of air in front
             of the lens whose drops are drawn individually. Drops beyond it
             are sub-pixel in width and are represented by the veil instead.
@@ -250,6 +263,7 @@ class RandomRain(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(MIN_RAIN_RATE_MM_H, 300.0)),
         ]
+        dsd_shape_mu: float = Field(ge=0.0, le=10.0)
         drop_diameter_range_mm: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -328,6 +342,7 @@ class RandomRain(WeatherTransform):
         depth_provider: SharedDepthProvider,
         rain_rate_range_mm_h: tuple[float, float] = (5.0, 200.0),
         drop_diameter_range_mm: tuple[float, float] = (0.8, 6.0),
+        dsd_shape_mu: float = 0.0,
         distance_range_m: tuple[float, float] = (0.4, 6.0),
         exposure_time_range: tuple[float, float] = (0.003, 0.010),
         horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
@@ -350,6 +365,7 @@ class RandomRain(WeatherTransform):
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.rain_rate_range_mm_h = rain_rate_range_mm_h
         self.drop_diameter_range_mm = drop_diameter_range_mm
+        self.dsd_shape_mu = dsd_shape_mu
         self.distance_range_m = distance_range_m
         self.exposure_time_range = exposure_time_range
         self.horizontal_fov_range_deg = horizontal_fov_range_deg
@@ -414,7 +430,7 @@ class RandomRain(WeatherTransform):
         volume = frustum_volume(
             width, height, horizontal_fov, *self.distance_range_m
         )
-        slope = marshall_palmer_slope(rain_rate)
+        slope = gamma_dsd_slope(rain_rate, self.dsd_shape_mu)
         visible = resolvable_fraction(
             slope,
             *self.drop_diameter_range_mm,
@@ -422,7 +438,9 @@ class RandomRain(WeatherTransform):
             focal,
             self.min_streak_width_px,
         )
-        density = rain_number_density(rain_rate, self.drop_diameter_range_mm[0])
+        density = rain_number_density(
+            rain_rate, self.drop_diameter_range_mm[0], self.dsd_shape_mu
+        )
         population = density * volume * visible
 
         # When the budget binds, raise the *width* threshold rather than

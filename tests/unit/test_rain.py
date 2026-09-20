@@ -335,3 +335,74 @@ def test_streak_width_and_length_track_distance(
     near, far = order[: len(order) // 4], order[-len(order) // 4 :]
     assert streaks["length"][near].mean() > streaks["length"][far].mean()
     assert streaks["thickness"][near].mean() >= streaks["thickness"][far].mean()
+
+
+def test_gamma_drop_size_distribution_reduces_to_marshall_palmer() -> None:
+    """`dsd_shape_mu=0` must be exactly the exponential, not approximately.
+
+    Every published number in this library was measured against Marshall &
+    Palmer, so the gamma generalisation has to leave that case untouched — a
+    shape parameter that quietly shifts the default would invalidate the lot.
+    """
+    from weathermentations.utils.precipitation import (
+        gamma_dsd_slope,
+        marshall_palmer_slope,
+        rain_number_density,
+        sample_gamma_diameters,
+    )
+
+    for rate in (5.0, 25.0, 100.0):
+        assert gamma_dsd_slope(rate, 0.0) == pytest.approx(marshall_palmer_slope(rate))
+        assert rain_number_density(rate, 0.8, 0.0) == pytest.approx(
+            rain_number_density(rate, 0.8, 1e-9), rel=1e-6
+        ), "the gamma calibration puts a step at mu=0"
+
+    rng = np.random.default_rng(0)
+    exponential = sample_gamma_diameters(rng, 60000, marshall_palmer_slope(50.0), 0.8, 6.0, 0.0)
+    analytic_mean = 0.8 + 1.0 / marshall_palmer_slope(50.0)
+    assert exponential.mean() == pytest.approx(analytic_mean, rel=0.05)
+
+
+def test_gamma_shape_moves_mass_toward_larger_drops() -> None:
+    """The point of the gamma is the large-drop end: Ulbrich (1983) fits
+    observed spectra better than an exponential because a real distribution
+    has a mode at a finite diameter rather than piling up at zero."""
+    from weathermentations.utils.precipitation import gamma_dsd_slope, sample_gamma_diameters
+
+    rng = np.random.default_rng(1)
+    fractions = []
+    for mu in (0.0, 3.0):
+        drops = sample_gamma_diameters(rng, 80000, gamma_dsd_slope(50.0, mu), 0.8, 6.0, mu)
+        fractions.append(float((drops > 2.0).mean()))
+    assert fractions[1] > fractions[0] * 1.2, (
+        f"mu=3 should carry noticeably more large drops: {fractions[0]:.3f} -> {fractions[1]:.3f}"
+    )
+
+
+def test_drop_size_distribution_is_not_the_visibility_lever() -> None:
+    """Pins the measurement behind the documentation.
+
+    The summed projected area of the drops is what decides whether rain can be
+    seen, and at a fixed rain rate it barely moves with the distribution's
+    shape. Recording it as a test because it is the claim most likely to be
+    re-litigated, and because it is cheap to check and expensive to re-derive.
+    """
+    from weathermentations.utils.precipitation import (
+        gamma_dsd_slope,
+        raindrop_terminal_velocity,
+    )
+
+    diameters = np.linspace(0.2, 6.0, 2000)
+    step = float(diameters[1] - diameters[0])
+    speeds = raindrop_terminal_velocity(diameters)
+    areas = []
+    for mu in (0.0, 2.0, 4.0):
+        shape = diameters**mu * np.exp(-gamma_dsd_slope(50.0, mu) * diameters)
+        rate = float((shape * diameters**3 * speeds).sum() * step)
+        shape = shape / rate  # normalise to a common rain rate
+        areas.append(float((shape[diameters >= 0.8] * diameters[diameters >= 0.8] ** 2).sum()))
+    spread = (max(areas) - min(areas)) / min(areas)
+    assert spread < 0.10, (
+        f"projected area varies by {spread:.1%} across mu=0..4; the documentation "
+        "claims a few percent, so one of the two is wrong"
+    )

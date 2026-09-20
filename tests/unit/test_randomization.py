@@ -55,6 +55,13 @@ ALLOWED_SCALARS = {
     "min_streak_width_px",
     "min_flake_width_px",
     "flake_count_scale",
+    # Selects which drop-size distribution family is used (0 = Marshall &
+    # Palmer's exponential, 2-4 = Ulbrich's gamma), not a quantity drawn per
+    # frame. Real spectra do vary in shape between convective and stratiform
+    # rain, so a range would not be meaningless — but mixing distribution
+    # families inside one dataset is a modelling decision a caller should make
+    # deliberately rather than have sampled for them.
+    "dsd_shape_mu",
     # Fixed model constants documented as such in their modules.
     "min_gap_ratio",
     "definition_softness",
