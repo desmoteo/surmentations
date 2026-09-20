@@ -86,12 +86,27 @@ camera's own illuminator**, where drops a metre from the lens are lit
 directly while the scene behind them is not. That is the footage everyone
 pictures when they picture visible CCTV rain.
 
-This library does not render that case: `RandomRain` composites before
-`NightIrMode`, and the streaks take the *scene* illuminant rather than the
-IR illuminator's inverse-square falloff. Making rain streaks take the
-illuminator's radiance when the two are composed is the single change most
-likely to produce recognisably rainy frames, and it is not a fudge — it is
-the same `1/z²` term `NightIrMode` already applies to the scene.
+`NightRain` renders that case. It is the same drop physics — the same
+Marshall-Palmer sampling, the same `α = w²/L` — with two terms changed:
+
+* the streak's radiance comes from the lamp and falls as `1/z²`, so a drop at
+  0.4 m returns a hundred times what one at 4 m does and saturates, and
+* it **adds** rather than occludes, because a drop scattering the lamp's
+  light back is not hiding anything behind it.
+
+Both sides of the contrast move at once: the drop gets brighter than anything
+in the scene while the scene goes dark. That is the whole difference between
+invisible and dramatic, and it needed no change to the drop model.
+
+It also carries the backscatter glow from the unresolved drops the beam
+lights — the wall of light that makes an IR camera nearly useless in heavy
+rain — as a separable term, because it is the part that destroys contrast.
+
+`NightRain` needs no depth provider (the drops are in front of the scene and
+the beam is a property of the lamp), so unlike every other atmospheric effect
+here it runs on CPU. It sorts **after** `NightIrMode` in `physical_order`:
+the streaks are already in infrared terms, so passing them through the
+scene's reflectance-to-IR conversion would convert them twice.
 
 ## What changed
 
