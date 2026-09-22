@@ -397,9 +397,14 @@ full sweep.
 | --- | --- | --- | --- |
 | ![sun flare](docs/examples/sun_flare_3.png) | ![fog](docs/examples/fog_2.png) | ![rain](docs/examples/rain_3.png) | ![snow](docs/examples/snow_3.png) |
 
-| Night IR | AC flicker | Cast shadows | Housing occluders |
+| Night IR | Night rain | AC flicker | Cast shadows |
 | --- | --- | --- | --- |
-| ![night ir](docs/examples/night_ir_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![cast shadows](docs/examples/cast_shadows_3.png) | ![housing occluders](docs/examples/housing_occluders_3.png) |
+| ![night ir](docs/examples/night_ir_3.png) | ![night rain](docs/examples/night_rain_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![cast shadows](docs/examples/cast_shadows_3.png) |
+
+`night_rain` is rendered over an IR night frame rather than the daylit base
+scene, because its streaks are lit by the camera: on a sunny road they would
+be as invisible as `RandomRain`'s, which is the finding the transform exists
+to answer.
 
 ---
 

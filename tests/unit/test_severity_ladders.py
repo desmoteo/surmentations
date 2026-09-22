@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -111,6 +112,11 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
         depth_provider=_provider(), p=1.0, accumulation_probability=1.0, **k
     ),
     "NightIrMode": lambda k: NightIrMode(depth_provider=_provider(), p=1.0, **k),
+    # Needs no depth: the drops are lit by the camera, not the scene. Measured
+    # on the daylit reference like everything else here — its streaks add
+    # light whatever the background, so the ladder is meaningful even though
+    # the effect only *looks* right over a night frame.
+    "NightRain": lambda k: NightRain(p=1.0, **k),
     "CastShadows": lambda k: CastShadows(depth_provider=_provider(), p=1.0, **k),
 }
 

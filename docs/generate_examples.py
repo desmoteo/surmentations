@@ -34,6 +34,7 @@ import numpy as np
 from tqdm import tqdm
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -67,6 +68,7 @@ EFFECTS: dict[str, str] = {
     "housing_occluders": "HousingOccluders",
     "cast_shadows": "CastShadows",
     "night_ir": "NightIrMode",
+    "night_rain": "NightRain",
     "ac_flicker": "AcFlicker",
     "rolling_shutter": "RollingShutter",
     "exposure_transient": "ExposureTransient",
@@ -285,6 +287,8 @@ def _build(
         return RandomFog(depth_provider=provider, **kwargs)
     if name == "rain":
         return RandomRain(depth_provider=provider, **kwargs)
+    if name == "night_rain":
+        return NightRain(**kwargs)
     if name == "housing_occluders":
         return HousingOccluders(**kwargs)
     if name == "cast_shadows":
@@ -311,6 +315,15 @@ def _build(
 
 # How many draws to take per gallery cell before choosing one to show.
 _GALLERY_DRAWS = 7
+
+
+def _night_base(
+    scene: np.ndarray, provider: SharedDepthProvider, level: int
+) -> np.ndarray:
+    """The scene as an IR camera sees it, for the effects that presuppose night."""
+    night = NightIrMode(depth_provider=provider, p=1.0, **SEVERITY[level]["NightIrMode"])
+    night.set_random_seed(11)
+    return night(image=scene)["image"]
 
 
 def _render_representative(
@@ -364,7 +377,13 @@ def main() -> None:
     for name in tqdm(names, total=len(names), desc="effects"):
         for index, level in enumerate(LEVELS):
             transform = _build(name, level, index, rng, depth_provider)
-            out = _render_representative(transform, scene, rng)
+            # NightRain is the one effect that needs its input already dark.
+            # Its streaks are lit by the camera rather than the sky, so on a
+            # daylit frame they are as invisible as RandomRain's -- which is
+            # the finding the transform exists to answer. Showing it over a
+            # sunny road would illustrate the opposite of what it does.
+            base = _night_base(scene, depth_provider, level) if name == "night_rain" else scene
+            out = _render_representative(transform, base, rng)
             cv2.imwrite(
                 str(OUT_DIR / f"{name}_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
             )

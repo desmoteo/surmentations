@@ -18,7 +18,7 @@ from weathermentations.diagnostics import recording
 from weathermentations.presets import surveillance, surveillance_lite, weather_state
 from weathermentations.presets.pipeline import stage_of
 
-WEATHER = {"RandomRain", "RandomSnow", "RandomFog"}
+WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain"}
 DIRECT_SUN = {"SunFlare", "CastShadows"}
 SAMPLES = 700
 
@@ -139,4 +139,25 @@ def test_effects_per_frame_is_not_all_or_nothing() -> None:
     assert heavy < 0.015, (
         f"{heavy:.1%} of frames stacked 8+ effects; expected well under 1%. "
         f"Histogram: {np.bincount(counts).tolist()}"
+    )
+
+
+def test_night_rain_replaces_daylight_rain_under_infrared() -> None:
+    """At night the rain is lit by the camera, so it is a different transform
+    in a different place in the chain.
+
+    `NightRain` follows the reflectance-to-infrared conversion because its
+    streaks are already in infrared terms; `RandomRain` precedes the sensor
+    because its streaks take the sky's radiance. A frame must get one or the
+    other, never both, and the night one only ever alongside `NightIrMode`.
+    """
+    drawn = _draws(surveillance(SharedDepthProvider(_GroundPlane()), rain=0.12), samples=900)
+    night_rain = [s for s in drawn if "NightRain" in s]
+    assert night_rain, "NightRain never fired; the IR-night branch is not wired up"
+    assert all("NightIrMode" in s for s in night_rain), (
+        "NightRain fired on a frame with no infrared conversion, which is the "
+        "one condition that makes it physically meaningful"
+    )
+    assert not any("RandomRain" in s for s in night_rain), (
+        "a frame got both the daylight and the illuminated rain model"
     )

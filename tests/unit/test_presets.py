@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -24,6 +25,9 @@ from weathermentations.scene import CastShadows
 
 _DEPTH_FREE = {
     "WaterDroplets": WaterDroplets,
+    # Lit by the camera's own illuminator rather than by the scene, so unlike
+    # every other atmospheric effect here it needs no depth.
+    "NightRain": NightRain,
     "DirtSoil": DirtSoil,
     "SunFlare": SunFlare,
     "HousingOccluders": HousingOccluders,

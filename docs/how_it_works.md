@@ -362,7 +362,7 @@ flowchart LR
     OPT --> SENS["sensor"]
     SENS --> ISP["ISP"]
     ISP --> CODEC["codec"]
-    SENS -.-> S1["NightIrMode, AcFlicker, RollingShutter"]
+    SENS -.-> S1["NightIrMode, NightRain, AcFlicker, RollingShutter"]
     ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts"]
     CODEC -.-> S3["VideoCodecArtifacts"]
 ```
@@ -405,6 +405,36 @@ gradient, and the eye discounts those as an exposure difference however deep
 they are. Readout time therefore matters more than depth: a rolling shutter
 reads out over roughly its frame period, so 25-30 fps gives 33-40 ms and a
 bandwidth-limited 17 fps stream gives 60 ms, for 2-7 bands rather than 1-3.
+
+### Night rain: the same drop, lit by the camera
+
+```mermaid
+flowchart TD
+    RATE["rain rate"] --> POP["drops in the beam"]
+    LAMP["illuminator"] --> IRR["irradiance falls as inverse square"]
+    IRR --> BRIGHT["drop radiance: near saturates, far vanishes"]
+    POP --> STREAK["streak, alpha = w squared over L, as in daylight"]
+    BRIGHT --> STREAK
+    STREAK --> ADD["added, not composited over"]
+    IRR --> BACK["backscatter from the unresolved drops"]
+    BACK --> ADD
+    ADD --> OUT["frame"]
+```
+
+A daylight streak takes the sky's radiance, so it lifts the pixels it crosses
+by about 8 sRGB levels against 17 levels of asphalt texture — half a sigma
+into the background, which is why `RandomRain` reads as haze rather than as
+streaks. Nothing about the drop is wrong; its illumination is.
+
+`NightRain` changes only that. The lamp lights the drop rather than the sky,
+so brightness falls as inverse-square distance *from the camera*, and the
+scene behind it is dark — both sides of the contrast move at once. It adds
+rather than occludes, because a drop scattering the lamp's light back is not
+hiding anything behind it. And it sorts **after** `NightIrMode`, because its
+streaks are already in infrared terms.
+
+See [`rain_visibility.md`](rain_visibility.md) for the measurements behind
+all of that.
 
 ### Night IR
 

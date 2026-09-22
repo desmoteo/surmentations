@@ -109,12 +109,12 @@ flowchart TD
     START([frame]) --> LIGHT{"lighting state<br/>(exclusive)"}
     LIGHT -->|55%| DAY["day<br/>CastShadows p=0.30<br/>SunFlare p=0.12"]
     LIGHT -->|15%| LIT["lit night<br/>ExposureTransient -1 to -2.6 stops,<br/>warm cast"]
-    LIGHT -->|30%| IR["IR night<br/>NightIrMode"]
+    LIGHT -->|30%| IR["IR night<br/>NightIrMode<br/>(rain becomes NightRain, after it)"]
     DAY --> W{"weather state<br/>(exclusive)"}
     LIT --> W
     IR --> W
     W -->|88%| CLEAR["clear<br/>droplets p=0.06<br/>dew, residual, spray"]
-    W -->|6%| RAIN["rain<br/>droplets p=0.35"]
+    W -->|6%| RAIN["rain<br/>RandomRain by day,<br/>NightRain under IR<br/>droplets p=0.35"]
     W -->|3%| SNOW["snow<br/>droplets p=0.10"]
     W -->|3%| FOG["fog<br/>droplets p=0.30"]
     CLEAR --> TAIL
@@ -341,6 +341,26 @@ under-represent how often a real camera applies those three.
 | `DirtSoil` `p` | 0.25 | How much of your fleet is overdue for cleaning. Rises steeply with maintenance interval. |
 | `RollingShutter` `p` | 0.50 | Not "how many cameras have a rolling shutter" (all of them) but how often there is enough motion — wind, a passing vehicle — for the artefact to show. |
 
+### Rain at night is a different transform
+
+The IR-night branch does not reuse the weather state the other two share, and
+the reason is ordering rather than taste. Rain lit by the camera's own
+illuminator has to follow the reflectance-to-infrared conversion — its
+streaks are *already* in infrared terms, so running them through that
+conversion would apply it twice. Snow and fog still precede it: they veil the
+scene, and the sensor then sees the veiled scene.
+
+So that branch builds its own four-way weather choice with the shared tail
+duplicated across the arms. That costs four sets of constructed objects and
+no runtime, and it keeps the exclusivity structural: a frame still gets
+exactly one weather state, and `NightRain` can only fire on the arm that
+chose rain. Measured over 2000 frames at `rain=0.10`: `NightRain` fires on
+3.3% (against `ir_night` 0.30 × `rain` 0.10 = 3%), always alongside
+`NightIrMode`, never alongside `RandomRain`.
+
+This matters more than it sounds, because it is the only configuration in
+which the rain is actually visible as rain — see below.
+
 ## Why rain looks like haze and not like streaks
 
 Worth knowing before concluding the rain is broken, because it is the most
@@ -382,8 +402,15 @@ frame's high-frequency detail rather than 24%. `wet_fog` also came down from
 0.30 to 0.18: rain splashing onto an exposed dome is the commonest source of
 water on glass, while fog has to condense on glass colder than the air.
 
-**Snow is different and is visible**, roughly 180 flakes at severity 2 on a
-512 px frame. If it appears to be missing, check whether you are looking at a
+**At night it is visible**, and that is what `NightRain` is for. Lit by the
+camera instead of the sky, a drop at 0.4 m returns a hundred times what one
+at 4 m does and saturates, while the scene behind it is dark — both sides of
+the contrast move at once. Same drop physics, same `α = w²/L`; only the
+illumination changed. [`rain_visibility.md`](rain_visibility.md) has the
+measurements.
+
+**Snow is different and is visible even by day**, roughly 180 flakes at
+severity 2 on a 512 px frame. If it appears to be missing, check whether you are looking at a
 downscaled image: a flake and a streak are both about a pixel across, so any
 2:1 area averaging removes them entirely. `scripts/benchmark_pipelines.py`
 writes its contact sheets at native resolution for exactly this reason — an
