@@ -28,6 +28,7 @@ from typing import Any
 import albumentations as A
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -223,6 +224,79 @@ def weather_state(
     )
 
 
+def _infrared_night(
+    depth_provider: SharedDepthProvider,
+    *,
+    severity: int,
+    weather_severity: int,
+    tail: dict[str, float],
+    rain: float = 0.06,
+    snow: float = 0.03,
+    fog: float = 0.03,
+    wet_rain: float = 0.35,
+    wet_snow: float = 0.10,
+    wet_fog: float = 0.18,
+    wet_clear: float = 0.06,
+) -> A.OneOf:
+    """The IR-night branch, where rain is a different transform.
+
+    Everywhere else the weather is chosen once and applied before the sensor.
+    Here it cannot be, because rain lit by the camera's own illuminator has to
+    follow the reflectance-to-infrared conversion rather than precede it — the
+    streaks are already in infrared terms. Snow and fog still go before it:
+    they veil the *scene*, and the sensor then sees the veiled scene.
+
+    So this duplicates the shared tail across the four weather states rather
+    than sharing one copy. That costs four sets of constructed objects and no
+    runtime, and it keeps the exclusivity structural: a frame still gets
+    exactly one weather state, and `NightRain` can only fire on the arm that
+    chose rain.
+    """
+    ir = _at(NightIrMode, "NightIrMode", 1.0, severity, depth_provider=depth_provider)
+
+    def _with(*before: Any) -> list[Any]:
+        return [*before, *_stream(lit_by_mains=True, severity=severity, **tail)]
+    return A.OneOf(
+        [
+            A.Sequential(
+                _with(
+                    ir,
+                    _at(NightRain, "NightRain", 1.0, weather_severity),
+                    _at(WaterDroplets, "WaterDroplets", wet_rain, severity),
+                ),
+                p=rain,
+            ),
+            A.Sequential(
+                _with(
+                    _at(
+                        RandomSnow, "RandomSnow", 1.0, weather_severity,
+                        depth_provider=depth_provider,
+                    ),
+                    ir,
+                    _at(WaterDroplets, "WaterDroplets", wet_snow, severity),
+                ),
+                p=snow,
+            ),
+            A.Sequential(
+                _with(
+                    _at(
+                        RandomFog, "RandomFog", 1.0, weather_severity,
+                        depth_provider=depth_provider,
+                    ),
+                    ir,
+                    _at(WaterDroplets, "WaterDroplets", wet_fog, severity),
+                ),
+                p=fog,
+            ),
+            A.Sequential(
+                _with(ir, _at(WaterDroplets, "WaterDroplets", wet_clear, severity)),
+                p=max(1.0 - rain - snow - fog, 1e-6),
+            ),
+        ],
+        p=1.0,
+    )
+
+
 def surveillance(
     depth_provider: SharedDepthProvider,
     *,
@@ -331,21 +405,17 @@ def surveillance(
                     ),
                     A.Sequential(
                         [
-                            weather_state(
+                            # Rain at night is a different transform and a
+                            # different place in the chain, so this branch
+                            # builds its own weather state rather than
+                            # reusing `weather_state`. See `_infrared_night`.
+                            _infrared_night(
                                 depth_provider,
-                                severity=weather_severity,
-                                droplet_severity=severity,
+                                severity=severity,
+                                weather_severity=weather_severity,
+                                tail=tail,
                                 **weather,
                             ),
-                            # p=1.0 because the branch *is* the IR state, and
-                            # its weight is what says how often that occurs. A
-                            # camera that has cut to monochrome has done so
-                            # completely; there is no 30% of an IR frame.
-                            _at(
-                                NightIrMode, "NightIrMode", 1.0, severity,
-                                depth_provider=depth_provider,
-                            ),
-                            *_stream(lit_by_mains=True, severity=severity, **tail),
                         ],
                         p=ir_night,
                     ),

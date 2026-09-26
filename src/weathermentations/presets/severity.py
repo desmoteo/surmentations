@@ -157,6 +157,24 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "edge_threshold_range": (_lerp(18.0, 35.0, t), _lerp(40.0, 90.0, t)),
                 "chroma_blur_range": (_lerp(0.005, 0.008, t), _lerp(0.014, 0.035, t)),
             },
+            "NightRain": {
+                # Rate drives the count, and the illuminator gain drives how
+                # hard the lamp lights each drop. Both move with severity
+                # because heavier rain in a stronger beam is the same axis:
+                # a downpour under a bright illuminator is the case that
+                # whites out an IR camera.
+                "rain_rate_range_mm_h": (
+                    _lerp(MIN_RAIN_RATE_MM_H, 55.0, t),
+                    _lerp(12.0, 110.0, t),
+                ),
+                "illuminator_gain_range": (_lerp(1.2, 3.5, t), _lerp(3.0, 8.0, t)),
+                # The wall of light from the drops the beam lights but cannot
+                # resolve. Kept well below the streaks at low severity: it
+                # destroys contrast rather than adding texture, so it should
+                # arrive as the rain gets genuinely bad rather than tinting
+                # every night frame.
+                "backscatter_range": (_lerp(0.01, 0.10, t), _lerp(0.06, 0.30, t)),
+            },
             "NightIrMode": {
                 # Severity is how little light there is to work with: a
                 # shorter illuminator reach and more gain, hence more noise.
