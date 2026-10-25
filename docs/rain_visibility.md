@@ -189,6 +189,15 @@ figures are taken from papers quoting them, not from the originals.
   calibrated to a city road 900 m deep, severity-3 rain used to hide
   everything beyond two hundred metres; it now greys the skyline.
 
+**The severity ladder was re-pitched to match.** With the veil at its true
+strength, level 3 (28-54 mm/h) left a 3-50 m frame close to clean. Rates now
+run from 2-12 mm/h at level 1 to 80-150 mm/h at level 5, and the ground
+carries the ladder with them: `wetness_probability` rises from 0.45 to 0.95
+and `wetness_darkening_range` from damp (0.75-0.9) to soaked (0.4-0.6). The
+mirror on wet ground now follows the darkening, so light rain darkens a road
+without turning it into one. Mean change on the reference photograph, levels
+1 to 5: 5.8, 12.3, 16.3, 19.3 and 24.3 levels.
+
 A note on snow, which was checked against the same error and not changed:
 `V = 0.6/R` km could not be confirmed against Rasmussen et al. directly, and
 their own data scatter by a factor of 3 to 10 between storms. The old

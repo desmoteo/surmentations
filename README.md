@@ -200,7 +200,7 @@ because a pipeline stacks two or three effects and per-effect severity
 compounds — level 2 on each of three effects is not an ordinary frame. It matters more than
 it sounds: without it the transforms run on their own constructor defaults,
 which span the whole physically plausible range — `RandomRain` reaches
-200 mm/h, a tropical cloudburst, where severity 1 is 2-8 mm/h. Those wide
+200 mm/h, a tropical cloudburst, where severity 1 is 2-12 mm/h. Those wide
 defaults are right for exploring one transform and wrong for stacking three.
 
 Measured at 512 px: `surveillance` 124 ms median, `surveillance_lite` 78 ms

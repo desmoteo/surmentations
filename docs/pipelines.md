@@ -25,7 +25,7 @@ why the numbers are what they are, so you can change them deliberately.
 > the first thing to change if the output looks too heavy. Omitting it is not
 > neutral: the transforms then run on their own constructor defaults, which
 > span the whole physically plausible range, so `RandomRain` reaches 200 mm/h
-> — a tropical cloudburst — where severity 1 is 2-8 mm/h. Those wide defaults
+> — a tropical cloudburst — where severity 1 is 2-12 mm/h. Those wide defaults
 > exist so one transform can explore its parameter space; they are the wrong
 > thing for a pipeline that stacks three or four effects at once — and it
 > compounds, so level 2 on each of three effects is not an ordinary frame but

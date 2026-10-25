@@ -114,11 +114,25 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 # or every image at a given severity gets identical rain.
                 # Floor stays at RandomRain's own validated minimum, so level
                 # 1 is "light rain" rather than drizzle.
+                #
+                # The ladder was re-pitched when the distance veil was
+                # corrected to Atlas's relation. The veil had been eight
+                # times too strong and was most of what made daylight rain
+                # visible; without it, 28-54 mm/h at level 3 left a frame
+                # close to clean. What shows rain by day is the ground, so
+                # the ground now carries the ladder with the rate: usually
+                # dry or barely damp at level 1, soaked and mirror-bright
+                # toward the horizon at level 5, where the rate reaches a
+                # cloudburst.
                 "rain_rate_range_mm_h": (
-                    _lerp(MIN_RAIN_RATE_MM_H, 55.0, t),
-                    _lerp(8.0, 100.0, t),
+                    _lerp(MIN_RAIN_RATE_MM_H, 80.0, t),
+                    _lerp(12.0, 150.0, t),
                 ),
-                "wetness_probability": _lerp(0.15, 0.9, t),
+                "wetness_probability": _lerp(0.45, 0.95, t),
+                # Wet ground's albedo relative to dry: 0.9 is damp, 0.5
+                # soaked. The mirror follows from it, so light rain darkens
+                # a road without turning it into one.
+                "wetness_darkening_range": (_lerp(0.75, 0.4, t), _lerp(0.9, 0.6, t)),
             },
             "RandomSnow": {
                 # Water-equivalent rate: a few tenths of a mm/h is a light
