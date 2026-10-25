@@ -357,8 +357,24 @@ def width_cut_for_budget(
 def rain_extinction_coefficient(rain_rate_mm_h: float) -> float:
     """Extinction coefficient (1/m) of a rain-filled atmosphere.
 
-    From the standard visibility-in-rain relation ``V = 1.9 R^-0.63`` km,
-    with Koschmieder's ``beta = 3.912 / V``.
+    Atlas (1953, "Optical extinction by rainfall"): ``sigma = 0.25 R^0.63``
+    per kilometre for ordinary (Bergeron-process) rain, the fit behind his
+    visibility relation ``V = 11.6 R^-0.63`` km. At 40 mm/h that is 2.5 per
+    km: a meteorological optical range, at the 2% contrast this library
+    uses, of 1.5 km.
+
+    Two independent routes land in the same place. Carbonneau's fit for
+    optical links, 1.076 R^0.67 dB/km, is 0.248 R^0.67 per km. And summing
+    geometric cross-sections over the Marshall-Palmer distribution this
+    library samples its drops from gives ``pi N0 / Lambda^3``, 3.7 per km at
+    40 mm/h, which is an upper bound: it counts the light diffracted forward
+    into the lens as lost.
+
+    This replaces ``V = 1.9 R^-0.63`` km, described here as the standard
+    relation, which it is not: it is 8.2 times Atlas's extinction at every
+    rate, and put visibility in 40 mm/h rain at 186 m. Against the default
+    3-50 m depth range that passed for a heavy veil. Against real distances
+    it hid everything beyond a couple of hundred metres.
 
     This is what ties the veil to the streaks. The two layers are not
     independent effects: the veil *is* the drops too small to resolve as
@@ -366,7 +382,7 @@ def rain_extinction_coefficient(rain_rate_mm_h: float) -> float:
     the rain rate allows a frame with a downpour's haze and a drizzle's
     streaks. Deriving it means one physical knob controls both.
     """
-    return float(3.912 / 1.9e3 * max(rain_rate_mm_h, 1e-3) ** 0.63)
+    return float(0.25e-3 * max(rain_rate_mm_h, 1e-3) ** 0.63)
 
 
 def snow_extinction_coefficient(snowfall_rate_mm_h: float) -> float:
@@ -375,12 +391,18 @@ def snow_extinction_coefficient(snowfall_rate_mm_h: float) -> float:
     From ``V = 0.6 / R`` km for dry snow (Rasmussen et al.), again with
     ``beta = 3.912 / V``.
 
-    Worth noting as a consistency check on both relations: at equal
-    precipitation rate this gives roughly **6x** rain's extinction, matching
-    the independently-reported figure that snow scatters about 7x as hard as
-    rain. That is why a snowfall which would be unremarkable as rain drops
-    visibility so sharply, and why the veil — not the flakes — is the
-    strongest cue that it is snowing.
+    At equal liquid-equivalent rate this is some thirty times rain's
+    extinction — 26x at 1 mm/h, 37x at 2.5 mm/h — because the same water is
+    spread over flakes with far more cross-section than drops. That is why a
+    snowfall which would be unremarkable as rain drops visibility so
+    sharply, and why the veil — not the flakes — is the strongest cue that
+    it is snowing.
+
+    Treat the constant as an order of magnitude. Rasmussen et al. report
+    visibility varying by a factor of 3 to 10 between storms at one rate,
+    with crystal type and riming. (An earlier note here offered a 6x ratio
+    to rain as a check on both relations. It only held because the rain
+    figure was eight times too large.)
     """
     return float(3.912 / 0.6e3 * max(snowfall_rate_mm_h, 1e-3))
 

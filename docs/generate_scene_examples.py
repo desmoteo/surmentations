@@ -89,7 +89,9 @@ DAYLIGHT_WEATHER = ("fog", "rain", "snow")
 # Meteorological visibility, as a multiple of the scene's farthest distance.
 # Fog is set to it outright. For rain and snow it is a floor: their veils
 # follow from the precipitation rate and are left alone unless that would
-# hide the far end of the scene altogether.
+# hide the far end of the scene altogether. Severity-3 rain is visible to
+# about 1.5 km and snow to about 110 m, so the floor binds on rain only in
+# the two landscapes and on snow nearly everywhere.
 FOG_VISIBILITY = 0.6
 RAIN_VISIBILITY_FLOOR = 1.5
 SNOW_VISIBILITY_FLOOR = 1.0

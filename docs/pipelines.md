@@ -420,8 +420,9 @@ What actually says "rain" in a daylit frame is the **wet road** and water on
 the glass, which is why this pipeline raises `wetness_probability` to 0.85
 inside the rain branch rather than leaving it at the severity preset's value.
 Streaks become visible against dark backgrounds — night, dark buildings,
-shadowed foliage — so they carry the effect at night and the veil and the wet
-road carry it by day. Both are correct; only one is photogenic.
+shadowed foliage — so they carry the effect at night and the wet road
+carries it by day, with a distance veil only in views a kilometre or more
+deep. Both are correct; only one is photogenic.
 
 ### Droplets follow the camera chain's severity, not the weather's
 

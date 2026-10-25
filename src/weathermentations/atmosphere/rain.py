@@ -288,7 +288,7 @@ class RandomRain(WeatherTransform):
             individually — they are what the veil represents.
         veil_beta_range: extinction coefficient for the distant rain veil.
             ``None`` (the default) derives it from ``rain_rate_mm_h`` via the
-            standard visibility-in-rain relation, which is the physically
+            Atlas (1953) visibility-in-rain relation, which is the physically
             consistent choice: the veil *is* the drops too small to draw
             individually, so setting it independently permits a frame with a
             downpour's haze and a drizzle's streaks. Pass an explicit range
