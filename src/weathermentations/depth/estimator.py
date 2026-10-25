@@ -13,7 +13,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import numpy as np
-import torch
 
 _NO_CUDA_MESSAGE = (
     "{cls} requires a CUDA GPU: depth-conditioned effects (fog/rain/snow) run "
@@ -75,6 +74,12 @@ class DepthAnythingV2Estimator(DepthEstimator):
         device: str = "cuda",
         disparity_offset: float = 0.03,
     ) -> None:
+        # Imported here, like transformers below. Every transform's base class
+        # imports this package for the depth provider, so a module-level
+        # import would make the lens and camera effects — which need no depth
+        # model at all — require torch just to be imported.
+        import torch
+
         if not torch.cuda.is_available():
             raise RuntimeError(_NO_CUDA_MESSAGE.format(cls=type(self).__name__))
         if disparity_offset <= 0:
@@ -91,19 +96,29 @@ class DepthAnythingV2Estimator(DepthEstimator):
             AutoModelForDepthEstimation.from_pretrained(model_name).to(self.device).eval()
         )
 
-    @torch.inference_mode()
     def estimate(self, image: np.ndarray) -> np.ndarray:
-        height, width = image.shape[:2]
-        inputs = self._processor(images=image, return_tensors="pt").to(self.device)
-        raw_disparity = self._model(**inputs).predicted_depth  # (1, h', w'), larger = closer
+        import torch
 
-        resized = torch.nn.functional.interpolate(
-            raw_disparity.unsqueeze(1),
-            size=(height, width),
-            mode="bicubic",
-            align_corners=False,
-        )
-        disparity = resized.squeeze().float().cpu().numpy()
+        height, width = image.shape[:2]
+        if image.dtype != np.uint8:
+            # The image processor rescales by 1/255 on the assumption that it
+            # was given 8-bit data. A float image in [0, 1] comes out of that
+            # at ~0.002 everywhere, and the network is asked for the depth of
+            # a black frame.
+            image = np.clip(np.rint(image.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
+        with torch.inference_mode():
+            inputs = self._processor(images=image, return_tensors="pt").to(self.device)
+            raw_disparity = self._model(**inputs).predicted_depth  # (1, h', w'), larger = closer
+
+            resized = torch.nn.functional.interpolate(
+                raw_disparity.unsqueeze(1),
+                size=(height, width),
+                mode="bicubic",
+                align_corners=False,
+            )
+            # reshape, not squeeze: squeeze would also drop a height or width
+            # of one and return the wrong rank for a single-row image.
+            disparity = resized.reshape(height, width).float().cpu().numpy()
 
         d_min, d_max = float(disparity.min()), float(disparity.max())
         if d_max - d_min < 1e-6:

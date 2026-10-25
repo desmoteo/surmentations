@@ -835,6 +835,36 @@ class WaterDroplets(WeatherTransform):
         if not droplets:
             return img
 
+        if img.dtype == np.uint8:
+            return self._render(
+                img, droplets, condensation, scene_compression, background_blur,
+                droplet_defocus, milkiness, condensation_blur,
+            )
+        # The renderer's shading constants (the specular highlight, the dark
+        # contact ring, the milky veil) are 8-bit code values, so a float
+        # image is rendered on that scale and brought back. Applied to [0, 1]
+        # data directly they were 255 times too strong: a float frame came
+        # back with highlights at 124.0 against a full scale of 1.0.
+        rendered = self._render(
+            img.astype(np.float32) * 255.0, droplets, condensation, scene_compression,
+            background_blur, droplet_defocus, milkiness, condensation_blur,
+        )
+        return np.clip(rendered / 255.0, 0.0, 1.0).astype(img.dtype)
+
+    def _render(
+        self,
+        img: np.ndarray,
+        droplets: list[
+            tuple[float, float, float, float, float, float, tuple[float, float], bool]
+        ],
+        condensation: np.ndarray,
+        scene_compression: float,
+        background_blur: float,
+        droplet_defocus: float,
+        milkiness: float,
+        condensation_blur: float,
+    ) -> np.ndarray:
+        """Render onto ``img``, whose values are on the 0-255 scale in any dtype."""
         height, width = img.shape[:2]
 
         # The camera is focused on the glass, so the scene behind the droplets

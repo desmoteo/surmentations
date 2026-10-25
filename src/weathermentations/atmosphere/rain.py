@@ -65,10 +65,9 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations.base import WeatherTransform, require_depth_provider
+from weathermentations.base import WeatherTransform, require_depth_provider, scene_of
 from weathermentations.depth.normals import horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.depth.scale import to_pseudo_metric
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import illuminant_radiance_linear, sky_radiance_linear
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -393,12 +392,11 @@ class RandomRain(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
-        image = data["image"]
+        scene = scene_of(data)
         height, width = params["shape"][:2]
         rng = self.random_generator
 
-        relative_depth = self.depth_provider.get_depth(image)
-        depth_pm = to_pseudo_metric(relative_depth, None)
+        depth_pm = self.depth_provider.get_metric_depth(scene)
 
         # Every physical quantity is drawn per call. A scalar here would make
         # a whole dataset share one rain rate, one camera geometry and one
