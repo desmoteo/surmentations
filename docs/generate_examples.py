@@ -35,6 +35,7 @@ from tqdm import tqdm
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_rain import NightRain
+from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -75,6 +76,10 @@ EFFECTS: dict[str, str] = {
     "wdr_tone_mapping": "WdrToneMapping",
     "denoise_artifacts": "TemporalDenoiseArtifacts",
     "video_codec": "VideoCodecArtifacts",
+    # Appended, not filed beside night_rain: every effect draws from one
+    # generator in this order, so inserting an entry re-rolls the published
+    # image of everything after it.
+    "night_snow": "NightSnow",
 }
 
 # Needs the ffmpeg binary; skipped with a warning rather than crashing the run.
@@ -289,6 +294,8 @@ def _build(
         return RandomRain(depth_provider=provider, **kwargs)
     if name == "night_rain":
         return NightRain(**kwargs)
+    if name == "night_snow":
+        return NightSnow(**kwargs)
     if name == "housing_occluders":
         return HousingOccluders(**kwargs)
     if name == "cast_shadows":
@@ -377,12 +384,13 @@ def main() -> None:
     for name in tqdm(names, total=len(names), desc="effects"):
         for index, level in enumerate(LEVELS):
             transform = _build(name, level, index, rng, depth_provider)
-            # NightRain is the one effect that needs its input already dark.
-            # Its streaks are lit by the camera rather than the sky, so on a
+            # NightRain and NightSnow need their input already dark. Their
+            # particles are lit by the camera rather than the sky, so on a
             # daylit frame they are as invisible as RandomRain's -- which is
-            # the finding the transform exists to answer. Showing it over a
-            # sunny road would illustrate the opposite of what it does.
-            base = _night_base(scene, depth_provider, level) if name == "night_rain" else scene
+            # the finding the transforms exist to answer. Showing them over a
+            # sunny road would illustrate the opposite of what they do.
+            lamp_lit = name in ("night_rain", "night_snow")
+            base = _night_base(scene, depth_provider, level) if lamp_lit else scene
             out = _render_representative(transform, base, rng)
             cv2.imwrite(
                 str(OUT_DIR / f"{name}_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)

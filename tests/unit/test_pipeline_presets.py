@@ -18,7 +18,20 @@ from weathermentations.diagnostics import recording
 from weathermentations.presets import surveillance, surveillance_lite, weather_state
 from weathermentations.presets.pipeline import stage_of
 
-WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain"}
+WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain", "NightSnow"}
+# Which transforms render each weather state. Snow at night is two of them by
+# design — the veil and settled snow before the infrared conversion, the
+# lamp-lit flakes after it — so exclusivity is a property of states, not of
+# transforms.
+STATES = {
+    "rain": {"RandomRain", "NightRain"},
+    "snow": {"RandomSnow", "NightSnow"},
+    "fog": {"RandomFog"},
+}
+
+
+def _states(fired: set[str]) -> set[str]:
+    return {state for state, transforms in STATES.items() if fired & transforms}
 DIRECT_SUN = {"SunFlare", "CastShadows"}
 SAMPLES = 700
 
@@ -56,7 +69,7 @@ def full() -> list[set[str]]:
 
 
 def test_one_weather_state_at_most(full: list[set[str]]) -> None:
-    assert not [s for s in full if len(s & WEATHER) > 1]
+    assert not [s for s in full if len(_states(s)) > 1]
 
 
 def test_infrared_night_never_carries_sunlight(full: list[set[str]]) -> None:
@@ -104,7 +117,7 @@ def test_pipelines_are_in_physical_order() -> None:
     from weathermentations.presets.pipelines import _stream
 
     tail = _stream(
-        lit_by_mains=False, dirt=0.2, occluders=0.1, codec=0.1, severity=2
+        lit_by_mains=False, infrared=False, dirt=0.2, occluders=0.1, codec=0.1, severity=2
     )
     stages = [stage_of(t) for t in tail]
     assert stages == sorted(stages), stages
@@ -185,3 +198,41 @@ def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
     # construction, rather than silently training without it.
     with pytest.raises(RuntimeError, match="ffmpeg"):
         surveillance_lite(codec=0.2)
+
+
+def test_occluders_glow_only_under_the_infrared_ring() -> None:
+    """An insect on the dome is a silhouette by day and glows at night, and
+    which one is decided by whether the camera's illuminator is on — not by a
+    draw. The transform's default spans both, so left alone the pipelines put
+    glowing shapes on daylit frames."""
+    transform = surveillance(SharedDepthProvider(_GroundPlane()), occluders=0.6, codec=0.0)
+    transform.set_random_seed(5)
+    image = np.full((96, 96, 3), 120, dtype=np.uint8)
+
+    day, night = [], []
+    for _ in range(400):
+        with recording() as log:
+            transform(image=image)
+        fired = {record["t"]: record for record in log}
+        if "HousingOccluders" in fired:
+            glow = fired["HousingOccluders"]["out"]["glow"]
+            (night if "NightIrMode" in fired else day).append(glow)
+
+    assert len(day) > 20 and len(night) > 20, (len(day), len(night))
+    assert max(day) == 0.0, f"an occluder glowed at {max(day):.2f} with no illuminator"
+    assert min(night) >= 0.6, f"an occluder under the IR ring glowed at only {min(night):.2f}"
+
+
+def test_night_snow_is_lit_by_the_lamp_and_only_under_infrared() -> None:
+    """Snow at night is split: its veil and settled snow belong to the scene
+    and precede the infrared conversion, its falling flakes are lit by the
+    camera and follow it. The two must come together, never on a day frame,
+    and the scene half must not also draw the flakes."""
+    drawn = _draws(surveillance(SharedDepthProvider(_GroundPlane()), snow=0.15), samples=600)
+    night = [s for s in drawn if "NightSnow" in s]
+    assert night, "NightSnow never fired; the IR-night snow arm is not wired up"
+    assert all({"NightIrMode", "RandomSnow"} <= s for s in night)
+    assert not any("NightRain" in s or "RandomRain" in s or "RandomFog" in s for s in night)
+
+    day_snow = [s for s in drawn if "RandomSnow" in s and "NightIrMode" not in s]
+    assert day_snow and not any("NightSnow" in s for s in day_snow)

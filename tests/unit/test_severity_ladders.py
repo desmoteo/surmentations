@@ -32,6 +32,7 @@ import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_rain import NightRain
+from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -117,6 +118,7 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     # light whatever the background, so the ladder is meaningful even though
     # the effect only *looks* right over a night frame.
     "NightRain": lambda k: NightRain(p=1.0, **k),
+    "NightSnow": lambda k: NightSnow(p=1.0, **k),
     "CastShadows": lambda k: CastShadows(depth_provider=_provider(), p=1.0, **k),
 }
 
