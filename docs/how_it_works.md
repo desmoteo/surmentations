@@ -302,27 +302,66 @@ sub-pixel, which means invisible.
 
 ```mermaid
 flowchart LR
-    subgraph inside["inside each droplet"]
-        S["sample at centre minus offset x compression"]
-        S --> INV["inverted, demagnified image of the whole scene"]
-        INV --> SNELL["plus Snell refraction on the spherical cap"]
-    end
-    BG["background"] --> DEFOCUS["defocused: camera focused on the glass"]
-    SNELL --> OUT([composite])
-    DEFOCUS --> OUT
+    LOBES["drops, merged lobes, runners"] --> SURF["one height field over the pane"]
+    SURF --> SNELL["Snell + Fresnel at the water-air surface"]
+    SNELL --> REFR["refracted picture, dark rim where light cannot escape"]
+    REFR --> DISC["aperture disc: blur(alpha x refracted)"]
+    FILM["condensation film"] --> SCAT["scatter the scene's own light: soften, glow, veil"]
+    SCAT --> OUT([composite])
+    DISC --> OUT
 ```
 
-For water at `n = 1.33` the focal distance is `f = nR/(2(n-1))`, about `2R`,
-so the scene — effectively at infinity relative to `R` — is imaged just
-behind the droplet, **inverted and strongly demagnified**. That is why a real
-droplet holds a tiny upside-down picture of the whole scene, not a warped
-copy of what is directly behind it.
+The camera is focused metres away and the water is centimetres from its
+lens. Three things follow, and each replaces something that used to be
+painted on.
 
-Whether a droplet slides follows from physics too: below the capillary
-length, surface tension holds it; above it, gravity and contact-angle
-hysteresis win and it leaves a trail. Droplets never overlap — surface
-tension keeps sessile droplets separate until they coalesce — so positions
-are rejection-sampled with a mandatory gap.
+**Sharpness is the aperture's, not a parameter.** Focused at infinity, a lens
+images any point on the glass as a disc whose diameter *on the glass* equals
+its entrance pupil. A drop is therefore sharp only if it is much wider than
+the aperture: behind the 2.5 mm pupil of a 4 mm f/1.6 lens a 0.6 mm bead is
+spread over seventeen times its own area, and the same bead behind an iris
+stopped to 0.5 mm is nearly crisp. Rays that miss the water still see the
+scene undisturbed, so the image is `(1 - blur(alpha)) * scene +
+blur(alpha * refracted)`: small drops fade into the scene instead of becoming
+blurry pictures.
+
+**All the water is one surface.** Each drop is a lobe of a single height
+field, and lobes that touch merge through a smooth union — a peanut for two
+drops caught mid-coalescence. No large drop is the same shape as another.
+How far one departs from a round cap follows its size against the capillary
+length (2.7 mm): fine beads are round because surface tension makes them so,
+while a large pinned drop keeps the lopsided outline its contact line was
+left with, wider and deeper towards its lower edge. A runner is a head of
+that kind plus whatever it trails, drawn row by row: a blunt slug that has
+just let go, a pear, or a thread that swells into bulges and breaks into
+beads from its far end, with two uneven sides and a centreline that follows
+its track. One remap of the
+frame through the field's slope does the refraction: Snell's law gives the
+deflection, and because a convex surface turns rays towards its own centre
+the picture inside a drop comes out inverted whenever the lens is further
+behind the glass than the drop's focal length, `r / (c (n - 1))`. Past 48.8°
+of surface tilt the ray cannot leave the water at all; that band of total
+internal reflection is the dark outline, and it is wider on a steeper drop.
+
+**Nothing is lit by a light that is not there.** A camera behind the glass
+never sees a specular highlight off the outside of a drop. What it sees as a
+glint is the refracted image of a bright source, so glints are relative to
+the scene's own brightest light and a black frame stays black. The exception
+is the camera's own infrared ring (`illuminator_glow_range`): on, the film
+scatters it back as a veil and each drop returns it from its rim.
+
+Condensation works the same way. Its droplets are far below the aperture
+disc, so it can only scatter, and scattering redistributes the light arriving
+at the glass: a narrow lobe that softens, a mid-range one that puts a glow
+round each lamp, and a wide one that veils. By day that is a milky loss of
+contrast; at night the frame stays dark and the lamps bloom. The film itself
+is one region clearing outward from the warmest point of the glass, not a
+scatter of patches.
+
+Whether a droplet slides still follows from physics: below the capillary
+length, surface tension holds it; above it, gravity beats contact-angle
+hysteresis. A runner's track meanders in short sideways jogs, wipes the film
+off the glass, swallows the drops in its path and leaves a few beads behind.
 
 ### Dirt: scattering, not paint
 

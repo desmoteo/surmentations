@@ -106,7 +106,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 
 | Transform | Models | Needs depth |
 | --- | --- | --- |
-| `WaterDroplets` | Droplets as short-focal-length lenses holding an inverted, demagnified image of the scene; shedding decided by capillary length | no |
+| `WaterDroplets` | Water on the glass of a camera focused far beyond it: every drop a lobe of one refracting surface, so drops merge; large drops individually shaped — lopsided and bottom-heavy when pinned, and as runners anything from a blunt slug to a head trailing a thread that breaks into beads; sharpness set by the lens aperture, not chosen; condensation as scattering of the scene's own light; lit by the infrared ring at night | no |
 | `DirtSoil` | Grime as a *scattering* layer, not paint — energy-conserving, with per-deposit albedos from grey dust through yellow pollen to brown spray | no |
 | `SunFlare` | Veiling glare, halo, coating-tinted ghost chain, diffraction starburst, dispersion corona, plus CCTV-specific dome scratches, smear and IR leak | no |
 | `HousingOccluders` | Insects and webs on the dome — hugely magnified and defocused, silhouetted by day, glowing under the IR ring | no |
@@ -162,7 +162,7 @@ and the physics behind it.
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `min_flake_width_px`, `max_flakes` |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
-| `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `background_blur_range`, `condensation_coverage_range` |
+| `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `aperture_diameter_range_mm` (sets how sharp the water looks), `coalescence_range`, `condensation_coverage_range`, `condensation_milkiness_range`, `illuminator_glow_range` (infrared ring on) |
 | `DirtSoil` | `coverage_range`, `veil_strength_range`, `highlight_boost_range`, `deposits` (which substances), `smudge_count_range` |
 | `SunFlare` | `flare_position`, `intensity_range`, `ghost_count_range`, `aperture_blades_range`, `dispersion_ring_probability`, `scratch_count_range` |
 | `HousingOccluders` | `insect_count_range`, `insect_size_range`, `web_count_range`, `defocus_range`, `glow_range` (0 by day, >0 under the IR ring) |
@@ -288,7 +288,7 @@ python scripts/benchmark.py --no-depth             # CPU-only subset
 | `SunFlare` | 21.4 | 125.5 |
 | `DirtSoil` | 32.8 | 171.8 |
 | `TemporalDenoiseArtifacts` | 38.6 | 237.4 |
-| `WaterDroplets` | 96.3 | 209.4 |
+| `WaterDroplets` | 64.5 | 153.8 |
 | `WdrToneMapping` | 102.9 | 146.2 |
 | `VideoCodecArtifacts` | 170.4 | 251.9 |
 
@@ -438,14 +438,22 @@ full sweep.
 | --- | --- | --- | --- |
 | ![night ir](docs/examples/night_ir_3.png) | ![night rain](docs/examples/night_rain_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![cast shadows](docs/examples/cast_shadows_3.png) |
 
-| Night snow |
-| --- |
-| ![night snow](docs/examples/night_snow_3.png) |
+| Night snow | Wet glass under the infrared ring |
+| --- | --- |
+| ![night snow](docs/examples/night_snow_3.png) | ![night droplets](docs/examples/night_droplets_3.png) |
 
 `night_rain` and `night_snow` are rendered over an IR night frame rather than
 the daylit base scene, because their particles are lit by the camera: on a
 sunny road they would be as invisible as `RandomRain`'s streaks, which is the
-finding the transforms exist to answer.
+finding the transforms exist to answer. `night_droplets` is `WaterDroplets`
+over the same frame with `illuminator_glow_range` set, which is how the
+pipelines build it at night.
+
+The `water_droplets` row alternates a stopped-down iris with an open one
+(0.6, 2.4, 0.9, 2.8 and 0.5 mm). That is the largest single difference
+between two frames of wet glass, and it is a property of the lens, not of the
+weather: behind a 2.5 mm aperture most drops are narrower than the blur disc
+and dissolve into soft patches of lost contrast.
 
 ---
 

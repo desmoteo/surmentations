@@ -74,6 +74,13 @@ Sampling 26.7 ms (**8.5%**), rasterisation 287.7 ms. Same shape as rain.
 
 ### Water droplets — 204 ms at 1024 px
 
+> **Superseded.** The renderer measured here drew each droplet as its own
+> patch. It now builds one height field for all the water and refracts the
+> frame through it in a single remap, which is what A1 and D3 below were
+> reaching for by other means: there is no per-droplet shading or blur left
+> to tabulate or batch. 154 ms at 1024 px and 65 ms at 512 px, with the
+> aperture disc and the film's scatter lobes computed at reduced size.
+
 ~280 droplets rendered per call (the condensation pass contributes most of
 them), each with **2 `GaussianBlur` calls and a `remap`** — 561 blur calls per
 frame. Sampling is negligible.
