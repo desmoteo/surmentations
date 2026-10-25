@@ -45,6 +45,17 @@ genuinely below the scene's own variation.
 the rain: **4.21 → 4.13**. Flat. A longer exposure spreads one drop's light
 further; it does not produce more of it.
 
+**A shorter one does change the picture, though it is the same light.** That
+measurement only went longer. Going the other way, on a 1280 px road scene at
+30 mm/h with a 0.4 mm aperture, the high-frequency energy the rain adds is
+**5.9** at 1/30 s, **7.8** at 1/250 s and **9.7** at 1/2000 s (5.4, 6.7 and
+8.5 behind a 2.5 mm aperture, which defocuses the near drops). A fast shutter
+concentrates each drop's light into a fleck instead of spreading it along a
+streak, and a fleck clears the background's texture where a streak does not.
+Which shutter a camera runs is set by the light and its aperture, so
+`RandomRain` now meters it — `T = K N² / E` — instead of drawing it from
+1/333–1/100 s, where every frame got the same middling streak.
+
 **Rendering more of the column does not help much.** Dropping the
 resolvability cut from 0.40 px to 0.08 px and raising the budget takes the
 drawn count from 1 756 to 60 000 — 34× — for a high-frequency change of

@@ -261,6 +261,17 @@ Reading a drop's scale off the depth map made streaks shrink over distant
 sky and swell over near road, i.e. pasted onto surfaces rather than falling
 through air.
 
+What a streak looks like is the camera's doing more than the weather's, so
+the camera's **exposure is modelled, not drawn**. The light level and the
+aperture are drawn; the shutter time follows from the metering equation,
+`T = K N² / E`, held within what the shutter can run. That gives the
+correlation a real camera has and two independent ranges do not: stopped
+down, a long shutter and long thin streaks a percent opaque; wide open, a
+short one and soft near-opaque flecks. A 2 mm drop is 22 cm of streak at
+1/30 s and 3 mm of travel at 1/2000 s, with the same light deposited either
+way. At night under street lighting the meter pins the shutter at its slow
+end, which is why night rain is always long streaks.
+
 Coverage compounds as `1 - e^-occupancy` because drops crossing one pixel
 during the exposure occlude independently: the fractions of the exposure
 they are *absent* for multiply.
@@ -387,6 +398,17 @@ moment a bright source is near frame.
 It is also not one substance. Deposits carry their own albedos, drawn per
 smudge, spanning hue 30-52 degrees at 1-45% saturation — grey dust through
 yellow pollen to brown road spray.
+
+And it is **lit from everywhere**, not only from where the camera looks. The
+forward peak of the scattering is what smears a lamp across the grime, but
+40% of what a deposit sends the lens comes from wide angles: the whole
+hemisphere in front of the glass, most of which is outside the frame and, by
+day, mostly sky. So the light scattered in is the forward part from the
+scene around the pixel plus the frame's mean radiance times `ambient_light`,
+how much brighter the surroundings are than the view. Without that term a
+patch of grime over asphalt was replaced by a blur of the same asphalt, and
+the effect was close to invisible on a daylit scene. Under the patches sits
+an even `dust_film`, what settles from the air rather than what splashes.
 
 ### Sun flare: a chain of distinct phenomena on one line
 
