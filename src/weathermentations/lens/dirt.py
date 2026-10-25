@@ -26,7 +26,26 @@ what make a dirty lens recognisable:
    Gaussians (cheap, and keeps the heavy tail) and lerp toward it under the
    mask — which washes out local contrast the way real haze on glass does.
 
-3. **It is not one substance, and not one colour.** This is the third thing
+3. **It is lit from everywhere, not only from where the camera looks.** The
+   forward peak of that scattering is what smears a lamp across the grime,
+   but the rest of it is wide-angle: every patch of dirt also sends the lens
+   a share of the light arriving from the whole hemisphere in front of the
+   glass. Most of that hemisphere is outside the frame, and by day most of
+   its light is the sky. A camera angled down at a road therefore has dirt
+   lit by something several times brighter than anything it is looking at,
+   and that is the milky lift a dirty dome shows in daylight. Leaving it out
+   — scattering only what is inside the frame, from close by — is why the
+   earlier model was nearly invisible on a daylit scene: a patch of grime
+   over asphalt was replaced by a blur of the same asphalt.
+
+   So the light scattered in is a mix: the forward part from the scene
+   around the pixel, the wide part from the surroundings as a whole, taken
+   as the frame's mean radiance times ``ambient_light`` — how much brighter
+   the world outside the frame is than the part inside it. At 1 the frame
+   is representative and flat light still shows nothing; it is the sky
+   overhead that raises it.
+
+4. **It is not one substance, and not one colour.** This is the fourth thing
    that decides whether grime reads as real, and the easiest to get wrong.
    A pane collects several deposits at once, each with its own *single-
    scattering albedo* — the fraction of light it returns, per wavelength:
@@ -117,6 +136,11 @@ _WIPE_DEPOSIT = "road_film"
 # Evaporating water leaves behind its dissolved minerals, not whatever else
 # was on the glass.
 _WATER_SPOT_DEPOSIT = "limescale"
+
+# Share of the light a deposit scatters towards the lens that comes from wide
+# angles — the surroundings as a whole — rather than from the forward peak
+# around the pixel's own line of sight.
+_WIDE_ANGLE_SHARE = 0.4
 
 # A caked, opaque crust is the same substance seen in its own shadow rather
 # than lit through: darker than the deposit's albedo, but the same hue.
@@ -230,8 +254,20 @@ class DirtSoil(WeatherTransform):
         water_spot_count_range: number of dried droplet rings.
         water_spot_radius_range: dried droplet radius, as a fraction of the
             image diagonal.
-        coverage_range: fraction of the frame the mask is normalised to
-            cover, roughly. Real lens grime is sparse.
+        coverage_range: fraction of the frame the patches are normalised to
+            cover, roughly.
+        dust_film_range: an even layer of dust over the whole pane, as the
+            fraction of each pixel it veils. Glass left outdoors is rarely
+            clean between its smudges: what settles from the air is a thin
+            uniform film, and it is what takes the contrast out of the whole
+            frame while the patches take it out of parts.
+        ambient_light_range: how bright the surroundings outside the frame
+            are, relative to the frame's own average. Dirt scatters light in
+            from the whole hemisphere in front of the glass, so this decides
+            how much it glows. 1 means the frame is representative — a view
+            that already contains its share of sky, or a night scene. A
+            camera looking down at a road under open sky is lit by something
+            3-5 times brighter than what it sees.
         veil_strength_range: how much of each covered pixel is replaced by
             scattered light. This is the whole effect: contrast loss plus
             smeared highlights, energy-conserving by construction.
@@ -290,6 +326,16 @@ class DirtSoil(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        dust_film_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
+        ambient_light_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 10.0)),
+        ]
         highlight_boost_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -320,6 +366,8 @@ class DirtSoil(WeatherTransform):
         water_spot_count_range: tuple[int, int] = (0, 14),
         water_spot_radius_range: tuple[float, float] = (0.004, 0.022),
         coverage_range: tuple[float, float] = (0.10, 0.32),
+        dust_film_range: tuple[float, float] = (0.0, 0.25),
+        ambient_light_range: tuple[float, float] = (1.0, 3.0),
         highlight_boost_range: tuple[float, float] = (1.5, 5.0),
         veil_strength_range: tuple[float, float] = (0.35, 0.8),
         scatter_radius_range: tuple[float, float] = (0.02, 0.07),
@@ -334,6 +382,8 @@ class DirtSoil(WeatherTransform):
         self.water_spot_count_range = water_spot_count_range
         self.water_spot_radius_range = water_spot_radius_range
         self.coverage_range = coverage_range
+        self.dust_film_range = dust_film_range
+        self.ambient_light_range = ambient_light_range
         self.highlight_boost_range = highlight_boost_range
         self.veil_strength_range = veil_strength_range
         self.scatter_radius_range = scatter_radius_range
@@ -437,9 +487,21 @@ class DirtSoil(WeatherTransform):
         if current > 1e-5:
             mask = np.clip(mask * (target_coverage / current), 0.0, 1.0)
 
+        # The even film under the patches. It is the same dust that makes the
+        # smudges, so it takes the mean of their colours, and where a patch
+        # is thicker than the film the patch's own colour still shows.
+        film = self.py_random.uniform(*self.dust_film_range)
+        if film > 0.0:
+            film_albedo = smudge_albedos.mean(axis=0)
+            weight = (film / np.maximum(mask + film, 1e-6))[..., None]
+            albedo = albedo * (1.0 - weight) + film_albedo * weight
+            mask = 1.0 - (1.0 - mask) * (1.0 - film)
+        record_draw(coverage=target_coverage, dust_film=film)
+
         return {
             "dirt_mask": mask.astype(np.float32),
             "deposit_albedo": albedo.astype(np.float32),
+            "ambient_light": self.py_random.uniform(*self.ambient_light_range),
             "veil_strength": self.py_random.uniform(*self.veil_strength_range),
             "highlight_boost": self.py_random.uniform(*self.highlight_boost_range),
             "scatter_radius": self.py_random.uniform(*self.scatter_radius_range) * diagonal,
@@ -455,6 +517,7 @@ class DirtSoil(WeatherTransform):
         highlight_boost: float,
         scatter_radius: float,
         absorption: float,
+        ambient_light: float = 1.0,
         **params: Any,
     ) -> np.ndarray:
         linear, scale, is_integer = to_linear_unit(img)
@@ -482,7 +545,16 @@ class DirtSoil(WeatherTransform):
         # separately-tuned layers. It also stays energy-conserving: albedo is
         # at most 1, so this can only ever remove light from the scattered
         # term, never manufacture it.
-        scattered = scatter_psf(emphasised, scatter_radius) * deposit_albedo
+        #
+        # What arrives to be scattered is not only the scene around the
+        # pixel. The wide-angle share comes from the whole hemisphere in
+        # front of the glass, most of which is outside the frame; see the
+        # module docstring. With `ambient_light` at 1 and a flat frame the
+        # two are the same light, and the grime shows nothing.
+        surroundings = np.asarray(cv2.mean(linear)[:3], dtype=np.float32) * ambient_light
+        arriving = scatter_psf(emphasised, scatter_radius) * (1.0 - _WIDE_ANGLE_SHARE)
+        arriving += surroundings * _WIDE_ANGLE_SHARE
+        scattered = arriving * deposit_albedo
 
         veil = np.clip(veil_strength * mask, 0.0, 0.95)
         out = linear * (1.0 - veil) + scattered * veil

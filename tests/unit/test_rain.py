@@ -456,3 +456,119 @@ def test_drop_size_distribution_is_not_the_visibility_lever() -> None:
         f"projected area varies by {spread:.1%} across mu=0..4; the documentation "
         "claims a few percent, so one of the two is wrong"
     )
+
+
+# ------------------------------------------------------------------ exposure
+
+
+def _operating_points(
+    provider: SharedDepthProvider, scene: np.ndarray, draws: int = 120, **kwargs: object
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(shutter time, f-number, illuminance) over ``draws`` seeds."""
+    from weathermentations.diagnostics import recording
+
+    transform = RandomRain(depth_provider=provider, p=1.0, **kwargs)  # type: ignore[arg-type]
+    points = []
+    for seed in range(draws):
+        transform.set_random_seed(seed)
+        with recording() as log:
+            transform.get_params_dependent_on_data({"shape": scene.shape}, {"image": scene})
+        drew = log[0]["drew"]
+        points.append((drew["exposure_s"], drew["f_number"], drew["scene_illuminance_lux"]))
+    exposure, f_number, light = np.array(points, dtype=np.float64).T
+    return exposure, f_number, light
+
+
+def test_the_meter_trades_aperture_against_shutter() -> None:
+    """Light through a lens goes as 1/N^2, so each stop the iris closes
+    doubles the shutter time, and each halving of the light doubles it too."""
+    from weathermentations.atmosphere.rain import metered_exposure_s
+
+    assert metered_exposure_s(1.6, 10_000.0) == pytest.approx(1 / 3125, rel=0.01)
+    assert metered_exposure_s(8.0, 10_000.0) == pytest.approx(
+        25.0 * metered_exposure_s(1.6, 10_000.0)
+    )
+    assert metered_exposure_s(2.8, 500.0) == pytest.approx(2.0 * metered_exposure_s(2.8, 1000.0))
+
+
+def test_shutter_time_is_metered_not_drawn(
+    provider: SharedDepthProvider, scene: np.ndarray
+) -> None:
+    """Shutter and aperture used to be two independent draws from two narrow
+    ranges, which gave every dataset the same middling streak and allowed
+    pairs no camera would choose. Now the aperture and the light are drawn
+    and the shutter follows, so a stopped-down lens comes with a long shutter
+    and an open one with a short one."""
+    from weathermentations.atmosphere.rain import metered_exposure_s
+
+    exposure, f_number, light = _operating_points(provider, scene)
+    shortest, longest = 1 / 8000, 1 / 25
+
+    assert exposure.min() >= shortest - 1e-12 and exposure.max() <= longest + 1e-12
+    free = (exposure > shortest * 1.001) & (exposure < longest * 0.999)
+    assert free.sum() > 40, "the shutter range was binding on nearly every draw"
+    metered = np.array([metered_exposure_s(n, e) for n, e in zip(f_number, light, strict=True)])
+    # The recorded draws are rounded to six decimals.
+    np.testing.assert_allclose(exposure[free], metered[free], rtol=5e-3)
+
+    # The correlation a camera's exposure has, and independent draws lack.
+    assert np.corrcoef(np.log(f_number), np.log(exposure))[0, 1] > 0.5
+    # And real variety: the old range was 1/333 to 1/100 s.
+    assert np.percentile(exposure, 10) < 1 / 1000
+    assert np.percentile(exposure, 90) > 1 / 60
+    assert f_number.min() < 2.5 and f_number.max() > 8.0
+
+
+def test_a_pinned_shutter_stays_pinned(provider: SharedDepthProvider, scene: np.ndarray) -> None:
+    """Both ends equal is how a caller fixes the shutter, whatever the light."""
+    exposure, _f_number, _light = _operating_points(
+        provider, scene, draws=20, exposure_time_range=(0.004, 0.004)
+    )
+    np.testing.assert_allclose(exposure, 0.004)
+
+
+def test_without_a_light_level_the_shutter_is_drawn_in_stops(
+    provider: SharedDepthProvider, scene: np.ndarray
+) -> None:
+    """Shutter speeds are ratios. A uniform draw over 1/8000-1/25 s lands
+    slower than 1/50 s half the time; a log draw puts the median near the
+    geometric middle, about 1/450 s."""
+    exposure, f_number, light = _operating_points(
+        provider, scene, scene_illuminance_range_lux=None
+    )
+    assert np.isnan(light).all()
+    assert 1 / 1200 < np.median(exposure) < 1 / 170
+    assert abs(np.corrcoef(np.log(f_number), np.log(exposure))[0, 1]) < 0.3
+
+
+def test_a_frozen_drop_is_a_fleck_not_an_overflow(
+    provider: SharedDepthProvider, scene_hd: np.ndarray
+) -> None:
+    """At 1/8000 s a drop travels less than its own diameter. The streak it
+    leaves is then mostly the drop itself: short, and close to opaque but
+    never past it. Left out of the length, the drop's own width made a
+    frozen drop a streak of no length whose opacity had to be clipped."""
+
+    def streaks(shutter: float) -> dict[str, np.ndarray]:
+        transform = RandomRain(
+            depth_provider=provider,
+            p=1.0,
+            rain_rate_range_mm_h=(40.0, 40.0),
+            exposure_time_range=(shutter, shutter),
+            aperture_diameter_range_mm=(0.4, 0.4),
+            horizontal_fov_range_deg=(60.0, 60.0),
+        )
+        transform.set_random_seed(1)
+        params = transform.get_params_dependent_on_data(
+            {"shape": scene_hd.shape}, {"image": scene_hd}
+        )
+        return params["streaks"]
+
+    frozen, smeared = streaks(1 / 8000), streaks(1 / 30)
+    assert float(frozen["alpha"].max()) <= 1.0
+    assert float(np.median(frozen["alpha"])) > 10.0 * float(np.median(smeared["alpha"]))
+    assert float(np.median(smeared["length"])) > 10.0 * float(np.median(frozen["length"]))
+    # No streak is shorter than the drop that drew it.
+    focal = scene_hd.shape[1] / (2.0 * np.tan(np.deg2rad(60.0) / 2.0))
+    smallest_drop_px = focal * 0.8e-3 / frozen["distance"]
+    assert np.all(frozen["length"] >= smallest_drop_px - 1e-4)

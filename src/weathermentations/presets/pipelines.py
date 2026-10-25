@@ -87,6 +87,11 @@ _IR_RING_GLOW = (0.6, 1.6)
 #: lenses that stop down in sunlight and so render the same drops crisply.
 _OPEN_IRIS_MM = (1.4, 3.0)
 
+#: Illuminance of a street at night under its own lighting, in lux. Rain's
+#: shutter time is metered from the light level, and at these levels it sits
+#: at the slow end of what the camera can run: long, faint streaks.
+_NIGHT_STREET_LUX = (5.0, 150.0)
+
 
 def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
     """One transform at a severity level, built directly.
@@ -207,9 +212,10 @@ def weather_state(
             severity 1, and they were the most conspicuous thing in the
             output while the rain they signalled was invisible.
         night: the frame is lit artificially, so the lens is wide open. That
-            matters to the water on the glass and to nothing else here: its
-            sharpness is set by the aperture, and at night most of it blurs
-            away into soft patches of lost contrast.
+            matters to the water on the glass, whose sharpness is set by the
+            aperture — at night most of it blurs away into soft patches of
+            lost contrast — and to the rain, whose shutter time is metered
+            for street lighting and so runs long.
 
     Raises:
         ValueError: if the three weather probabilities sum to 1 or more.
@@ -221,6 +227,9 @@ def weather_state(
             "These are absolute probabilities, not relative weights."
         )
     glass = {"aperture_diameter_range_mm": _OPEN_IRIS_MM} if night else {}
+    # The same camera is looking at the rain: open iris, and a shutter
+    # metered for street lighting rather than for daylight.
+    exposure = {**glass, "scene_illuminance_range_lux": _NIGHT_STREET_LUX} if night else {}
 
     def _droplets(probability: float) -> Any:
         return _at(WaterDroplets, "WaterDroplets", probability, droplet_severity, **glass)
@@ -239,6 +248,7 @@ def weather_state(
                     _at(
                         RandomRain, "RandomRain", 1.0, severity,
                         depth_provider=depth_provider, wetness_probability=0.85,
+                        **exposure,
                     ),
                     _droplets(wet_rain),
                 ],

@@ -62,7 +62,11 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 # moved the frame by 0.94 of an 8-bit level, i.e. below the
                 # quantisation it is rendered into.
                 "smudge_count_range": (int(_lerp(3, 8, t)), int(_lerp(7, 18, t))),
-                "coverage_range": (_lerp(0.05, 0.12, t), _lerp(0.14, 0.35, t)),
+                "coverage_range": (_lerp(0.05, 0.2, t), _lerp(0.14, 0.5, t)),
+                # The even film of settled dust between the patches. Absent
+                # at the clean end, and at the dirty end what takes the
+                # contrast out of the whole frame.
+                "dust_film_range": (_lerp(0.0, 0.12, t), _lerp(0.06, 0.4, t)),
                 "highlight_boost_range": (_lerp(1.5, 3.0, t), _lerp(3.5, 7.0, t)),
                 "veil_strength_range": (_lerp(0.18, 0.4, t), _lerp(0.4, 0.8, t)),
                 "water_spot_count_range": (0, int(_lerp(5, 30, t))),

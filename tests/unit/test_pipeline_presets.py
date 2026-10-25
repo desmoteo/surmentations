@@ -9,6 +9,7 @@ correlated rather than becoming implications.
 
 from __future__ import annotations
 
+import albumentations as A
 import numpy as np
 import pytest
 
@@ -265,3 +266,30 @@ def test_water_on_the_glass_follows_the_lighting_state() -> None:
     assert min(glow for glow, _ in infrared) >= 0.6
     assert min(aperture for _, aperture in infrared) >= 1.4, "a stopped-down iris at night"
     assert min(aperture for _, aperture in day) < 1.0, "the day branches never stop down"
+
+
+def test_rain_at_night_is_metered_for_street_lighting() -> None:
+    """The camera that is wide open for the water on its glass is the same
+    one looking at the rain. Under street lighting its shutter runs at the
+    slow end of what it can do, so night rain is long faint streaks; by day
+    the same transform meters for daylight and mostly freezes the drops."""
+    from weathermentations.presets.pipelines import weather_state
+
+    def shutters(night: bool) -> np.ndarray:
+        transform = A.Compose(
+            [weather_state(SharedDepthProvider(_GroundPlane()), rain=0.9, snow=0.0, fog=0.0,
+                           night=night)]
+        )
+        transform.set_random_seed(3)
+        image = np.full((96, 96, 3), 120, dtype=np.uint8)
+        drawn = []
+        for _ in range(60):
+            with recording() as log:
+                transform(image=image)
+            drawn += [r["drew"]["exposure_s"] for r in log if r["t"] == "RandomRain"]
+        return np.array(drawn)
+
+    day, night = shutters(night=False), shutters(night=True)
+    assert len(day) > 30 and len(night) > 30
+    assert np.median(night) >= 1 / 30
+    assert np.median(day) < 1 / 100
