@@ -132,6 +132,16 @@ survival function used to size the sample is built by quadrature on the same
 grid. Keeping those in separate closed forms is how a sampler and its
 acceptance rate drift apart.
 
+**The transform has to pass the shape on, too.** For a while it did not:
+`RandomRain` computed the gamma *slope* and then sized and sampled its drops
+as if the distribution were still exponential. A steeper slope without the
+`D^mu` term that balances it belongs to neither model, so asking for the
+gamma gave fewer and *smaller* drops — at 50 mm/h, 62% fewer streaks and 2% of
+drops above 2 mm against the gamma's 14.8%. The helpers and their tests were
+correct throughout, which is why nothing caught it; the test that does now
+asserts on what the transform draws rather than on what the helpers return.
+`NightRain` was unaffected.
+
 ## Verifying
 
 `tests/unit/test_rain.py` pins all three: that `mu = 0` reproduces the

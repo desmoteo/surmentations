@@ -267,3 +267,52 @@ def test_snowfall_rate_drives_visible_flake_coverage(
 
     light, moderate, heavy = flake_area(0.5), flake_area(3.0), flake_area(15.0)
     assert light < moderate < heavy
+
+
+def test_a_binding_flake_budget_keeps_the_widest_flakes_not_a_random_subset() -> None:
+    """``max_flakes`` is a render budget, and a budget must not decide what
+    the weather looks like.
+
+    Truncating the count draws an arbitrary subset of the field, so once the
+    cap binds a heavier snowfall stops looking heavier. Rain converts the
+    budget into a projected-width threshold instead — the flakes drawn are the
+    most visible ones, and the rest are what the veil already stands for — and
+    snow did not: at 1920 px and severity 5 it was over budget in five draws of
+    six and dropped a fifth of its flakes at random.
+    """
+    from weathermentations.diagnostics import recording
+
+    image = np.full((720, 960, 3), 110, dtype=np.uint8)
+    provider = SharedDepthProvider(_GroundPlaneDepthEstimator())
+
+    def field(max_flakes: int) -> tuple[np.ndarray, dict[str, float]]:
+        transform = RandomSnow(
+            depth_provider=provider,
+            p=1.0,
+            snowfall_rate_range_mm_h=(8.0, 8.0),
+            snow_density_range_g_cm3=(0.05, 0.05),
+            horizontal_fov_range_deg=(60.0, 60.0),
+            max_flakes=max_flakes,
+        )
+        transform.set_random_seed(0)
+        with recording() as log:
+            params = transform.get_params_dependent_on_data(
+                {"shape": image.shape}, {"image": image}
+            )
+        return 2.0 * params["flakes"]["radius"], log[0]["drew"]
+
+    everything, drew_all = field(200000)
+    budget = len(everything) // 4
+    assert budget > 100, "scene too sparse for the budget to mean anything"
+    kept, drew_kept = field(budget)
+
+    assert len(kept) == budget
+    assert drew_all["width_cut_px"] == pytest.approx(1.5), "no budget pressure, no raised cut"
+    assert drew_kept["width_cut_px"] > 1.5
+
+    # The narrowest flake drawn under the budget is about as wide as the
+    # budget-th widest flake of the whole field: the cut fell where it should.
+    threshold = np.sort(everything)[-budget]
+    assert kept.min() == pytest.approx(threshold, rel=0.2)
+    # A random quarter of the field would have the field's own median.
+    assert np.median(kept) > 1.3 * np.median(everything)

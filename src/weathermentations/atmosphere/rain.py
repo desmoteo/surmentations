@@ -435,6 +435,7 @@ class RandomRain(WeatherTransform):
             *self.distance_range_m,
             focal,
             self.min_streak_width_px,
+            shape_mu=self.dsd_shape_mu,
         )
         density = rain_number_density(
             rain_rate, self.drop_diameter_range_mm[0], self.dsd_shape_mu
@@ -453,6 +454,7 @@ class RandomRain(WeatherTransform):
             *self.distance_range_m,
             focal,
             self.min_streak_width_px,
+            shape_mu=self.dsd_shape_mu,
         )
         count = int(min(self.max_streaks, round(population)))
 
@@ -486,6 +488,12 @@ class RandomRain(WeatherTransform):
             *self.distance_range_m,
             focal,
             width_cut,
+            # The slope above is the *gamma* slope. Sampling it as an
+            # exponential — which leaving this out did — is a distribution
+            # that belongs to neither model: at 50 mm/h and mu = 3 it put 2%
+            # of drops above 2 mm where the gamma has 14.8% and Marshall &
+            # Palmer 11.5%, and cut the streak count by 62%.
+            shape_mu=self.dsd_shape_mu,
         )
         count = len(diameter_mm)
         speed = raindrop_terminal_velocity(diameter_mm)

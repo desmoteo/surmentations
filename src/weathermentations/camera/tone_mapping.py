@@ -31,6 +31,7 @@ base/detail split has to happen there to be scale-invariant.
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any
 
 import cv2
@@ -45,6 +46,20 @@ from weathermentations.utils.photometry import from_linear_unit, luminance, to_l
 # Radius above which the base layer is computed on a downsampled copy. The
 # bilateral filter is O(radius^2) per pixel, so this caps the work per frame.
 _BASE_FILTER_MAX_RADIUS_PX = 12.0
+
+
+def _base_filter_scale(radius_px: float) -> tuple[int, float]:
+    """``(downsampling factor, radius at that scale)`` for the base-layer filter.
+
+    The factor is rounded **up**, so the radius actually filtered never
+    exceeds the cap. Rounding it down — as this did — only starts downsampling
+    at twice the cap, and every radius between one and two caps was filtered
+    at full resolution: measured at 512 px, a 24 px radius cost 2.0 s where
+    the same frame takes 0.12 s downsampled by two. Half of all draws at that
+    size landed in the gap.
+    """
+    factor = max(1, math.ceil(radius_px / _BASE_FILTER_MAX_RADIUS_PX))
+    return factor, max(1.0, radius_px / factor)
 
 
 class WdrToneMapping(WeatherTransform):
@@ -147,7 +162,7 @@ class WdrToneMapping(WeatherTransform):
         # at quarter resolution it is ~0.1 s and, since the layer cannot carry
         # detail finer than its own radius anyway, visually identical. Same
         # reasoning as the scatter PSF in ``lens/dirt.py``.
-        factor = max(1, int(radius_px / _BASE_FILTER_MAX_RADIUS_PX))
+        factor, small_radius = _base_filter_scale(radius_px)
         if factor > 1:
             small = cv2.resize(
                 log_luma,
@@ -156,7 +171,6 @@ class WdrToneMapping(WeatherTransform):
             )
         else:
             small = log_luma
-        small_radius = max(1.0, radius_px / factor)
 
         edge_preserving = cv2.bilateralFilter(
             small, d=0, sigmaColor=0.35, sigmaSpace=small_radius

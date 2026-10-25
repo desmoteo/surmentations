@@ -477,3 +477,25 @@ def test_flicker_band_count_follows_readout_time() -> None:
         counts.append(int(np.sum(np.diff(np.sign(centred)) != 0) / 2))
     assert counts[0] == pytest.approx(2, abs=1), counts
     assert counts[1] == pytest.approx(6, abs=1), counts
+
+
+def test_wdr_base_filter_radius_never_exceeds_its_cap() -> None:
+    """The bilateral filter costs O(radius^2) per pixel, and the cap on its
+    radius is the only thing keeping the transform inside a frame budget.
+
+    The downsampling factor used to be rounded down, which left every radius
+    between one cap and two filtered at full resolution: a 24 px radius at
+    512 px took two seconds against 0.12 s. Half of the draws at that size
+    fell in the gap, so the transform was ten times slower than documented
+    for no change in what it rendered.
+    """
+    from weathermentations.camera.tone_mapping import (
+        _BASE_FILTER_MAX_RADIUS_PX,
+        _base_filter_scale,
+    )
+
+    for radius in np.linspace(2.0, 400.0, 800):
+        factor, at_scale = _base_filter_scale(float(radius))
+        assert at_scale <= _BASE_FILTER_MAX_RADIUS_PX + 1e-6, (radius, factor, at_scale)
+        # ...without downsampling further than the cap requires.
+        assert factor == 1 or radius / (factor - 1) > _BASE_FILTER_MAX_RADIUS_PX
