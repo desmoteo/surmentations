@@ -479,6 +479,92 @@ def test_flicker_band_count_follows_readout_time() -> None:
     assert counts[1] == pytest.approx(6, abs=1), counts
 
 
+# --- RollingShutter moves annotations with the pixels --------------------
+
+
+def _annotated_scene() -> tuple[np.ndarray, np.ndarray, list[tuple[int, int, int, int]]]:
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+    mask = np.zeros((240, 320), dtype=np.uint8)
+    boxes = [(60, 40, 120, 200), (200, 100, 260, 230), (10, 5, 40, 30)]
+    for index, (x0, y0, x1, y1) in enumerate(boxes):
+        image[y0:y1, x0:x1] = 60 + 60 * index
+        mask[y0:y1, x0:x1] = index + 1
+    return image, mask, boxes
+
+
+@pytest.mark.parametrize(
+    "motion",
+    [
+        pytest.param(
+            {"pan_shift_range_px": (30.0, 30.0), "wobble_amplitude_range_px": (0.0, 0.0),
+             "vertical_fraction_range": (0.0, 0.0)},
+            id="shear",
+        ),
+        pytest.param(
+            {"pan_shift_range_px": (-25.0, -25.0), "wobble_amplitude_range_px": (10.0, 10.0),
+             "wobble_cycles_range": (3.0, 3.0), "vertical_fraction_range": (0.35, 0.35)},
+            id="wobble-with-vertical-motion",
+        ),
+    ],
+)
+def test_rolling_shutter_moves_masks_boxes_and_keypoints_with_the_image(
+    motion: dict[str, tuple[float, float]],
+) -> None:
+    """The one transform here that moves pixels has to move their labels.
+
+    It was image-only like every appearance effect, so a 30 px shear moved the
+    picture 29 px and left the mask and the boxes exactly where they were —
+    silently wrong labels for anyone training a detector with it.
+    """
+    import albumentations as A
+
+    image, mask, boxes = _annotated_scene()
+    corners = [(60.0, 40.0), (119.0, 199.0), (230.0, 165.0)]
+    pipeline = A.Compose(
+        [RollingShutter(p=1.0, **motion)],
+        bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+        keypoint_params=A.KeypointParams(format="xy", remove_invisible=False),
+        seed=1,
+    )
+    out = pipeline(image=image, mask=mask, bboxes=boxes, labels=[1, 2, 3], keypoints=corners)
+
+    assert not np.array_equal(out["image"], image)
+    # The mask still covers the objects, wherever they went.
+    agreement = ((out["image"][..., 0] > 30) == (out["mask"] > 0)).mean()
+    assert agreement > 0.995, f"image and mask agree on only {agreement:.1%} of pixels"
+    assert set(np.unique(out["mask"])) <= {0, 1, 2, 3}, "mask labels were interpolated"
+
+    # Each box encloses its object's new extent, to the pixel.
+    for box, label in zip(out["bboxes"], out["labels"], strict=True):
+        ys, xs = np.nonzero(out["mask"] == label)
+        truth = np.array([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1], dtype=np.float64)
+        np.testing.assert_allclose(np.asarray(box[:4], dtype=np.float64), truth, atol=1.5)
+
+    # A keypoint on an object's corner lands on that object's moved corner.
+    x, y = out["keypoints"][0][:2]
+    ys, xs = np.nonzero(out["mask"] == 1)
+    assert abs(y - ys.min()) <= 1.5
+    assert abs(x - xs[ys == ys.min()].min()) <= 1.5
+
+
+def test_rolling_shutter_with_no_motion_leaves_annotations_alone() -> None:
+    import albumentations as A
+
+    image, mask, boxes = _annotated_scene()
+    still = {
+        "pan_shift_range_px": (0.0, 0.0),
+        "wobble_amplitude_range_px": (0.0, 0.0),
+    }
+    pipeline = A.Compose(
+        [RollingShutter(p=1.0, **still)],
+        bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+        seed=0,
+    )
+    out = pipeline(image=image, mask=mask, bboxes=boxes, labels=[1, 2, 3])
+    np.testing.assert_array_equal(out["mask"], mask)
+    np.testing.assert_allclose(np.asarray(out["bboxes"])[:, :4], np.asarray(boxes), atol=1e-3)
+
+
 def test_wdr_base_filter_radius_never_exceeds_its_cap() -> None:
     """The bilateral filter costs O(radius^2) per pixel, and the cap on its
     radius is the only thing keeping the transform inside a frame budget.
