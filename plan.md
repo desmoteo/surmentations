@@ -108,6 +108,17 @@ LICENSE                        # MIT
   in the chain happens to copy the array (cache miss), depth is simply
   recomputed — a graceful perf degradation, not a correctness bug, and an
   explicitly accepted tradeoff from the caching-strategy decision.
+- **Superseded.** The `(id(image), image.shape)` key described above and
+  drawn below had two defects the "accepted tradeoff" did not cover. `id()`
+  is reused as soon as a frame is freed, so in a `Dataset.__getitem__` loop
+  the cache *hit across samples* and served the previous frame's depth (51 of
+  60 frames, measured) — a correctness bug, not a perf degradation. And since
+  every transform returns a new array, the miss in the diagram is not an
+  occasional case but every case: depth was never shared between two
+  transforms that both fired. `depth/provider.py` now recognises a scene by
+  weak reference plus a content fingerprint, and each transform carries the
+  scene from its input to its output, so the second lookup below is a hit on
+  the clean frame's depth.
 - Depth values are relative (unitless); each depth-conditioned effect maps
   them into its own physical parameterization (e.g. fog's `beta` expects
   depth pre-scaled by a user-provided `depth_scale` to pseudo-meters, since

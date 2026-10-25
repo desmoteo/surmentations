@@ -323,10 +323,17 @@ layer. Combined with A1 this is most of the droplet transform's cost.
 
 ## What to avoid
 
-**Do not cache across images by content.** `SharedDepthProvider` caches on
-array *identity*, deliberately: it hits within one sample and never across
-samples. A content hash would appear to help on a benchmark that reuses one
-array and do nothing in training.
+**Do not cache across images by content.** `SharedDepthProvider` recognises
+a scene by array *identity*, deliberately: it hits within one sample and never
+across samples. A content hash would appear to help on a benchmark that reuses
+one array and do nothing in training.
+
+(Identity here means a weak reference, with a sparse fingerprint of the pixels
+as a guard — not `id()`, which is reused the moment a frame is freed and served
+the previous frame's depth to the next one. And identity is carried from each
+transform's input to its output, which is what makes the within-sample hit
+actually happen; without that the second transform in a chain never saw the
+array depth was estimated for. See `depth/provider.py`.)
 
 **Do not reduce particle counts to buy speed.** `max_streaks` and
 `max_flakes` are render budgets, and `width_cut_for_budget` already trades
