@@ -138,8 +138,9 @@ def test_dirt_rejects_unknown_deposit() -> None:
 
 
 def test_water_droplets_refraction_stays_in_bounds(image: np.ndarray) -> None:
-    # cv2.remap with BORDER_REFLECT never reads out of bounds; this test
-    # documents/guards that no exception is raised even at extreme cap ratios.
+    # A steep drop bends rays by up to 41 degrees, which from near the edge
+    # of the frame points well outside it. The remap reflects at the border,
+    # so that must neither raise nor leave a hole.
     t = WaterDroplets(
         p=1.0,
         droplet_count_range=(20, 20),
@@ -151,8 +152,12 @@ def test_water_droplets_refraction_stays_in_bounds(image: np.ndarray) -> None:
 
 
 def test_water_droplets_never_overlap(image: np.ndarray) -> None:
-    """Physical invariant: sessile droplets don't merge in this model, so no
-    two placed droplets' footprints may touch or overlap."""
+    """Separate drops stay separate: two that touched would have become one.
+
+    Merged drops do exist — a share of them are caught mid-coalescence — but
+    each is one entry here with extra lobes of the same water surface, so
+    this still holds for everything listed. `test_water_on_glass.py` checks
+    that the lobes join and that drops this far apart do not."""
     t = WaterDroplets(
         p=1.0,
         droplet_count_range=(40, 40),

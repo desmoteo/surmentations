@@ -80,12 +80,20 @@ EFFECTS: dict[str, str] = {
     # generator in this order, so inserting an entry re-rolls the published
     # image of everything after it.
     "night_snow": "NightSnow",
+    "night_droplets": "WaterDroplets",
 }
 
 # Needs the ffmpeg binary; skipped with a warning rather than crashing the run.
 _NEEDS_FFMPEG = {"video_codec"}
 
 LEVELS = sorted(SEVERITY)
+
+# Entrance pupil for each water-droplet variant, in millimetres. How sharp
+# water on the glass looks is set by the aperture and by nothing else, so the
+# row alternates a stopped-down iris with an open one: the same kind of wet
+# pane, crisp in one cell and dissolved into soft patches in the next. Fixed
+# by position rather than drawn, so adding it re-rolled no other image.
+DROPLET_APERTURES_MM: tuple[float, ...] = (0.6, 2.4, 0.9, 2.8, 0.5)
 
 # Deposit mixes that correspond to recognisable environments, so the dirt row
 # shows the palette's actual range instead of five draws from the same bag.
@@ -181,6 +189,14 @@ def _variant_kwargs(
             # leaves every drop pinned as a round bead.
             "pane_width_range_mm": _span(rng, 25.0, 260.0),
             "contact_angle_hysteresis_range": _span(rng, 0.15, 0.7),
+            "aperture_diameter_range_mm": (DROPLET_APERTURES_MM[index],) * 2,
+        }
+    if name == "night_droplets":
+        return {
+            # The camera's own ring lights the water, and the iris is open.
+            "illuminator_glow_range": (0.7, 1.4),
+            "aperture_diameter_range_mm": (1.4, 3.0),
+            "pane_width_range_mm": _span(rng, 40.0, 200.0),
         }
     if name == "dirt_soil":
         return {"deposits": DEPOSIT_MIXES[index % len(DEPOSIT_MIXES)]}
@@ -282,7 +298,7 @@ def _build(
     kwargs: dict[str, Any] = {"p": 1.0, **preset}
     kwargs.update(_variant_kwargs(name, index, rng, preset))
 
-    if name == "water_droplets":
+    if name in ("water_droplets", "night_droplets"):
         return WaterDroplets(**kwargs)
     if name == "dirt_soil":
         return DirtSoil(**kwargs)
@@ -384,12 +400,13 @@ def main() -> None:
     for name in tqdm(names, total=len(names), desc="effects"):
         for index, level in enumerate(LEVELS):
             transform = _build(name, level, index, rng, depth_provider)
-            # NightRain and NightSnow need their input already dark. Their
+            # NightRain and NightSnow need their input already dark, and so
+            # does water lit by the infrared ring. Their
             # particles are lit by the camera rather than the sky, so on a
             # daylit frame they are as invisible as RandomRain's -- which is
             # the finding the transforms exist to answer. Showing them over a
             # sunny road would illustrate the opposite of what they do.
-            lamp_lit = name in ("night_rain", "night_snow")
+            lamp_lit = name in ("night_rain", "night_snow", "night_droplets")
             base = _night_base(scene, depth_provider, level) if lamp_lit else scene
             out = _render_representative(transform, base, rng)
             cv2.imwrite(

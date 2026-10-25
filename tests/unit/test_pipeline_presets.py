@@ -236,3 +236,32 @@ def test_night_snow_is_lit_by_the_lamp_and_only_under_infrared() -> None:
 
     day_snow = [s for s in drawn if "RandomSnow" in s and "NightIrMode" not in s]
     assert day_snow and not any("NightSnow" in s for s in day_snow)
+
+
+def test_water_on_the_glass_follows_the_lighting_state() -> None:
+    """Two things about water on the glass are decided by the light, not
+    drawn. It glows only when the camera's own illuminator is on, and it is
+    blurred by an iris that is wide open at night — the aperture is what sets
+    how sharp a drop looks, so the same wet dome reads differently by day."""
+    transform = surveillance(
+        SharedDepthProvider(_GroundPlane()),
+        codec=0.0, wet_clear=0.6, wet_rain=0.6, wet_snow=0.6, wet_fog=0.6,
+    )
+    transform.set_random_seed(5)
+    image = np.full((96, 96, 3), 120, dtype=np.uint8)
+
+    day, infrared = [], []
+    for _ in range(300):
+        with recording() as log:
+            transform(image=image)
+        fired = {record["t"]: record for record in log}
+        if "WaterDroplets" in fired:
+            water = fired["WaterDroplets"]
+            sample = (water["out"]["glow"], water["drew"]["aperture_mm"])
+            (infrared if "NightIrMode" in fired else day).append(sample)
+
+    assert len(day) > 20 and len(infrared) > 20, (len(day), len(infrared))
+    assert max(glow for glow, _ in day) == 0.0, "water glowed with no illuminator on"
+    assert min(glow for glow, _ in infrared) >= 0.6
+    assert min(aperture for _, aperture in infrared) >= 1.4, "a stopped-down iris at night"
+    assert min(aperture for _, aperture in day) < 1.0, "the day branches never stop down"
