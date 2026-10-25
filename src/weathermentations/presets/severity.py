@@ -213,7 +213,12 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "opacity_range": (_lerp(0.3, 0.6, t), _lerp(0.6, 1.0, t)),
             },
             "CastShadows": {
-                "shadow_count_range": (int(_lerp(1, 3, t)), int(_lerp(3, 9, t))),
+                # At least two. A figure's shadow covers a fifth of what a
+                # crown's does, so a single draw can be one thin figure on
+                # the verge, which moved the frame by half an 8-bit level —
+                # the "severity 1 that does nothing" this ladder is tested
+                # against.
+                "shadow_count_range": (int(_lerp(2, 3, t)), int(_lerp(3, 9, t))),
                 # Harder light means deeper shadows *and* crisper edges, which
                 # is why these two move together rather than independently.
                 "direct_fraction_range": (_lerp(0.25, 0.6, t), _lerp(0.55, 0.92, t)),

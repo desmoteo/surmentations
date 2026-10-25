@@ -153,3 +153,112 @@ def test_occluders_darken_by_day_and_glow_under_ir(scene: np.ndarray) -> None:
 
     assert mean_change(0.0) < -1.0  # daylight: darker
     assert mean_change(2.0) > 1.0  # IR: brighter
+
+
+# --- what casts a shadow, and the one sun that throws them all ------------
+
+
+def _shadow_shape(kind: str, seed: int, azimuth: float, elongation: float) -> np.ndarray | None:
+    """One caster's shadow on an empty canvas, or ``None`` if it left the frame."""
+    import cv2
+
+    from weathermentations.scene.shadows import _draw_cast_shape
+
+    mask = np.zeros((600, 600), dtype=np.float32)
+    _draw_cast_shape(
+        mask, np.random.default_rng(seed), 600, 600, 40.0,
+        kind=kind, sun_azimuth_deg=azimuth, elongation=elongation,
+    )
+    filled = mask > 0.5
+    edges = (filled[0], filled[-1], filled[:, 0], filled[:, -1])
+    if any(edge.any() for edge in edges) or filled.sum() < 200:
+        return None
+    if kind != "foliage":
+        # A figure or a vehicle is one object. Foliage is allowed to come
+        # apart: a crown and a stray branch really do cast separate patches.
+        pieces = cv2.connectedComponents(filled.astype(np.uint8))[0] - 1
+        assert pieces == 1, f"a {kind}'s shadow fell into {pieces} pieces"
+    return filled
+
+
+def _solidity(filled: np.ndarray) -> float:
+    """Area over convex-hull area: 1 for a blob, lower for limbs and a neck."""
+    import cv2
+
+    points = np.argwhere(filled)[:, ::-1].astype(np.float32)
+    return float(filled.sum() / cv2.contourArea(cv2.convexHull(points)))
+
+
+def _axis_deg(filled: np.ndarray) -> float:
+    """Direction of the shape's long axis, in [0, 180)."""
+    ys, xs = np.nonzero(filled)
+    centred = np.stack([xs - xs.mean(), ys - ys.mean()])
+    _values, vectors = np.linalg.eigh(np.cov(centred))
+    major = vectors[:, -1]
+    return float(np.rad2deg(np.arctan2(major[1], major[0])) % 180.0)
+
+
+def test_a_persons_shadow_has_a_persons_outline() -> None:
+    """A cast shadow is a false alarm because it is *shaped* like the thing a
+    detector looks for. The ellipse-with-lobes this drew for everything has no
+    head, no neck and no legs, and so tested robustness to dark patches rather
+    than to shadows of people."""
+    people = [_shadow_shape("person", seed, 40.0, 1.6) for seed in range(40)]
+    blobs = [_shadow_shape("foliage", seed, 40.0, 1.6) for seed in range(40)]
+    people = [shape for shape in people if shape is not None]
+    blobs = [shape for shape in blobs if shape is not None]
+    assert len(people) >= 8 and len(blobs) >= 3
+
+    person_solidity = np.median([_solidity(shape) for shape in people])
+    blob_solidity = np.median([_solidity(shape) for shape in blobs])
+    # Measured: figures 0.79, foliage blobs 0.86, vehicles 1.0.
+    assert person_solidity < 0.84, f"a figure's shadow is {person_solidity:.2f} solid"
+    assert blob_solidity > person_solidity + 0.03
+    vehicles = [_shadow_shape("vehicle", seed, 40.0, 1.0) for seed in range(40)]
+    vehicles = [shape for shape in vehicles if shape is not None]
+    assert len(vehicles) >= 5
+    assert np.median([_solidity(shape) for shape in vehicles]) > 0.93, "a vehicle is a box"
+
+
+@pytest.mark.parametrize("azimuth", [20.0, 75.0, 140.0])
+def test_upright_things_cast_their_shadows_along_the_suns_azimuth(azimuth: float) -> None:
+    shapes = [_shadow_shape("person", seed, azimuth, 2.2) for seed in range(40)]
+    axes = np.array([_axis_deg(shape) for shape in shapes if shape is not None])
+    assert len(axes) >= 8
+    error = np.abs((axes - azimuth + 90.0) % 180.0 - 90.0)
+    assert error.max() < 6.0, f"shadows point up to {error.max():.0f} degrees off the sun"
+
+
+def test_a_low_sun_throws_a_longer_shadow() -> None:
+    def length(elongation: float) -> float:
+        shapes = [_shadow_shape("person", seed, 30.0, elongation) for seed in range(40)]
+        return float(np.median([shape.sum() for shape in shapes if shape is not None]))
+
+    assert length(2.4) > 2.5 * length(0.6)
+
+
+def test_one_frame_has_one_sun() -> None:
+    """Each shadow used to get its own random angle, which describes a scene
+    lit from several directions at once."""
+    from weathermentations.diagnostics import recording
+
+    provider = SharedDepthProvider(_GroundPlaneDepth())
+    transform = CastShadows(depth_provider=provider, p=1.0, shadow_count_range=(6, 6))
+    scene = np.full((200, 240, 3), 150, dtype=np.uint8)
+
+    elevations = []
+    for seed in range(12):
+        transform.set_random_seed(seed)
+        with recording() as log:
+            transform(image=scene)
+        drew = log[0]["drew"]
+        assert drew["shadow_count"] == 6
+        assert 0.0 <= drew["sun_azimuth_deg"] < 360.0
+        elevations.append(drew["sun_elevation_deg"])
+    assert min(elevations) >= 20.0 and max(elevations) <= 65.0
+    assert max(elevations) - min(elevations) > 10.0, "the sun must vary between frames"
+
+    with pytest.raises(ValueError, match="casters"):
+        CastShadows(depth_provider=provider, casters=("person", "cloud"))
+    with pytest.raises(ValueError, match="casters"):
+        CastShadows(depth_provider=provider, casters=())
