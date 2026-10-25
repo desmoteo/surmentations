@@ -193,3 +193,113 @@ def test_horizon_row_is_stable_against_a_distant_flat_plane() -> None:
     spread = max(estimates) - min(estimates)
     assert spread < 8.0, f"horizon moved {spread:.1f} rows across the pitch range: {estimates}"
     assert all(abs(e - true_horizon) < 12.0 for e in estimates), estimates
+
+
+def _box_on_a_road(softness_px: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """A level camera over a ground plane with an upright box standing on it.
+
+    Returns the depth, a mask of the road just *outside* the box's top and
+    sides, a mask of the box's face, and the field of view. ``softness_px``
+    blurs the depth the way a monocular estimator's upsampled output is soft.
+    """
+    import cv2
+
+    height = width = 240
+    fov = 60.0
+    focal = width / (2.0 * np.tan(np.deg2rad(fov) / 2.0))
+    cy = height / 2.0
+    rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+    ground = np.minimum(1.5 * focal / np.maximum(rows - cy, 1e-3), 50.0)
+    depth = np.broadcast_to(np.where(rows > cy + 4, ground, 50.0), (height, width)).copy()
+    top, bottom, left, right = 150, 200, 90, 150
+    depth[top:bottom, left:right] = depth[bottom, 0]
+    if softness_px > 0:
+        depth = cv2.GaussianBlur(depth, (0, 0), sigmaX=softness_px)
+
+    beside = np.zeros((height, width), dtype=bool)
+    beside[top : bottom - 9, left - 9 : left - 2] = True
+    beside[top : bottom - 9, right + 2 : right + 9] = True
+    beside[top - 9 : top - 2, left:right] = True
+    face = np.zeros((height, width), dtype=bool)
+    face[top + 8 : bottom - 8, left + 8 : right - 8] = True
+    return depth.astype(np.float32), beside, face, fov
+
+
+def test_ground_reaches_up_to_an_object_instead_of_stopping_short_of_it() -> None:
+    """The road beside a car is road.
+
+    Differencing a blurred depth map across a silhouette invents a sloping
+    surface joining the object to what is behind it, several pixels wide and
+    not horizontal — so the wet-road darkening stopped short of every car and
+    left it in a dry halo. On this scene the weight in the ring beside the box
+    averaged 0.71 with a fifth percentile of 0.01; it should be 1.
+    """
+    from weathermentations.depth.normals import upward_facing
+
+    depth, beside, face, fov = _box_on_a_road(softness_px=1.0)
+    # The exponent the wet-road pass applies; it is what turns a slightly
+    # wrong normal into a visibly dry pixel.
+    wet = upward_facing(depth, horizontal_fov_deg=fov) ** 6.5
+
+    # Not 1: the depth edge is soft, and the pixels on it belong to neither
+    # surface. But the weakest part of the ring went from dry to mostly wet.
+    assert wet[beside].mean() > 0.76, f"road beside the box reads {wet[beside].mean():.2f}"
+    assert np.percentile(wet[beside], 5) > 0.2
+    assert wet[face].mean() < 0.05, "an upright face is not ground"
+    assert wet[210:230, 10:60].mean() > 0.97, "open road must be untouched"
+
+
+@pytest.mark.parametrize("softness_px", [0.0, 1.0, 2.0])
+def test_a_silhouette_against_the_sky_is_not_a_surface(softness_px: float) -> None:
+    """A treeline is an edge, not a slope.
+
+    Where the far side of a depth jump is *above* the near one, the invented
+    surface recedes upward exactly as ground does, so it collected snow: a
+    bright rim 16-18 rows deep along the top of every tree and roof in frame.
+    """
+    import cv2
+
+    from weathermentations.depth.normals import upward_facing
+
+    height = width = 200
+    depth = np.full((height, width), 50.0, dtype=np.float32)
+    depth[90:] = 12.0  # a wall of foliage below open sky; no ground anywhere
+    if softness_px > 0:
+        depth = cv2.GaussianBlur(depth, (0, 0), sigmaX=softness_px)
+
+    # Snow's own exponent, with the camera pitched down as it usually is.
+    snow = upward_facing(depth, horizontal_fov_deg=60.0, camera_pitch_deg=8.0) ** 3.5
+    rim_rows = int((snow.mean(axis=1) > 0.5).sum())
+    assert rim_rows <= 4, f"{rim_rows} rows of the silhouette read as upward-facing"
+
+
+def test_surface_normals_of_planes_hold_up_to_the_frame_border() -> None:
+    """One-sided differences must not cost accuracy where there is no edge,
+    and the frame border — where only one neighbour exists — is where a
+    difference scheme usually goes wrong."""
+    from weathermentations.depth.normals import surface_normals, upward_facing
+
+    height, width, fov = 120, 160, 60.0
+    focal = width / (2.0 * np.tan(np.deg2rad(fov) / 2.0))
+    rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+
+    wall = np.full((height, width), 7.0, dtype=np.float32)
+    normals = surface_normals(wall, fov)
+    np.testing.assert_allclose(normals[..., 2], -1.0, atol=1e-4)
+    assert upward_facing(wall, fov).max() < 1e-3
+
+    # Ground seen by a camera pitched down far enough that its horizon is 80
+    # rows above the frame, so the whole image is ground. On such a plane
+    # depth goes as 1 / (row - horizon), and the pitch is the angle the
+    # horizon subtends from the principal point.
+    horizon = -80.0
+    ground = np.broadcast_to(2.0 * focal / (rows - horizon), (height, width)).astype(np.float32)
+    pitch = float(np.rad2deg(np.arctan((height / 2.0 - horizon) / focal)))
+    facing = upward_facing(ground, fov, camera_pitch_deg=pitch)
+    assert facing[3:-3, 3:-3].min() > 0.99, f"ground reads {facing[3:-3, 3:-3].min():.3f} inside"
+    # The outermost rows see the depth through a reflected border, which the
+    # one-pixel smoothing turns into a slight tilt: a few percent, not a seam.
+    assert facing.min() > 0.97, f"ground plane reads {facing.min():.3f} at the frame border"
+
+    for tiny in ((1, 9), (9, 1), (2, 2), (3, 5)):
+        assert upward_facing(np.full(tiny, 5.0, dtype=np.float32)).shape == tiny
