@@ -199,6 +199,8 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
         # comes from a pole.
         extra["lamp_glint_range"] = LAMP_OVER_RANGE
         extra["overcast_range"] = (0.0, 0.0)
+    if scene.night and effect == "snow":
+        extra["overcast_range"] = (0.0, 0.0)
     return extra
 
 
