@@ -535,6 +535,24 @@ coloured blotching of a real low-light frame, which independent per-channel
 noise does not have. It runs before the ISP, which is what gives
 `TemporalDenoiseArtifacts` something to remove.
 
+### Night fog and glare: what the lights in the frame do
+
+At night the fog is not lit by a sky, so it is not a veil. `NightFog` dims
+everything by `exp(-beta z)` as by day, then gives back 60% of what it took
+through a wide heavy-tailed blur: droplets scatter forward, so light removed
+from a lamp's beam still arrives from just beside it. The result is a glow
+round each lamp that widens with the fog in front of it, and darkness
+everywhere else. Under the infrared ring it adds the camera's own
+backscatter — an even wall across the beam, because the lamp's `1/z^2` and
+the lit volume's `z^2` cancel — and attenuates the scene twice.
+
+`SourceGlare` is `SunFlare`'s optics on each compact clipped region of the
+frame (`utils/sources.py`): glare, starburst and ghosts per lamp. Both
+transforms treat a clipped pixel as several times full scale, since a lamp's
+recorded value is a lower bound; that factor is a parameter, not a
+measurement. Large clipped areas — a blown sky, a sunlit wall — are not
+lights and are left alone.
+
 ### Night rain: the same drop, lit by the camera
 
 ```mermaid
