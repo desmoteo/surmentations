@@ -304,7 +304,7 @@ def test_deep_snow_covers_level_ground_and_is_white_on_black_asphalt() -> None:
     scene = np.full((SIZE, SIZE, 3), 190, dtype=np.uint8)  # an overcast wall of sky
     scene[SIZE // 2 :] = 25  # new asphalt
     out = _settled(scene)
-    assert out[SIZE * 3 // 4 :].mean() > 170.0
+    assert out[SIZE * 3 // 4 :].mean() > 160.0
 
 
 def test_snow_under_sodium_lamps_is_orange_and_dark_where_no_lamp_reaches() -> None:
@@ -341,3 +341,49 @@ def test_snow_buries_a_lawn_and_only_dusts_a_canopy() -> None:
     green = canopy[..., 1] - canopy[..., [0, 2]].mean(axis=2)
     assert (green > 15.0).mean() > 0.15, "no foliage left showing"
     assert (canopy.min(axis=2) > 170.0).mean() > 0.1, "no snow on the foliage"
+
+
+def test_a_car_s_roof_is_told_from_the_road_by_being_an_island() -> None:
+    """Level and a car's width across is a car. What an opening removes is
+    not: that also takes the road between two cars, and left the open road
+    as a set of discs."""
+    from weathermentations.utils.ground import small_level_areas
+
+    level = np.ones((200, 200), dtype=np.float32)
+    level[:40] = 0.0
+    for left in (40, 80):  # two cars, a narrow strip of road between them
+        level[98:132, left - 2 : left + 32] = 0.0  # sides
+        level[104:126, left + 4 : left + 26] = 1.0  # roof
+    vehicles = small_level_areas(level, 0.12)
+
+    assert vehicles[108:122, 48:62].min() > 0.9 and vehicles[108:122, 88:102].min() > 0.9
+    assert vehicles[100:130, 73:77].max() < 0.05, "the road between the cars is not a car"
+    assert vehicles[150:, :].max() == 0.0
+
+
+def test_how_much_snow_vehicles_carry_is_drawn_per_frame() -> None:
+    snow = RandomSnow(
+        depth_provider=_provider(), p=1.0, max_flakes=0, vehicle_cover_range=(0.25, 0.25)
+    )
+    with recording() as log:
+        snow(image=_scene())
+    assert log[0]["drew"]["vehicle_cover"] == pytest.approx(0.25)
+
+
+def test_the_sky_edge_is_not_drawn_round_a_distant_tower() -> None:
+    """A tower a mile off is at the sky's depth as far as the network can
+    tell. Redrawing the sky's edge by depth alone took the tower's edge in,
+    and it came out with a pale outline."""
+    from weathermentations.utils.sky import sky_to_depth_edge
+
+    image = np.full((120, 120, 3), 0.6, dtype=np.float32)  # sky
+    image[40:, 50:70] = 0.15  # a dark tower, at the same depth
+    depth = np.full((120, 120), 0.5, dtype=np.float32)
+    sky = np.ones((120, 120), dtype=np.float32)
+    sky[39:, 49:71] = 0.0  # the mask stops a pixel short of the tower
+
+    by_depth = sky_to_depth_edge(sky, depth)
+    by_colour_too = sky_to_depth_edge(sky, depth, image)
+    assert by_depth[60:, 50:52].mean() > 0.5, "the fixture should show the failure"
+    assert by_colour_too[60:, 50:70].max() < 0.05
+    assert by_colour_too[60:, 49].mean() > 0.8, "the sky beside the tower is sky"

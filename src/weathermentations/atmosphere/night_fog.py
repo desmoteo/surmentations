@@ -47,7 +47,6 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-import cv2
 import numpy as np
 from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
@@ -59,7 +58,7 @@ from weathermentations.diagnostics import record_draw
 from weathermentations.lens.dirt import scatter_psf
 from weathermentations.utils.color import TYPICAL_SCENE_ALBEDO
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
-from weathermentations.utils.sky import lift_sky, sky_weight
+from weathermentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
 from weathermentations.utils.sources import light_field, source_mask
 
 # Koschmieder: visibility is the distance at which contrast falls to 2%.
@@ -84,35 +83,6 @@ _LIT_VOLUME_SIGMA = 0.1
 # Share of the frame's mean light that reaches fog everywhere: lamps out of
 # frame, and light scattered more than once.
 _DIFFUSE_SHARE = 0.25
-
-
-# How far the sky mask is allowed to grow to meet the depth map's own edge,
-# as a fraction of the diagonal, and how close in relative depth a pixel has
-# to be to the sky's to be let in.
-_SKY_EDGE_REACH = 0.04
-_SKY_DEPTH_TOLERANCE = 0.04
-
-
-def _sky_to_depth_edge(sky: np.ndarray, relative_depth: np.ndarray) -> np.ndarray:
-    """Redraw the sky mask's outline where the depth map puts it.
-
-    The mask is made at low resolution and its edge wanders a few percent of
-    the frame either side of the real skyline. By day that is hidden, the
-    veil being about as bright as the sky. At night the fog is brighter than
-    the sky, so every patch of sky the mask misses next to a tree stays a
-    black hole in a glowing bank. The depth map has the skyline to the
-    pixel; what it lacks is which side is sky, which the mask knows.
-    """
-    core = sky > 0.9
-    if not core.any():
-        return sky
-    level = float(np.median(relative_depth[core]))
-    near_level = np.clip(
-        2.0 - np.abs(relative_depth - level) / _SKY_DEPTH_TOLERANCE, 0.0, 1.0
-    )
-    reach = max(3, round(_SKY_EDGE_REACH * float(np.hypot(*sky.shape))) | 1)
-    grown = cv2.dilate(sky, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach)))
-    return (grown * near_level).astype(np.float32)
 
 
 class NightFog(WeatherTransform):
@@ -187,7 +157,9 @@ class NightFog(WeatherTransform):
         height, width = params["shape"][:2]
         relative_depth = self.depth_provider.get_depth(scene)
         linear, _scale, _is_integer = to_linear_unit(first_frame(scene))
-        sky = _sky_to_depth_edge(sky_weight(linear, relative_depth), relative_depth)
+        sky = sky_to_depth_edge(
+            sky_weight(linear, relative_depth), relative_depth, linear
+        )
         depth_m = lift_sky(self.depth_provider.to_metric(relative_depth), sky)
 
         low, high = self.visibility_range_m

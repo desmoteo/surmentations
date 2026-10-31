@@ -59,7 +59,7 @@ from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import veil_radiance_linear
 from weathermentations.utils.photometry import from_linear_unit, linear_to_srgb, to_linear_unit
-from weathermentations.utils.sky import lift_sky, sky_weight
+from weathermentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
 
 # Rec.709 primaries' representative wavelengths, in nm.
 _RGB_WAVELENGTHS = np.array([600.0, 550.0, 450.0], dtype=np.float32)
@@ -159,7 +159,9 @@ class RandomFog(WeatherTransform):
         # The network's depth for sky is arbitrary, so it is found by other
         # means and put at the far plane; see utils/sky.py.
         linear_scene, _scale, _is_integer = to_linear_unit(image)
-        sky = sky_weight(linear_scene, relative_depth)
+        sky = sky_to_depth_edge(
+            sky_weight(linear_scene, relative_depth), relative_depth, linear_scene
+        )
         depth_pm = lift_sky(depth_pm, sky)
 
         beta = self.py_random.uniform(*self.beta_range)

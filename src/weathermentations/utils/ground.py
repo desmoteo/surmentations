@@ -95,6 +95,7 @@ def ground_noise(
     scale_m: float,
     rng: np.random.Generator,
     octaves: int = 3,
+    uniform: bool = False,
 ) -> np.ndarray:
     """Noise in ``[0, 1]`` laid on the ground plane, ``(H, W)``.
 
@@ -103,9 +104,15 @@ def ground_noise(
     reads as something floating in front of the scene. This samples a noise
     tile at each pixel's position on the ground, recovered from depth, with
     features about ``scale_m`` across.
+
+    With ``uniform`` the values are spread evenly over ``[0, 1]``, so that
+    thresholding at ``t`` selects a share ``t`` of the ground.
     """
     height, width = depth_m.shape
     noise = value_noise(_TILE_PX, _TILE_PX, rng=rng, octaves=octaves, base_cells=_TILE_CELLS)
+    if uniform:
+        ranks = np.argsort(np.argsort(noise, axis=None)).astype(np.float32)
+        noise = (ranks / (noise.size - 1)).reshape(noise.shape)
 
     pitch = np.deg2rad(camera_pitch_deg)
     xs = (np.arange(width, dtype=np.float32) - width / 2.0).reshape(1, -1)
@@ -125,3 +132,32 @@ def ground_noise(
     return cv2.remap(
         noise, tile(across + offset[0]), tile(along + offset[1]), interpolation=cv2.INTER_LINEAR
     )
+
+
+def small_level_areas(level: np.ndarray, max_width_fraction: float) -> np.ndarray:
+    """``[0, 1]`` weight of level patches too small to be ground, ``(H, W)``.
+
+    A car's roof and bonnet are level, and nothing in a surface normal says
+    they are not road. What does is that they are islands: patches of level
+    surface a car's width across, walled off from the road by the car's
+    sides. So this is every connected patch of level surface that fits in a
+    box ``max_width_fraction`` of the diagonal on a side. Give it the level
+    weight as read from the normals, before it is grown to object edges,
+    which is what joins a roof to the road beside it.
+
+    (Taking what a morphological opening removes was tried first. It also
+    removes the road between two cars, and leaves the open road as a set of
+    discs.)
+    """
+    limit = max_width_fraction * float(np.hypot(*level.shape))
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        (level > 0.5).astype(np.uint8), connectivity=4
+    )
+    small = np.zeros(count, dtype=np.float32)
+    widths = stats[:, cv2.CC_STAT_WIDTH]
+    heights = stats[:, cv2.CC_STAT_HEIGHT]
+    small[1:] = ((widths[1:] <= limit) & (heights[1:] <= limit)).astype(np.float32)
+    islands = small[labels]
+    # Out to the island's own edge, which the threshold stops short of.
+    grown = cv2.dilate(islands, np.ones((5, 5), np.uint8))
+    return cv2.GaussianBlur(grown, (0, 0), sigmaX=1.0).astype(np.float32)

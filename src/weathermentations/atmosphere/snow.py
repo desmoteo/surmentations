@@ -110,6 +110,7 @@ from weathermentations.utils.ground import (
     fill_to_edges,
     ground_noise,
     level_ground_weight,
+    small_level_areas,
     vegetation_weight,
 )
 from weathermentations.utils.overcast import apply_overcast, cloud_cover
@@ -130,7 +131,7 @@ from weathermentations.utils.precipitation import (
     snow_physical_diameter,
     width_cut_for_budget,
 )
-from weathermentations.utils.sky import lift_sky, sky_weight
+from weathermentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
 
 _ACCUMULATION_COLOR = np.array([235.0, 240.0, 245.0])
 
@@ -299,7 +300,19 @@ _BARE_PATCH_CONTRAST = 2.5
 
 # Local contrast of luminance, as a fraction of its level, between which
 # vegetation goes from lawn to canopy.
-_CANOPY_RELIEF = (0.12, 0.3)
+_CANOPY_RELIEF = (0.18, 0.36)
+
+# Size of the unevenness in a thin covering, in metres, and its depth as a
+# share of the covering, for the thinnest one. Deep snow is even.
+_DUSTING_SCALE_M = 0.35
+_DUSTING_GRAIN = 0.2
+
+# How much of what is under settled snow it hides.
+_SNOW_OPACITY = 0.95
+
+# Widest level patch, as a fraction of the diagonal, taken for the top of a
+# vehicle and not for ground.
+_VEHICLE_WIDTH = 0.09
 
 # Share of a tree's lit foliage that carries snow when the ground is covered.
 _CANOPY_COVER = 0.7
@@ -418,6 +431,11 @@ class RandomSnow(WeatherTransform):
         camera_pitch_deg: how far the camera is tilted **down** from level,
             which is how world "up" is oriented relative to the image. The
             usual mounting for a surveillance camera is a few degrees down.
+        vehicle_cover_range: how much of the settled snow also lies on
+            things small enough to be vehicles, drawn per call. 0 is moving
+            traffic, which carries none; 1 is a car park after a night's
+            snow. A level patch a car's width across is taken for a
+            vehicle, since nothing else tells a roof from the road.
         accumulation_patchiness: how unevenly the settled snow lies. 0 is a
             perfectly even coat; higher leaves thin patches where it has
             blown clear or melted. Kept low by default: the patches are
@@ -545,6 +563,11 @@ class RandomSnow(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(-89.0, 89.0)),
         ]
+        vehicle_cover_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
         accumulation_patchiness_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -581,6 +604,7 @@ class RandomSnow(WeatherTransform):
         accumulation_strength_range: tuple[float, float] = (0.1, 1.0),
         camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
         accumulation_patchiness_range: tuple[float, float] = (0.0, 0.3),
+        vehicle_cover_range: tuple[float, float] = (0.0, 0.6),
         accumulation_falloff_range: tuple[float, float] = (2.0, 5.0),
         overcast_range: tuple[float, float] = (0.7, 1.0),
         p: float = 0.5,
@@ -609,6 +633,7 @@ class RandomSnow(WeatherTransform):
         self.accumulation_strength_range = accumulation_strength_range
         self.camera_pitch_range_deg = camera_pitch_range_deg
         self.accumulation_patchiness_range = accumulation_patchiness_range
+        self.vehicle_cover_range = vehicle_cover_range
         self.accumulation_falloff_range = accumulation_falloff_range
         self.overcast_range = overcast_range
 
@@ -622,7 +647,9 @@ class RandomSnow(WeatherTransform):
         relative_depth = self.depth_provider.get_depth(scene)
         depth_pm = self.depth_provider.to_metric(relative_depth)
         linear_scene, _scale, _is_integer = to_linear_unit(first_frame(scene))
-        sky = sky_weight(linear_scene, relative_depth)
+        sky = sky_to_depth_edge(
+            sky_weight(linear_scene, relative_depth), relative_depth, linear_scene
+        )
 
         # Every physical quantity is drawn per call. A scalar here would make
         # a whole dataset share one snowfall rate, one snow type and one
@@ -635,6 +662,7 @@ class RandomSnow(WeatherTransform):
         camera_pitch = self.py_random.uniform(*self.camera_pitch_range_deg)
         fall_speed_scale = self.py_random.uniform(*self.fall_speed_scale_range)
         accumulation_falloff = self.py_random.uniform(*self.accumulation_falloff_range)
+        vehicle_cover = self.py_random.uniform(*self.vehicle_cover_range)
         accumulation_patchiness = self.py_random.uniform(*self.accumulation_patchiness_range)
 
         focal = focal_length_px(width, height, horizontal_fov)
@@ -763,9 +791,12 @@ class RandomSnow(WeatherTransform):
             # threshold, since a coat slides off anything much steeper than
             # about 45 degrees. Without this a 60-degree wall keeps half a
             # covering and the whole frame washes flat white.
-            level = fill_to_edges(
-                level_ground_weight(cosine, accumulation_falloff), linear_scene
-            )
+            as_read = level_ground_weight(cosine, accumulation_falloff)
+            # A level patch the width of a car is a car. Whether snow
+            # stays on it depends on whether it has been standing there.
+            vehicles = small_level_areas(as_read, _VEHICLE_WIDTH)
+            level = fill_to_edges(as_read * (1.0 - vehicles), linear_scene)
+            level = level + vehicle_cover * as_read * vehicles
             # Foliage has no surface to read a normal from, and from above a
             # canopy reads as level ground: covered evenly, it became a grey
             # smear with the tree gone. Grass is vegetation too and is
@@ -776,21 +807,47 @@ class RandomSnow(WeatherTransform):
             around = np.maximum(cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma), 1e-4)
             relief = cv2.GaussianBlur(np.abs(luma / around - 1.0), (0, 0), sigmaX=2.0 * sigma)
             rough = np.clip((relief - _CANOPY_RELIEF[0]) / np.ptp(_CANOPY_RELIEF), 0.0, 1.0)
-            canopy = vegetation_weight(linear_scene) * rough
-            settled = level * (1.0 - canopy)
+            # Green says vegetation by day. Under sodium lamps nothing is
+            # green, and what is left to tell a tree by is that its "level
+            # ground" comes and goes from one patch to the next, where a
+            # road's is steady.
+            steady = cv2.GaussianBlur(as_read, (0, 0), sigmaX=2.0 * sigma)
+            # Comes and goes: a wall or the sky never reads as level at
+            # all, and counting those drew snow along every skyline.
+            unsteady = np.clip((0.85 - steady) / 0.25, 0.0, 1.0) * np.clip(
+                (steady - 0.15) / 0.2, 0.0, 1.0
+            )
+            canopy = rough * np.maximum(vegetation_weight(linear_scene), unsteady)
+            ground = level * (1.0 - canopy)
             if accumulation_patchiness > 0.0:
-                # Settled snow is never a perfectly even coat: wind scours it
-                # off exposed edges, traffic clears it, and it melts first
-                # where the surface is warm.
-                noise = ground_noise(
-                    depth_pm, focal, camera_pitch, _BARE_PATCH_SCALE_M, rng
-                )
+                # Wind scours snow off exposed ground and it melts first
+                # where the surface is warm: broad areas where it lies thin.
+                noise = ground_noise(depth_pm, focal, camera_pitch, _BARE_PATCH_SCALE_M, rng)
                 patches = np.clip((noise - 0.5) * _BARE_PATCH_CONTRAST + 0.5, 0.0, 1.0)
-                settled = settled * (1.0 - accumulation_patchiness * (1.0 - patches))
+                ground = ground * (1.0 - accumulation_patchiness * (1.0 - patches))
+            # A thin covering seen from a camera's distance is an even
+            # greying of the ground: the snow lies in the grain of the
+            # surface, far finer than a pixel. It is not quite even, though.
+            # It is a little deeper in one square metre than the next, and
+            # that unevenness, laid on the ground so it foreshortens with
+            # the road, is what keeps a dusting from reading as a veil in
+            # the air. (Cutting it into patches with edges was tried, and
+            # looked like spilt paint at any scale.)
+            grain = ground_noise(
+                depth_pm, focal, camera_pitch, _DUSTING_SCALE_M, rng, octaves=4, uniform=True
+            )
+            thin = 1.0 - accumulation_strength
+            uneven = 1.0 + _DUSTING_GRAIN * thin * (2.0 * grain - 1.0)
+            settled = ground * accumulation_strength * uneven
             # On a canopy the snow lies on the clumps that stand proud,
             # which are the ones the light reaches.
             proud = np.clip((luma / around - 0.95) / 0.35, 0.0, 1.0)
-            settled = settled + _CANOPY_COVER * canopy * proud
+            settled = settled + accumulation_strength * _CANOPY_COVER * canopy * proud
+            # Nothing settles on the sky. Both steps above that look a few
+            # pixels around — growing level ground to an object's edge, and
+            # finding where "level" comes and goes — reach past a roofline
+            # into the sky beside it, and drew a pale line round the skyline.
+            settled = settled * (1.0 - sky)
 
         if self.veil_beta_range is not None:
             veil_bounds = self.veil_beta_range
@@ -820,6 +877,7 @@ class RandomSnow(WeatherTransform):
             veil_beta=veil_beta,
             accumulation_falloff=accumulation_falloff,
             accumulation_patchiness=accumulation_patchiness,
+            vehicle_cover=vehicle_cover,
         )
 
         return {
@@ -924,12 +982,15 @@ class RandomSnow(WeatherTransform):
             # new asphalt, at an albedo of 0.05, says a quarter of the
             # truth, and snow shaded by that is grey. The frame's own
             # illuminant, read so that lamps do not count, puts a floor
-            # under it. At night that is low, and the floor with it.
-            # By day the light is one sky over the whole frame and the floor
-            # is nearly all of it, leaving shadows only faintly: snow in
-            # shade is lit by that sky. At night the light is pools under
-            # lamps with darkness between, and the floor has to stay low or
-            # snow glows where no lamp reaches.
+            # under it.
+            #
+            # By day the floor is nearly all of the light, which costs the
+            # snow most of the shadows that fall on it. A dark patch of
+            # ground is either in shadow or dark, and nothing here can tell
+            # which: reading the light off the brightest thing nearby was
+            # tried, and stamped a pale disc round every headlight. At night
+            # the light is pools under lamps, and the floor stays low or
+            # snow glows where none reaches.
             ambient = float(luminance(airlight.reshape(1, 1, -1)).ravel()[0])
             daylight = float(np.clip((ambient - 0.1) / 0.2, 0.0, 1.0))
             low, high = _SHADING_FLOOR
@@ -946,7 +1007,8 @@ class RandomSnow(WeatherTransform):
             mean_luma = max(float(luminance(mean_colour.reshape(1, 1, -1)).ravel()[0]), 1e-6)
             tint = 1.0 + cast * (mean_colour / mean_luma - 1.0)
 
-            coverage = np.clip(settled * accumulation_strength, 0.0, 1.0)[..., None]
+            # `settled` is already the share of each pixel under snow.
+            coverage = np.clip(settled * _SNOW_OPACITY, 0.0, 1.0)[..., None]
             snow = snow_albedo * tint.reshape(1, 1, -1).astype(np.float32) * shading
             out = out * (1.0 - coverage) + snow * coverage
 
