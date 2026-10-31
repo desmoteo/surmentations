@@ -162,6 +162,16 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "pan_shift_range_px": (_lerp(-3.0, -30.0, t), _lerp(3.0, 30.0, t)),
                 "wobble_amplitude_range_px": (0.0, _lerp(1.5, 12.0, t)),
             },
+            "SensorNoise": {
+                # Gain is the whole of it: 4-10 dB is a daylight frame whose
+                # grain shows only in flat areas, 24-36 dB a night frame that
+                # is mostly grain. Full well and read noise are the sensor's
+                # and stay at the transform's own ranges.
+                # The floor is 4 dB, not 0: at unity gain the grain moved the
+                # reference frame by 0.98 of a level, under what it is
+                # quantised into.
+                "gain_range_db": (_lerp(4.0, 24.0, t), _lerp(10.0, 36.0, t)),
+            },
             "ExposureTransient": {
                 "exposure_error_stops_range": (_lerp(-0.4, -2.2, t), _lerp(0.4, 2.2, t)),
                 "actual_temperature_range_k": (_lerp(4800, 2400, t), _lerp(6200, 9500, t)),

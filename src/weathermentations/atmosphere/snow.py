@@ -79,12 +79,13 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations.base import WeatherTransform, require_depth_provider, scene_of
+from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
-from weathermentations.utils.color import illuminant_radiance_linear, sky_radiance_linear
+from weathermentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
 from weathermentations.utils.noise import value_noise
+from weathermentations.utils.overcast import apply_overcast, cloud_cover
 from weathermentations.utils.photometry import (
     from_linear_unit,
     luminance,
@@ -102,6 +103,7 @@ from weathermentations.utils.precipitation import (
     snow_physical_diameter,
     width_cut_for_budget,
 )
+from weathermentations.utils.sky import lift_sky, sky_weight
 
 _ACCUMULATION_COLOR = np.array([235.0, 240.0, 245.0])
 
@@ -259,6 +261,10 @@ def _paste_flake_sprite(
     np.maximum(region, sprite[src_y0:src_y1, src_x0:src_x1], out=region)
 
 
+# Liquid-equivalent snowfall rate at which the light is most of the way to
+# fully overcast. Snow of any note falls from a closed sky.
+_OVERCAST_HALF_RATE_MM_H = 0.8
+
 class RandomSnow(WeatherTransform):
     """Physically-parameterised falling snow with depth-derived accumulation.
 
@@ -369,6 +375,15 @@ class RandomSnow(WeatherTransform):
             near-horizontal surfaces instead of giving a 60-degree wall half
             a covering. 1 disables the effect and uses the bare cosine.
 
+        overcast_range: how much of the light that goes with this much
+            snow the frame is given, drawn per call. Precipitation falls
+            from cloud, so by default the scene is relit towards overcast in
+            step with the rate: contrast and saturation fall and any sky in
+            view turns to cloud. 1 is the full change for the rate, 0 leaves
+            the light as photographed — right for frames that already are
+            overcast. It cannot remove shadows the photograph has; it softens
+            a sunny scene and does not convert it. See ``utils/overcast.py``.
+
     Targets:
         image
 
@@ -449,6 +464,11 @@ class RandomSnow(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(3, 12)),
         ]
+        overcast_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
         rim_gain_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -507,6 +527,7 @@ class RandomSnow(WeatherTransform):
         camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
         accumulation_patchiness_range: tuple[float, float] = (0.15, 0.6),
         accumulation_falloff_range: tuple[float, float] = (2.0, 5.0),
+        overcast_range: tuple[float, float] = (0.7, 1.0),
         p: float = 0.5,
     ):
         super().__init__(p=p)
@@ -534,6 +555,7 @@ class RandomSnow(WeatherTransform):
         self.camera_pitch_range_deg = camera_pitch_range_deg
         self.accumulation_patchiness_range = accumulation_patchiness_range
         self.accumulation_falloff_range = accumulation_falloff_range
+        self.overcast_range = overcast_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -542,7 +564,10 @@ class RandomSnow(WeatherTransform):
         height, width = params["shape"][:2]
         rng = self.random_generator
 
-        depth_pm = self.depth_provider.get_metric_depth(scene)
+        relative_depth = self.depth_provider.get_depth(scene)
+        depth_pm = self.depth_provider.to_metric(relative_depth)
+        linear_scene, _scale, _is_integer = to_linear_unit(first_frame(scene))
+        sky = sky_weight(linear_scene, relative_depth)
 
         # Every physical quantity is drawn per call. A scalar here would make
         # a whole dataset share one snowfall rate, one snow type and one
@@ -729,7 +754,10 @@ class RandomSnow(WeatherTransform):
             "blades": self.py_random.randint(*self.aperture_blades_range),
             "cats_eye": self.py_random.uniform(*self.cats_eye_strength_range),
             "rim_gain": self.py_random.uniform(*self.rim_gain_range),
-            "veil_transmission": np.exp(-veil_beta * depth_pm).astype(np.float32),
+            "veil_transmission": np.exp(-veil_beta * lift_sky(depth_pm, sky)).astype(np.float32),
+            "sky": sky,
+            "overcast": self.py_random.uniform(*self.overcast_range)
+            * cloud_cover(snowfall_rate, _OVERCAST_HALF_RATE_MM_H),
             "settled": settled.astype(np.float32),
             "accumulation_strength": accumulation_strength,
         }
@@ -745,6 +773,8 @@ class RandomSnow(WeatherTransform):
         veil_transmission: np.ndarray,
         settled: np.ndarray,
         accumulation_strength: float,
+        sky: np.ndarray | None = None,
+        overcast: float = 0.0,
         **params: Any,
     ) -> np.ndarray:
         height, width = img.shape[:2]
@@ -771,6 +801,8 @@ class RandomSnow(WeatherTransform):
             )
 
         linear, scale, is_integer = to_linear_unit(img)
+        # Snow falls from cloud; relight the scene before anything is lit by it.
+        linear = apply_overcast(linear, overcast, sky)
 
         # Flakes are ice lit by, and imaging, the same sky as the scene — so
         # they are composited toward the scene's own sky radiance, not toward
@@ -784,7 +816,7 @@ class RandomSnow(WeatherTransform):
         # recorded radiance and must not be lifted the same way, or a bright
         # sky blows out to flat white.
         flake_radiance = illuminant_radiance_linear(linear)
-        airlight = sky_radiance_linear(linear)
+        airlight = veil_radiance_linear(linear, sky)
 
         # Heavy snow scatters hard: the veil is most of what says "snowing".
         t_veil = veil_transmission[..., None]

@@ -22,6 +22,7 @@ from weathermentations.camera import (
     ExposureTransient,
     NightIrMode,
     RollingShutter,
+    SensorNoise,
     TemporalDenoiseArtifacts,
     VideoCodecArtifacts,
     WdrToneMapping,
@@ -36,7 +37,7 @@ TRANSFORMS = {
     for cls in (
         RandomFog, RandomRain, RandomSnow, NightRain, NightSnow,
         WaterDroplets, DirtSoil, SunFlare, HousingOccluders,
-        CastShadows, NightIrMode, AcFlicker, RollingShutter,
+        CastShadows, NightIrMode, AcFlicker, RollingShutter, SensorNoise,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,
         VideoCodecArtifacts,
     )

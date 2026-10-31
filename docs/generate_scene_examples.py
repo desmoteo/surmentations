@@ -29,9 +29,9 @@ transforms, which is the point of showing it done:
   car park's far wall visible at 40 m hides a mountain at 3 km completely.
   So fog is set by visibility, as a fraction of the scene's depth, and the
   distance veils of rain and snow are capped the same way.
-* **What applies.** Sunlight effects are skipped on the night scene, rain
-  and snow under a roof, and the daylight weather models at night. Nothing
-  in the library works that out for itself.
+* **What applies.** Sunlight effects and daylight snow are skipped on the
+  night scene, and rain and snow under a roof. Nothing in the library works
+  that out for itself.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ PIPELINE_DRAWS = 4
 LAMP_LIT = ("night_rain", "night_snow", "night_droplets")
 NEEDS_SUN = ("sun_flare", "cast_shadows")
 NEEDS_OPEN_SKY = ("rain", "snow", "night_rain", "night_snow", *NEEDS_SUN)
-DAYLIGHT_WEATHER = ("fog", "rain", "snow")
+DAYLIGHT_WEATHER = ("snow",)
 
 # Meteorological visibility, as a multiple of the scene's farthest distance.
 # Fog is set to it outright. For rain and snow it is a floor: their veils
@@ -102,9 +102,8 @@ WHY_NOT = {
     "sun": "it needs the sun, and the scene is at night",
     "roof": "the scene is under a roof",
     "daylight": (
-        "it is a daylight model: its veil takes its colour from the brightest pixels in "
-        "the frame, which at night are the street lamps, and the whole frame turns their "
-        "colour. `NightRain` and `NightSnow` are the night models"
+        "its settled snow is lit as by day, and comes out as a white floor under a black "
+        "sky. `NightSnow` is the night model"
     ),
 }
 
@@ -178,6 +177,9 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
         extra["ambient_light_range"] = (2.5, 4.0)
     if scene.night and effect == "water_droplets":
         extra["aperture_diameter_range_mm"] = NIGHT_IRIS_MM
+    if scene.night and effect == "rain":
+        extra["aperture_diameter_range_mm"] = NIGHT_IRIS_MM
+        extra["scene_illuminance_range_lux"] = NIGHT_STREET_LUX
     return extra
 
 
@@ -350,15 +352,19 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "",
         "They are unretouched output, and some of it is wrong in ways worth knowing:",
         "",
-        "- **Wet ground is any level surface.** Rain puts a mirror on the fields in",
-        "  `wooded_hills`, not only on paving.",
-        "- **Reflections can read from above the frame.** Where the mirrored point is",
-        "  outside the picture the top row is repeated, which shows as vertical smears",
-        "  on the road in `underpass_from_above` and `crosswalk_day`.",
+        "- **Wet ground is level ground that is not green.** Vegetation is left dry;",
+        "  bare soil, gravel and roofs seen from above still get a film of water.",
+        "- **A reflection from outside the frame is a guess.** Where the mirrored point",
+        "  is above the picture the road reflects an estimate of the sky, which is",
+        "  right under open sky and wrong under the flyover in `underpass_from_above`.",
+        "- **Overcast light cannot remove shadows.** Rain and snow grey the sky and",
+        "  lower contrast, but the hard shadows of a sunny photograph stay.",
+        "- **Fog and rain at night stay dark and do not glow.** On `street_night` they",
+        "  dim the lamps without lighting the air round them.",
         "- **Depth is relative and stretched to the range it is given.** The facades in",
         "  `urban_street_wet` are placed further away than they are, so its fog is",
         "  heavier than the stated visibility would make it.",
-        "- **Daylight weather is not rendered on `street_night`**, because it would be",
+        "- **Daylight snow is not rendered on `street_night`**, because it would be",
         "  wrong: see that page.",
         "- **Flakes close to an infrared lamp are very large.** `night_snow` draws the",
         "  nearest ones as long white bars.",

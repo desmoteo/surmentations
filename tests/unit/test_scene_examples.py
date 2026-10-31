@@ -94,9 +94,7 @@ def test_effects_are_left_out_where_they_do_not_apply() -> None:
     indoors = Scene((2.0, 40.0), 5.0, sheltered=True)
 
     assert all(_why_not(effect, day) is None for effect in EFFECTS)
-    assert {e for e in EFFECTS if _why_not(e, night)} == {
-        "sun_flare", "cast_shadows", "fog", "rain", "snow",
-    }
+    assert {e for e in EFFECTS if _why_not(e, night)} == {"sun_flare", "cast_shadows", "snow"}
     assert {e for e in EFFECTS if _why_not(e, indoors)} == {
         "sun_flare", "cast_shadows", "rain", "snow", "night_rain", "night_snow",
     }

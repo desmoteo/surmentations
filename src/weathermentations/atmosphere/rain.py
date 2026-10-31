@@ -88,11 +88,12 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations.base import WeatherTransform, require_depth_provider, scene_of
+from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
 from weathermentations.depth.normals import horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
-from weathermentations.utils.color import illuminant_radiance_linear, sky_radiance_linear
+from weathermentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
+from weathermentations.utils.overcast import apply_overcast, cloud_cover
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import (
     focal_length_px,
@@ -105,6 +106,7 @@ from weathermentations.utils.precipitation import (
     sample_resolvable_particles,
     width_cut_for_budget,
 )
+from weathermentations.utils.sky import lift_sky, sky_weight
 
 # Width of the sensor the field of view is taken across, for turning an
 # aperture diameter into an f-number: a 1/2.8" sensor, the commonest in
@@ -126,6 +128,10 @@ def metered_exposure_s(f_number: float, illuminance_lux: float) -> float:
     """
     return _METERING_CONSTANT_LUX_S * f_number**2 / max(illuminance_lux, 1e-6)
 
+
+# Rain rate at which the light is most of the way to fully overcast: steady
+# moderate rain already falls from a sky with no sun in it.
+_OVERCAST_HALF_RATE_MM_H = 8.0
 
 # Lowest rain rate the transform will accept. Named so presets and the docs
 # generator can clamp to it instead of hard-coding a number that silently
@@ -307,6 +313,14 @@ class RandomRain(WeatherTransform):
             near 0.9 the surface is only damp and reflects nothing, and the
             Fresnel reflection reaches full strength at 0.5, where there is
             a continuous film.
+        overcast_range: how much of the light that goes with this much
+            rain the frame is given, drawn per call. Precipitation falls
+            from cloud, so by default the scene is relit towards overcast in
+            step with the rate: contrast and saturation fall and any sky in
+            view turns to cloud. 1 is the full change for the rate, 0 leaves
+            the light as photographed — right for frames that already are
+            overcast. It cannot remove shadows the photograph has; it softens
+            a sunny scene and does not convert it. See ``utils/overcast.py``.
         wetness_falloff_range: exponent on the upward-facing cosine. Water
             sheets on horizontal surfaces and runs off anything steeper, more
             sharply than snow settles, so this sits above snow's equivalent.
@@ -401,6 +415,11 @@ class RandomRain(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        overcast_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
         wetness_falloff_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -430,6 +449,7 @@ class RandomRain(WeatherTransform):
         wetness_probability: float = 0.7,
         wetness_darkening_range: tuple[float, float] = (0.4, 0.7),
         wetness_falloff_range: tuple[float, float] = (4.0, 9.0),
+        overcast_range: tuple[float, float] = (0.7, 1.0),
         p: float = 0.5,
     ):
         super().__init__(p=p)
@@ -454,6 +474,7 @@ class RandomRain(WeatherTransform):
         self.wetness_probability = wetness_probability
         self.wetness_darkening_range = wetness_darkening_range
         self.wetness_falloff_range = wetness_falloff_range
+        self.overcast_range = overcast_range
 
     def _veil_beta_bounds(self, rain_rate_mm_h: float) -> tuple[float, float]:
         """Veil extinction range, derived from the rain rate unless overridden."""
@@ -494,7 +515,10 @@ class RandomRain(WeatherTransform):
         height, width = params["shape"][:2]
         rng = self.random_generator
 
-        depth_pm = self.depth_provider.get_metric_depth(scene)
+        relative_depth = self.depth_provider.get_depth(scene)
+        depth_pm = self.depth_provider.to_metric(relative_depth)
+        linear_scene, _scale, _is_integer = to_linear_unit(first_frame(scene))
+        sky = sky_weight(linear_scene, relative_depth)
 
         # Every physical quantity is drawn per call. A scalar here would make
         # a whole dataset share one rain rate, one camera geometry and one
@@ -652,6 +676,9 @@ class RandomRain(WeatherTransform):
             # decisively than snow, which is why this exponent is higher than
             # snow's accumulation falloff.
             wetness = (cosine**wetness_falloff).astype(np.float32)
+            # Water lies as a film on paving. On grass and crops it is held
+            # in the canopy and the soil, and there is no mirror.
+            wetness *= _paved_weight(linear_scene)
             # Fit the horizon on the surface actually being wet, not on the
             # raw cosine. A distant flat plane's normal points at the camera,
             # so `n . up` there is sin(pitch) and crosses a lenient threshold
@@ -694,7 +721,10 @@ class RandomRain(WeatherTransform):
                 "blur_sigma": (self.definition_softness * blur_radius).astype(np.float32),
             },
             "angle": wind_angle,
-            "veil_transmission": np.exp(-veil_beta * depth_pm).astype(np.float32),
+            "veil_transmission": np.exp(-veil_beta * lift_sky(depth_pm, sky)).astype(np.float32),
+            "sky": sky,
+            "overcast": self.py_random.uniform(*self.overcast_range)
+            * cloud_cover(rain_rate, _OVERCAST_HALF_RATE_MM_H),
             "draw_wetness": draw_wetness,
             "wetness": wetness,
             "wetness_darkening": wetness_darkening,
@@ -713,11 +743,18 @@ class RandomRain(WeatherTransform):
         wetness_darkening: float,
         horizon_px: float,
         focal_px: float,
+        sky: np.ndarray | None = None,
+        overcast: float = 0.0,
         **params: Any,
     ) -> np.ndarray:
         height, width = img.shape[:2]
         linear, scale, is_integer = to_linear_unit(img)
         original_mean = float(linear.mean())
+
+        # The light first: rain falls from cloud, and everything below —
+        # the veil's colour, what a streak images, what the road reflects —
+        # is lit by that sky and not by the one in the photograph.
+        linear = apply_overcast(linear, overcast, sky)
 
         # A drop images a ~165 degree field of view, so a streak is basically
         # a picture of the sky. Take its radiance from the scene itself.
@@ -725,7 +762,7 @@ class RandomRain(WeatherTransform):
         # it takes the illuminant. The veil is scattered skylight and
         # saturates at the sky's own recorded radiance instead.
         streak_radiance = illuminant_radiance_linear(linear)
-        airlight = sky_radiance_linear(linear)
+        airlight = veil_radiance_linear(linear, sky)
 
         occupancy = render_streak_layer(height, width, streaks)
 
@@ -752,7 +789,9 @@ class RandomRain(WeatherTransform):
         out = out * (1.0 - a) + streak_radiance[None, None, :] * a
 
         if draw_wetness:
-            out = _apply_ground_wetness(out, wetness, wetness_darkening, horizon_px, focal_px)
+            out = _apply_ground_wetness(
+                out, wetness, wetness_darkening, horizon_px, focal_px, sky_radiance=airlight
+            )
 
         # Stand-in for the camera's auto-exposure pulling the frame back to a
         # normal level after the scene got brighter/hazier.
@@ -919,6 +958,41 @@ def render_streak_layer(
 # Water's normal-incidence reflectance, ((n - 1)/(n + 1))^2 for n = 1.33.
 _WATER_R0 = 0.02
 
+# Fraction of the frame's height over which a reflection hands over from the
+# mirrored picture to the sky, as its source row nears the top edge.
+_OFF_FRAME_BLEND = 0.08
+
+# Vegetation, for the purpose of not paving it: hue between yellow-green and
+# blue-green, with enough saturation to have a hue at all.
+_VEGETATION_HUE_DEG = (50.0, 170.0)
+_VEGETATION_MIN_SATURATION = 0.18
+
+
+def _paved_weight(linear_rgb: np.ndarray) -> np.ndarray:
+    """``[0, 1]`` weight of ground a film of water can lie on.
+
+    Level ground was all treated as road, so rain laid a mirror over fields
+    and forest. Telling paving from everything else needs a segmentation
+    model; telling it from *vegetation* needs only colour, and vegetation is
+    most of what level ground is when it is not paved. Bare soil, gravel and
+    water are not caught, and painted green surfaces are wrongly left dry.
+    """
+    high = linear_rgb.max(axis=2)
+    low = linear_rgb.min(axis=2)
+    chroma = high - low
+    saturation = chroma / np.maximum(high, 1e-4)
+    red, green, blue = linear_rgb[..., 0], linear_rgb[..., 1], linear_rgb[..., 2]
+    # Hue, needed only where green is the largest channel.
+    hue = 60.0 * (2.0 + (blue - red) / np.maximum(chroma, 1e-6))
+    in_band = (green >= high - 1e-6) & (hue > _VEGETATION_HUE_DEG[0]) & (
+        hue < _VEGETATION_HUE_DEG[1]
+    )
+    strength = np.clip((saturation - _VEGETATION_MIN_SATURATION) / 0.12, 0.0, 1.0)
+    vegetation = (in_band * strength).astype(np.float32)
+    sigma = max(1.0, 0.004 * float(np.hypot(*linear_rgb.shape[:2])))
+    return (1.0 - cv2.GaussianBlur(vegetation, (0, 0), sigmaX=sigma)).astype(np.float32)
+
+
 # Diffuse albedo of wet ground relative to dry at the two ends of "wet": a
 # surface that is merely damp, with water in its pores and no film over it,
 # and one that is soaked, where measured albedos have about halved.
@@ -932,6 +1006,7 @@ def _apply_ground_wetness(
     darkening: float,
     horizon_px: float,
     focal_px: float,
+    sky_radiance: np.ndarray | None = None,
 ) -> np.ndarray:
     """Wet ground: a darker diffuse base plus a Fresnel-weighted mirror image.
 
@@ -959,9 +1034,11 @@ def _apply_ground_wetness(
     height, width = linear.shape[:2]
     rows = np.arange(height, dtype=np.float32)
 
-    # Mirror about the horizon, sampling with replication for the rows whose
-    # reflection looks above the top of the frame (they see open sky).
-    source_y = np.clip(2.0 * horizon_px - rows, 0.0, height - 1.0)
+    # Mirror about the horizon. A row whose reflection looks above the top of
+    # the frame sees something the picture does not contain, which under an
+    # open sky is the sky.
+    mirrored_y = 2.0 * horizon_px - rows
+    source_y = np.clip(mirrored_y, 0.0, height - 1.0)
     map_y = np.broadcast_to(source_y.reshape(height, 1), (height, width))
     map_x = np.broadcast_to(np.arange(width, dtype=np.float32), (height, width))
     reflection = cv2.remap(
@@ -974,6 +1051,16 @@ def _apply_ground_wetness(
     # A road is a rough mirror: it smears the reflection along the direction
     # of travel far more than across it.
     reflection = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=4.0)
+
+    # Repeating the top row for those rows instead, as this did, stretches
+    # whatever happens to be on it down the whole road: 71-100% of the wet
+    # pixels on a steeply pitched camera, drawn as vertical stripes. The
+    # hand-over starts a little inside the frame so there is no seam.
+    if sky_radiance is None:
+        sky_radiance = veil_radiance_linear(linear)
+    margin = _OFF_FRAME_BLEND * height
+    off_frame = np.clip((margin - mirrored_y) / margin, 0.0, 1.0).reshape(height, 1, 1)
+    reflection = reflection * (1.0 - off_frame) + sky_radiance.reshape(1, 1, -1) * off_frame
 
     # Schlick: R = R0 + (1 - R0)(1 - cos t)^5, where t is measured from the
     # surface normal, i.e. from vertical. cos t is the *sine* of the ray's

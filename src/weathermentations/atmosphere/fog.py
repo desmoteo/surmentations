@@ -57,8 +57,9 @@ from weathermentations.base import (
 )
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
-from weathermentations.utils.color import estimate_airlight
-from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
+from weathermentations.utils.color import veil_radiance_linear
+from weathermentations.utils.photometry import from_linear_unit, linear_to_srgb, to_linear_unit
+from weathermentations.utils.sky import lift_sky, sky_weight
 
 # Rec.709 primaries' representative wavelengths, in nm.
 _RGB_WAVELENGTHS = np.array([600.0, 550.0, 450.0], dtype=np.float32)
@@ -155,6 +156,11 @@ class RandomFog(WeatherTransform):
 
         relative_depth = self.depth_provider.get_depth(scene)
         depth_pm = self.depth_provider.to_metric(relative_depth, far_m=self.depth_scale)
+        # The network's depth for sky is arbitrary, so it is found by other
+        # means and put at the far plane; see utils/sky.py.
+        linear_scene, _scale, _is_integer = to_linear_unit(image)
+        sky = sky_weight(linear_scene, relative_depth)
+        depth_pm = lift_sky(depth_pm, sky)
 
         beta = self.py_random.uniform(*self.beta_range)
         gamma = self.py_random.uniform(*self.scattering_gamma_range)
@@ -163,7 +169,6 @@ class RandomFog(WeatherTransform):
         # Optical depth per channel, with a ceiling on sky-like pixels so the
         # sky keeps its gradient instead of flattening to pure airlight.
         optical_depth = depth_pm[..., None] * beta_rgb[None, None, :]
-        sky = _sky_weight(relative_depth)
         capped = np.minimum(optical_depth, self.sky_optical_depth_cap)
         optical_depth = optical_depth * (1.0 - sky[..., None]) + capped * sky[..., None]
 
@@ -186,11 +191,11 @@ class RandomFog(WeatherTransform):
         if self.atmospheric_light is not None:
             airlight = np.array(self.atmospheric_light, dtype=np.float32) / 255.0
         else:
-            # In the image's own units: 0-255 for integer input, already 0-1
-            # for float. Dividing a float image's airlight by 255 as well left
-            # it at ~0.003, so fog on float input composited toward *black*.
-            full_scale = 255.0 if np.issubdtype(image.dtype, np.integer) else 1.0
-            airlight = estimate_airlight(image) / full_scale
+            # The horizon sky's radiance: read off the sky where there is
+            # one, inferred where there is not. Not the frame's brightest
+            # pixels, which at night are lamps. Kept gamma-encoded in [0, 1]
+            # here, like `atmospheric_light`, and decoded in `apply`.
+            airlight = linear_to_srgb(veil_radiance_linear(linear_scene, sky))
 
         return {
             "transmission": transmission,
@@ -228,11 +233,3 @@ def _srgb_scalar_to_linear(color: np.ndarray) -> np.ndarray:
     return srgb_to_linear(color.reshape(1, 1, -1)).reshape(-1)
 
 
-def _sky_weight(relative_depth: np.ndarray) -> np.ndarray:
-    """Soft 0-1 mask of sky-like pixels: the farthest depths in the frame.
-
-    Monocular depth saturates on sky, so the very top of the depth range is a
-    good enough proxy without pulling in a segmentation model.
-    """
-    threshold = 0.88
-    return np.clip((relative_depth - threshold) / (1.0 - threshold), 0.0, 1.0).astype(np.float32)

@@ -37,6 +37,7 @@ from weathermentations.camera import (
     ExposureTransient,
     NightIrMode,
     RollingShutter,
+    SensorNoise,
     TemporalDenoiseArtifacts,
     VideoCodecArtifacts,
     WdrToneMapping,
@@ -116,6 +117,24 @@ def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any
     return factory(p=probability, **{**SEVERITY[severity][name], **extra})
 
 
+def _sensor_noise(*, lit_by_mains: bool, infrared: bool, severity: int) -> list[Any]:
+    """Colour sensor noise, where the camera is in colour.
+
+    Gain is how a camera copes with less light, so it follows the lighting
+    state and not a draw: by day it is low and the noise occasional, under
+    artificial light it is two severity levels up and usual. That is the one
+    place a pipeline moves a transform off its own severity, and it does so
+    because severity *is* gain for this transform. Under the infrared ring
+    there is none of this: `NightIrMode` has its own noise, for a monochrome
+    frame, and a second source would count it twice.
+    """
+    if infrared:
+        return []
+    if lit_by_mains:
+        return [_at(SensorNoise, "SensorNoise", 0.70, min(severity + 2, 5))]
+    return [_at(SensorNoise, "SensorNoise", 0.15, severity)]
+
+
 def _stream(
     *,
     lit_by_mains: bool,
@@ -152,6 +171,7 @@ def _stream(
         # to the night branches; indoors it would apply all day.
         _at(AcFlicker, "AcFlicker", 0.45 if lit_by_mains else 0.05, severity),
         _at(RollingShutter, "RollingShutter", 0.50, severity),
+        *_sensor_noise(lit_by_mains=lit_by_mains, infrared=infrared, severity=severity),
         # ISP.
         _at(ExposureTransient, "ExposureTransient", 0.10, severity),
         _at(WdrToneMapping, "WdrToneMapping", 0.12, severity),

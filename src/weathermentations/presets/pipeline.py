@@ -50,6 +50,7 @@ _STAGE_ORDER: dict[str, int] = {
     "NightSnow": 5,
     "AcFlicker": 6,
     "RollingShutter": 6,
+    "SensorNoise": 6,
     # ISP: everything the processor does to the raw frame.
     "ExposureTransient": 7,
     "WdrToneMapping": 8,

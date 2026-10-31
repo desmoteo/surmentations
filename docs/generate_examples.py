@@ -43,6 +43,7 @@ from weathermentations.camera import (
     ExposureTransient,
     NightIrMode,
     RollingShutter,
+    SensorNoise,
     TemporalDenoiseArtifacts,
     VideoCodecArtifacts,
     WdrToneMapping,
@@ -81,6 +82,7 @@ EFFECTS: dict[str, str] = {
     # image of everything after it.
     "night_snow": "NightSnow",
     "night_droplets": "WaterDroplets",
+    "sensor_noise": "SensorNoise",
 }
 
 # Needs the ffmpeg binary; skipped with a warning rather than crashing the run.
@@ -333,6 +335,8 @@ def _build(
         return AcFlicker(**kwargs)
     if name == "rolling_shutter":
         return RollingShutter(**kwargs)
+    if name == "sensor_noise":
+        return SensorNoise(**kwargs)
     if name == "exposure_transient":
         return ExposureTransient(**kwargs)
     if name == "wdr_tone_mapping":
