@@ -45,6 +45,10 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![video_codec](effects/video_codec.jpg) | ![night_snow](effects/night_snow.jpg) | ![night_droplets](effects/night_droplets.jpg) |
 
+| sensor_noise |  |  |
+| --- | --- | --- |
+| ![sensor_noise](effects/sensor_noise.jpg) |  |  |
+
 ## `surveillance` pipeline
 
 4 consecutive draws. Each is a different combination of effects.
