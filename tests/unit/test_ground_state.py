@@ -212,14 +212,14 @@ def test_a_car_s_reflection_lies_under_the_car() -> None:
 def test_wet_ground_reaches_the_foot_of_what_stands_on_it() -> None:
     """Depth is blurred at every object's edge, and the band of road in that
     blur was left dry: a pale outline round each car."""
-    from weathermentations.atmosphere.rain import _fill_to_edges
+    from weathermentations.utils.ground import fill_to_edges
 
     road = np.full((240, 240, 3), 0.2, dtype=np.float32)
     road[100:140, 100:140] = (0.6, 0.1, 0.1)  # a red car
     wetness = np.ones((240, 240), dtype=np.float32)
     wetness[98:142, 98:142] = 0.0  # the car and two pixels of road round it
 
-    filled = _fill_to_edges(wetness, road)
+    filled = fill_to_edges(wetness, road)
     ring = np.ones((240, 240), dtype=bool)
     ring[100:140, 100:140] = False
     ring &= wetness == 0.0
@@ -281,3 +281,63 @@ def test_reflections_do_not_rule_the_road_with_stripes() -> None:
     )
     beside_post = np.abs(road[70:230, 158:166].mean(axis=1) - road[70:230, 170:178].mean(axis=1))
     assert beside_post.max() < 0.01, "the post drew a stripe down the road"
+
+
+# ------------------------------------------------ what settled snow looks like
+
+
+def _settled(scene: np.ndarray, **kwargs: object) -> np.ndarray:
+    snow = RandomSnow(
+        depth_provider=_provider(), p=1.0, max_flakes=0, veil_beta_range=(0.0, 0.0),
+        overcast_range=(0.0, 0.0), accumulation_probability=1.0,
+        accumulation_strength_range=(1.0, 1.0), accumulation_patchiness_range=(0.0, 0.0),
+        **kwargs,  # type: ignore[arg-type]
+    )
+    snow.set_random_seed(0)
+    return np.asarray(snow(image=scene)["image"]).astype(np.float32)
+
+
+def test_deep_snow_covers_level_ground_and_is_white_on_black_asphalt() -> None:
+    """Two ways a buried road came out grey. Estimated normals left level
+    ground at half cover; and snow was shaded by the light the surface under
+    it seemed to be in, which for black asphalt is almost none."""
+    scene = np.full((SIZE, SIZE, 3), 190, dtype=np.uint8)  # an overcast wall of sky
+    scene[SIZE // 2 :] = 25  # new asphalt
+    out = _settled(scene)
+    assert out[SIZE * 3 // 4 :].mean() > 170.0
+
+
+def test_snow_under_sodium_lamps_is_orange_and_dark_where_no_lamp_reaches() -> None:
+    scene = np.zeros((SIZE, SIZE, 3), dtype=np.uint8)
+    scene[:] = (10, 6, 2)
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE]
+    pool = np.exp(-(((xx - 40) / 25.0) ** 2 + ((yy - 130) / 12.0) ** 2))[..., None]
+    scene = np.clip(scene + pool * np.array([150.0, 90.0, 25.0]), 0, 255).astype(np.uint8)
+
+    out = _settled(scene)
+    lit = out[122:138, 25:55].mean(axis=(0, 1))
+    assert lit[0] > 1.5 * lit[2], "snow under a sodium lamp came out white"
+    assert lit.mean() > scene[122:138, 25:55].mean(), "snow is brighter than the road it covers"
+    assert out[100:, -40:].mean() < 60.0, "snow glows where no lamp reaches"
+
+
+def test_snow_buries_a_lawn_and_only_dusts_a_canopy() -> None:
+    """Seen from above, a tree reads as level ground. Covered like ground it
+    was a grey smear with the tree gone; snow lies on foliage in clumps, on
+    the parts that catch the light, and the tree is still there under it."""
+    rng = np.random.default_rng(0)
+    scene = np.zeros((SIZE, SIZE, 3), dtype=np.uint8)
+    scene[: SIZE // 2] = 190
+    scene[SIZE // 2 :] = (70, 130, 50)  # a lawn
+    clumps = rng.uniform(0.25, 1.75, size=(SIZE // 8, SIZE // 8))
+    clumps = np.kron(clumps, np.ones((4, 4)))[: SIZE // 2, : SIZE // 2, None]
+    scene[SIZE // 2 :, SIZE // 2 :] = np.clip(clumps * np.array([50.0, 100.0, 40.0]), 0, 255)
+
+    out = _settled(scene)
+    lawn = out[SIZE * 3 // 4 :, 10 : SIZE // 2 - 10]
+    canopy = out[SIZE * 3 // 4 :, SIZE // 2 + 10 : -10]
+    assert lawn.mean() > 180.0 and lawn.std() < 15.0
+    assert canopy.std() > 2.0 * lawn.std(), "the canopy was smoothed over"
+    green = canopy[..., 1] - canopy[..., [0, 2]].mean(axis=2)
+    assert (green > 15.0).mean() > 0.15, "no foliage left showing"
+    assert (canopy.min(axis=2) > 170.0).mean() > 0.1, "no snow on the foliage"
