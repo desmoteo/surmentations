@@ -40,12 +40,13 @@ from weathermentations.camera import (
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
+    TransmissionFaults,
     VideoCodecArtifacts,
     WdrToneMapping,
 )
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SourceGlare, SunFlare, WaterDroplets
-from weathermentations.presets.severity import SEVERITY
+from weathermentations.presets.severity import GROUND_SEVERITY, SEVERITY
 from weathermentations.scene import CastShadows
 
 #: Severity the pipelines build at by default. Level 1 is "a slightly bad
@@ -76,6 +77,11 @@ DEFAULT_SEVERITY = 1
 #: so it should sit at the bottom of its ladder and compound gently.
 DEFAULT_WEATHER_SEVERITY = 2
 
+#: Probability of packet-loss damage on a frame, where the pipeline has a
+#: transmission stage at all. Rare: a link that loses packets on more than a
+#: few frames in a hundred gets fixed or replaced.
+DEFAULT_FAULTS = 0.03
+
 
 #: How strongly the infrared ring lights something sitting on the dome,
 #: relative to full scale. It is centimetres from the lamp, so it is lit far
@@ -99,6 +105,11 @@ _IR_FOG_BACKSCATTER = (0.08, 0.3)
 #: at the slow end of what the camera can run: long, faint streaks.
 _NIGHT_STREET_LUX = (5.0, 150.0)
 
+# How many times full scale a street lamp is taken to be when it lights rain
+# and reflects off a wet road. A clipped pixel is a lower bound and nothing
+# in the frame says how far above it the lamp was.
+_LAMP_OVER_RANGE = (4.0, 12.0)
+
 
 def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
     """One transform at a severity level, built directly.
@@ -121,6 +132,24 @@ def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any
     # can keep a level's physics and still pin one knob — the rain branch
     # raises `wetness_probability` that way.
     return factory(p=probability, **{**SEVERITY[severity][name], **extra})
+
+
+def _ground(name: str, ground_severity: int | None) -> dict[str, Any]:
+    """Ground-state arguments for the rain or snow transform.
+
+    ``None`` leaves the ground to the transform, which draws it per frame
+    over its whole range: dry to soaked, bare to buried, whatever is falling.
+    Rain's chance of a wet road is raised on the way, since by day the road
+    is most of what shows that it is raining at all.
+    """
+    if ground_severity is None:
+        return {"wetness_probability": 0.85} if name == "RandomRain" else {}
+    if ground_severity not in GROUND_SEVERITY:
+        raise ValueError(
+            f"ground_severity must be one of {sorted(GROUND_SEVERITY)} or None, "
+            f"got {ground_severity!r}"
+        )
+    return dict(GROUND_SEVERITY[ground_severity][name])
 
 
 def _sensor_noise(*, lit_by_mains: bool, infrared: bool, severity: int) -> list[Any]:
@@ -148,6 +177,7 @@ def _stream(
     dirt: float,
     occluders: float,
     codec: float,
+    faults: float,
     severity: int,
 ) -> list[Any]:
     """Glass, sensor, ISP and transmission: independent draws, physical order.
@@ -198,7 +228,23 @@ def _stream(
     # these pipelines on a machine without ffmpeg.
     if codec > 0.0:
         stream.append(_at(VideoCodecArtifacts, "VideoCodecArtifacts", codec, severity))
+    # What the link loses of the stream, after the camera has encoded it.
+    # The same rule: it needs ffmpeg to construct, so at zero it is absent.
+    if faults > 0.0:
+        stream.append(_at(TransmissionFaults, "TransmissionFaults", faults, severity))
     return stream
+
+
+def _fault_rate(faults: float | None, codec: float) -> float:
+    """Packet-loss probability, off by default wherever the codec stage is.
+
+    ``codec=0`` is how a caller says either that their frames already came
+    out of a video stream or that the machine has no ffmpeg. The second must
+    keep working, so an unset ``faults`` follows ``codec`` to zero.
+    """
+    if faults is None:
+        return DEFAULT_FAULTS if codec > 0.0 else 0.0
+    return faults
 
 
 def weather_state(
@@ -213,6 +259,7 @@ def weather_state(
     wet_clear: float = 0.06,
     severity: int = DEFAULT_WEATHER_SEVERITY,
     droplet_severity: int = DEFAULT_SEVERITY,
+    ground_severity: int | None = None,
     night: bool = False,
 ) -> A.OneOf:
     """Exactly one atmospheric state per frame, including "clear".
@@ -240,6 +287,13 @@ def weather_state(
             cost 24% of the frame's high-frequency detail against 15% at
             severity 1, and they were the most conspicuous thing in the
             output while the rain they signalled was invisible.
+        ground_severity: level 0-5 from
+            :data:`~weathermentations.presets.severity.GROUND_SEVERITY` for
+            how wet the road is under rain and how much snow has settled
+            under snow, or ``None`` — the default — to draw it per frame
+            over the whole range. Separate from ``severity`` because it is:
+            the ground follows how long the weather has lasted, so a
+            cloudburst on a dry road and a flurry over deep snow both occur.
         night: the frame is lit artificially, so the lens is wide open. That
             matters to the water on the glass, whose sharpness is set by the
             aperture — at night most of it blurs away into soft patches of
@@ -258,7 +312,19 @@ def weather_state(
     glass = {"aperture_diameter_range_mm": _OPEN_IRIS_MM} if night else {}
     # The same camera is looking at the rain: open iris, and a shutter
     # metered for street lighting rather than for daylight.
-    exposure = {**glass, "scene_illuminance_range_lux": _NIGHT_STREET_LUX} if night else {}
+    # And the rain is lit by the lamps, not by a sky: streaks show near a
+    # lamp and nowhere else, a wet road reflects the lamps, and cloud
+    # overhead changes nothing about light that comes from a pole.
+    exposure = (
+        {
+            **glass,
+            "scene_illuminance_range_lux": _NIGHT_STREET_LUX,
+            "lamp_glint_range": _LAMP_OVER_RANGE,
+            "overcast_range": (0.0, 0.0),
+        }
+        if night
+        else {}
+    )
 
     def _droplets(probability: float) -> Any:
         return _at(WaterDroplets, "WaterDroplets", probability, droplet_severity, **glass)
@@ -267,16 +333,17 @@ def weather_state(
         [
             A.Sequential(
                 [
-                    # Wetness raised above the severity preset's default.
                     # In daylight a streak carries the sky's radiance, so
                     # against a bright sky it has almost no contrast --
                     # measured, lengthening the exposure 5x leaves the
                     # high-frequency energy it adds flat, because alpha =
                     # D/(vT) spreads the same light further. What actually
-                    # says "rain" in a daylit frame is the wet road.
+                    # says "rain" in a daylit frame is the wet road, which
+                    # `_ground` makes likely.
                     _at(
                         RandomRain, "RandomRain", 1.0, severity,
-                        depth_provider=depth_provider, wetness_probability=0.85,
+                        depth_provider=depth_provider,
+                        **_ground("RandomRain", ground_severity),
                         **exposure,
                     ),
                     _droplets(wet_rain),
@@ -285,7 +352,11 @@ def weather_state(
             ),
             A.Sequential(
                 [
-                    _at(RandomSnow, "RandomSnow", 1.0, severity, depth_provider=depth_provider),
+                    _at(
+                        RandomSnow, "RandomSnow", 1.0, severity,
+                        depth_provider=depth_provider,
+                        **_ground("RandomSnow", ground_severity),
+                    ),
                     _droplets(wet_snow),
                 ],
                 p=snow,
@@ -324,6 +395,7 @@ def _infrared_night(
     wet_snow: float = 0.10,
     wet_fog: float = 0.18,
     wet_clear: float = 0.06,
+    ground_severity: int | None = None,
 ) -> A.OneOf:
     """The IR-night branch, where rain is a different transform.
 
@@ -378,6 +450,7 @@ def _infrared_night(
                         RandomSnow, "RandomSnow", 1.0, weather_severity,
                         # Veil and settled snow only; the flakes are NightSnow's.
                         depth_provider=depth_provider, max_flakes=0,
+                        **_ground("RandomSnow", ground_severity),
                     ),
                     ir,
                     _at(NightSnow, "NightSnow", 1.0, weather_severity),
@@ -415,10 +488,12 @@ def surveillance(
     lit_night: float = 0.15,
     ir_night: float = 0.30,
     codec: float = 0.15,
+    faults: float | None = None,
     dirt: float = 0.25,
     occluders: float = 0.12,
     severity: int = DEFAULT_SEVERITY,
     weather_severity: int = DEFAULT_WEATHER_SEVERITY,
+    ground_severity: int | None = None,
     **weather: float,
 ) -> A.Compose:
     """The full pipeline: weather, optics and the camera chain. **Needs CUDA.**
@@ -439,6 +514,10 @@ def surveillance(
             on. Neither *relights* the scene — see the caveat in the docs.
         codec: probability of re-encoding. Usually **0** for frames already
             decoded from video, where the artefacts are already in the pixels.
+        faults: probability of packet loss damaging the frame — stale,
+            smeared or green bands. Unset, it is 0.03, or 0 when ``codec``
+            is 0: like the codec stage it needs ffmpeg, and ``codec=0.0``
+            has to go on working without one.
         dirt, occluders: probability of grime and of insects/webs on the
             housing. Both rise steeply with maintenance interval.
         severity: level 1-5, from
@@ -449,6 +528,10 @@ def surveillance(
             report about.
         weather_severity: level for rain, snow and fog, kept separate and
             higher — see :data:`DEFAULT_WEATHER_SEVERITY`.
+        ground_severity: level 0-5 for how wet the road is under rain and
+            how much snow has settled under snow, or ``None`` to draw it per
+            frame over the whole range, which is the default. It is not
+            tied to ``weather_severity``: see :func:`weather_state`.
         **weather: forwarded to :func:`weather_state`. The defaults put
             weather on 12% of frames, which is climatological rather than
             convenient: over 20 sample frames you will typically see one rain
@@ -463,7 +546,12 @@ def surveillance(
         >>> transform = surveillance(provider, codec=0.0)
         >>> augmented = transform(image=image)["image"]     # doctest: +SKIP
     """
-    tail = {"dirt": dirt, "occluders": occluders, "codec": codec}
+    tail = {
+        "dirt": dirt,
+        "occluders": occluders,
+        "codec": codec,
+        "faults": _fault_rate(faults, codec),
+    }
     return A.Compose(
         [
             A.OneOf(
@@ -479,6 +567,7 @@ def surveillance(
                                 severity=weather_severity,
                                 droplet_severity=severity,
                                 night=False,
+                                ground_severity=ground_severity,
                                 **weather,
                             ),
                             _at(SunFlare, "SunFlare", 0.12, severity),
@@ -493,6 +582,7 @@ def surveillance(
                                 severity=weather_severity,
                                 droplet_severity=severity,
                                 night=True,
+                                ground_severity=ground_severity,
                                 **weather,
                             ),
                             # Night under street or shop lighting, camera still
@@ -527,6 +617,7 @@ def surveillance(
                                 severity=severity,
                                 weather_severity=weather_severity,
                                 tail=tail,
+                                ground_severity=ground_severity,
                                 **weather,
                             ),
                         ],
@@ -543,6 +634,7 @@ def surveillance_lite(
     *,
     night: float = 0.45,
     codec: float = 0.15,
+    faults: float | None = None,
     dirt: float = 0.25,
     occluders: float = 0.12,
     droplets: float = 0.10,
@@ -574,12 +666,19 @@ def surveillance_lite(
             flicker banding and temporal-denoise artefacts.
         codec: probability of re-encoding; usually 0 for frames already
             decoded from video.
+        faults: probability of packet-loss damage, as for
+            :func:`surveillance`: 0.03 unless ``codec`` is 0.
         dirt, occluders: grime and insects on the housing.
         droplets: water on the front element from dew, spray or rain this
             pipeline is not rendering.
         severity: level 1-5, as for :func:`surveillance`.
     """
-    tail = {"dirt": dirt, "occluders": occluders, "codec": codec}
+    tail = {
+        "dirt": dirt,
+        "occluders": occluders,
+        "codec": codec,
+        "faults": _fault_rate(faults, codec),
+    }
     return A.Compose(
         [
             A.OneOf(

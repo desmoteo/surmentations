@@ -16,6 +16,7 @@ from weathermentations.camera import (
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
+    TransmissionFaults,
     VideoCodecArtifacts,
     WdrToneMapping,
 )
@@ -53,7 +54,10 @@ _DEPTH_CONDITIONED = {
     "CastShadows": CastShadows,
 }
 # Needs the ffmpeg binary, so it is covered separately and skipped without it.
-_EXTERNAL_TOOL = {"VideoCodecArtifacts": VideoCodecArtifacts}
+_EXTERNAL_TOOL = {
+    "VideoCodecArtifacts": VideoCodecArtifacts,
+    "TransmissionFaults": TransmissionFaults,
+}
 
 
 class _LinearDepthEstimator(DepthEstimator):
@@ -102,8 +106,9 @@ def test_every_transform_present_at_every_severity() -> None:
 @pytest.mark.parametrize("severity", [1, 2, 3, 4, 5])
 def test_codec_preset_runs_at_every_severity(severity: int, scene: np.ndarray) -> None:
     warnings.simplefilter("error", UserWarning)
-    transform = VideoCodecArtifacts(p=1.0, **SEVERITY[severity]["VideoCodecArtifacts"])
-    assert transform(image=scene)["image"].shape == scene.shape
+    for name, cls in _EXTERNAL_TOOL.items():
+        transform = cls(p=1.0, **SEVERITY[severity][name])
+        assert transform(image=scene)["image"].shape == scene.shape
 
 
 def test_fog_severity_is_monotonically_denser() -> None:

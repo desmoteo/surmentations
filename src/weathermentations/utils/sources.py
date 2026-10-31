@@ -98,3 +98,19 @@ def light_sources(linear_rgb: np.ndarray, max_sources: int = 4) -> list[LightSou
             )
         )
     return found
+
+
+def light_field(linear_rgb: np.ndarray, sigma_fraction: float) -> np.ndarray:
+    """The frame blurred over ``sigma_fraction`` of its diagonal, ``(H, W, C)``.
+
+    Where the light is, with everything that says what it fell on averaged
+    away. A blur this wide holds no detail finer than itself, so it is done
+    on a copy a few dozen pixels across.
+    """
+    height, width = linear_rgb.shape[:2]
+    factor = max(1, round(max(height, width) / 96))
+    size = (max(4, width // factor), max(4, height // factor))
+    small = cv2.resize(linear_rgb, size, interpolation=cv2.INTER_AREA)
+    sigma = max(0.8, sigma_fraction * float(np.hypot(*size)))
+    small = cv2.GaussianBlur(small, (0, 0), sigmaX=sigma, borderType=cv2.BORDER_REFLECT)
+    return cv2.resize(small, (width, height), interpolation=cv2.INTER_CUBIC).clip(0.0, None)

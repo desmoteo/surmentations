@@ -37,6 +37,7 @@ SEEDS = 8
 # Needs an ffmpeg binary and two subprocess round-trips per render.
 SKIP = {
     "video_codec",
+    "transmission_faults",
     # Acts only on the lights in a frame. The gallery shows it over a night
     # street; over this daylit photograph it rightly does nothing.
     "source_glare",

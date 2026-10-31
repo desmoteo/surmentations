@@ -97,7 +97,7 @@ def test_effects_are_left_out_where_they_do_not_apply() -> None:
     assert {e for e in EFFECTS if _why_not(e, night)} == {"sun_flare", "cast_shadows", "fog"}
     assert {e for e in EFFECTS if _why_not(e, indoors)} == {
         "sun_flare", "cast_shadows", "rain", "snow", "night_rain", "night_snow",
-        "night_fog", "source_glare",
+        "night_fog", "source_glare", "wet_ground", "snow_cover",
     }
 
 

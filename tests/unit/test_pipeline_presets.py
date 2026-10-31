@@ -118,10 +118,14 @@ def test_pipelines_are_in_physical_order() -> None:
     from weathermentations.presets.pipelines import _stream
 
     tail = _stream(
-        lit_by_mains=False, infrared=False, dirt=0.2, occluders=0.1, codec=0.1, severity=2
+        lit_by_mains=False, infrared=False, dirt=0.2, occluders=0.1, codec=0.1,
+        faults=0.1, severity=2,
     )
     stages = [stage_of(t) for t in tail]
     assert stages == sorted(stages), stages
+    assert type(tail[-1]).__name__ == "TransmissionFaults", (
+        "the link loses packets of the stream the camera encoded, so it is last"
+    )
 
 
 def test_effects_per_frame_is_not_all_or_nothing() -> None:
@@ -199,6 +203,28 @@ def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
     # construction, rather than silently training without it.
     with pytest.raises(RuntimeError, match="ffmpeg"):
         surveillance_lite(codec=0.2)
+    # Packet loss needs the binary too. Unset, it follows `codec` to zero,
+    # which is why the calls above worked; asked for, it fails as loudly.
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        surveillance_lite(codec=0.0, faults=0.05)
+
+
+def test_packet_loss_is_on_by_default_only_where_the_codec_stage_is() -> None:
+    def names(transform: A.Compose) -> set[str]:
+        found: set[str] = set()
+
+        def walk(node: object) -> None:
+            found.add(type(node).__name__)
+            for child in getattr(node, "transforms", []):
+                walk(child)
+
+        walk(transform)
+        return found
+
+    assert "TransmissionFaults" in names(surveillance_lite())
+    assert "TransmissionFaults" not in names(surveillance_lite(codec=0.0))
+    assert "TransmissionFaults" not in names(surveillance_lite(faults=0.0))
+    assert "TransmissionFaults" in names(surveillance_lite(codec=0.0, faults=0.2))
 
 
 def test_occluders_glow_only_under_the_infrared_ring() -> None:

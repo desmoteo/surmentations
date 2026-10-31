@@ -55,6 +55,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from docs.generate_examples import (  # noqa: E402
     _NEEDS_FFMPEG,
     EFFECTS,
+    GROUND_ROW_WEATHER_LEVEL,
+    GROUND_ROWS,
     _build,
     _night_base,
     _render_representative,
@@ -84,7 +86,9 @@ PIPELINE_DRAWS = 4
 # version of the scene, as in the severity gallery.
 LAMP_LIT = ("night_rain", "night_snow", "night_droplets")
 NEEDS_SUN = ("sun_flare", "cast_shadows")
-NEEDS_OPEN_SKY = ("rain", "snow", "night_rain", "night_snow", *NEEDS_SUN)
+NEEDS_OPEN_SKY = (
+    "rain", "snow", "wet_ground", "snow_cover", "night_rain", "night_snow", *NEEDS_SUN
+)
 DAYLIGHT_WEATHER = ("fog",)
 NEEDS_LAMPS = ("night_fog", "source_glare")
 
@@ -113,6 +117,7 @@ WHY_NOT = {
 # An open iris, and rain metered for street lighting: see presets/pipelines.py.
 NIGHT_IRIS_MM = (1.4, 3.0)
 NIGHT_STREET_LUX = (5.0, 150.0)
+LAMP_OVER_RANGE = (4.0, 12.0)
 
 
 @dataclass(frozen=True)
@@ -160,6 +165,10 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
     pitch = scene.camera_pitch_deg
     preset = SEVERITY[SEVERITY_LEVEL]
     extra: dict[str, Any] = {}
+    if effect in GROUND_ROWS:
+        # The ground rows are rain and snow at a light rate.
+        preset = SEVERITY[GROUND_ROW_WEATHER_LEVEL]
+        effect = GROUND_ROWS[effect]
     if effect in ("rain", "snow"):
         extra["camera_pitch_range_deg"] = (pitch, pitch)
     if effect == "rain":
@@ -186,6 +195,10 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
     if scene.night and effect == "rain":
         extra["aperture_diameter_range_mm"] = NIGHT_IRIS_MM
         extra["scene_illuminance_range_lux"] = NIGHT_STREET_LUX
+        # Lit by the lamps in the frame, and not relit for cloud: the light
+        # comes from a pole.
+        extra["lamp_glint_range"] = LAMP_OVER_RANGE
+        extra["overcast_range"] = (0.0, 0.0)
     return extra
 
 
@@ -362,15 +375,24 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "",
         "- **Wet ground is level ground that is not green.** Vegetation is left dry;",
         "  bare soil, gravel and roofs seen from above still get a film of water.",
+        "- **A car's reflection is drawn straight below it.** That is right for a",
+        "  road running away from the camera and wrong looking across the traffic,",
+        "  where the reflection lies to one side. Tall things, such as walls and",
+        "  lamp posts, get no reflection of their own.",
         "- **A reflection from outside the frame is a guess.** Where the mirrored point",
         "  is above the picture the road reflects an estimate of the sky, which is",
         "  right under open sky and wrong under the flyover in `underpass_from_above`.",
         "- **Overcast light cannot remove shadows.** Rain and snow grey the sky and",
         "  lower contrast, but the hard shadows of a sunny photograph stay.",
-        "- **Night fog knows only the lamps it can see.** One outside the frame lights",
-        "  fog inside it, and `night_fog` cannot show that.",
-        "- **Rain at night is the daylight model.** It stays dark, as it should, but its",
-        "  streaks are lit by the frame's average light and not by the nearest lamp.",
+        "- **Night fog and night rain know only the light they can see.** Fog is as",
+        "  bright as the surfaces around it suggest, and rain is lit by the lamps in",
+        "  the frame. A lamp outside it lights both and shows in neither.",
+        "- **How bright a lamp was is a guess.** A lamp is recorded at clipping. The",
+        "  strength of its halo in fog, of the streaks round it in rain and of its",
+        "  reflection in a wet road all rest on an assumed factor above that.",
+        "- **Packet loss has no moving objects.** `transmission_faults` conceals from a",
+        "  displaced copy of the same picture, so a stale band shows the scene",
+        "  shifted, never a car where it was two seconds ago.",
         "- **Depth is relative and stretched to the range it is given.** The facades in",
         "  `urban_street_wet` are placed further away than they are, so its fog is",
         "  heavier than the stated visibility would make it.",

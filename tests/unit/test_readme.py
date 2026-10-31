@@ -31,6 +31,7 @@ from weathermentations.camera import (
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
+    TransmissionFaults,
     VideoCodecArtifacts,
     WdrToneMapping,
 )
@@ -52,7 +53,7 @@ TRANSFORMS = {
         WaterDroplets, DirtSoil, SunFlare, SourceGlare, HousingOccluders,
         CastShadows, NightIrMode, AcFlicker, RollingShutter, SensorNoise,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,
-        VideoCodecArtifacts,
+        VideoCodecArtifacts, TransmissionFaults,
     )
 }
 
