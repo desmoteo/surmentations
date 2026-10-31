@@ -33,15 +33,24 @@ They are unretouched output, and some of it is wrong in ways worth knowing:
 
 - **Wet ground is level ground that is not green.** Vegetation is left dry;
   bare soil, gravel and roofs seen from above still get a film of water.
+- **A car's reflection is drawn straight below it.** That is right for a
+  road running away from the camera and wrong looking across the traffic,
+  where the reflection lies to one side. Tall things, such as walls and
+  lamp posts, get no reflection of their own.
 - **A reflection from outside the frame is a guess.** Where the mirrored point
   is above the picture the road reflects an estimate of the sky, which is
   right under open sky and wrong under the flyover in `underpass_from_above`.
 - **Overcast light cannot remove shadows.** Rain and snow grey the sky and
   lower contrast, but the hard shadows of a sunny photograph stay.
-- **Night fog knows only the lamps it can see.** One outside the frame lights
-  fog inside it, and `night_fog` cannot show that.
-- **Rain at night is the daylight model.** It stays dark, as it should, but its
-  streaks are lit by the frame's average light and not by the nearest lamp.
+- **Night fog and night rain know only the light they can see.** Fog is as
+  bright as the surfaces around it suggest, and rain is lit by the lamps in
+  the frame. A lamp outside it lights both and shows in neither.
+- **How bright a lamp was is a guess.** A lamp is recorded at clipping. The
+  strength of its halo in fog, of the streaks round it in rain and of its
+  reflection in a wet road all rest on an assumed factor above that.
+- **Packet loss has no moving objects.** `transmission_faults` conceals from a
+  displaced copy of the same picture, so a stale band shows the scene
+  shifted, never a car where it was two seconds ago.
 - **Depth is relative and stretched to the range it is given.** The facades in
   `urban_street_wet` are placed further away than they are, so its fog is
   heavier than the stated visibility would make it.
