@@ -23,6 +23,9 @@ than exposed.
   of whether the implementation lives up to that, including where it did not.
 - **[`optimizations.md`](optimizations.md)** — where the CPU time actually
   goes, and an assessment of what is worth optimising.
+- **[`docs/proposed_augmentations.md`](docs/proposed_augmentations.md)** —
+  effects not yet built, in the order to build them, each with its model,
+  its place in the chain and what would show it works.
 - **[`plan.md`](plan.md)** — design record and roadmap.
 
 ---
