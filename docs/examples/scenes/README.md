@@ -38,12 +38,14 @@ They are unretouched output, and some of it is wrong in ways worth knowing:
   right under open sky and wrong under the flyover in `underpass_from_above`.
 - **Overcast light cannot remove shadows.** Rain and snow grey the sky and
   lower contrast, but the hard shadows of a sunny photograph stay.
-- **Fog and rain at night stay dark and do not glow.** On `street_night` they
-  dim the lamps without lighting the air round them.
+- **Night fog knows only the lamps it can see.** One outside the frame lights
+  fog inside it, and `night_fog` cannot show that.
+- **Rain at night is the daylight model.** It stays dark, as it should, but its
+  streaks are lit by the frame's average light and not by the nearest lamp.
 - **Depth is relative and stretched to the range it is given.** The facades in
   `urban_street_wet` are placed further away than they are, so its fog is
   heavier than the stated visibility would make it.
-- **Daylight snow is not rendered on `street_night`**, because it would be
-  wrong: see that page.
+- **Wet ground stops at a few hundred metres.** Beyond that, level ground is
+  taken to be terrain; a distant wet road loses its sheen with it.
 - **Flakes close to an infrared lamp are very large.** `night_snow` draws the
   nearest ones as long white bars.
