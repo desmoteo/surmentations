@@ -191,12 +191,22 @@ figures are taken from papers quoting them, not from the originals.
 
 **The severity ladder was re-pitched to match.** With the veil at its true
 strength, level 3 (28-54 mm/h) left a 3-50 m frame close to clean. Rates now
-run from 2-12 mm/h at level 1 to 80-150 mm/h at level 5, and the ground
-carries the ladder with them: `wetness_probability` rises from 0.45 to 0.95
-and `wetness_darkening_range` from damp (0.75-0.9) to soaked (0.4-0.6). The
-mirror on wet ground now follows the darkening, so light rain darkens a road
-without turning it into one. Mean change on the reference photograph, levels
-1 to 5: 5.8, 12.3, 16.3, 19.3 and 24.3 levels.
+run from 2-12 mm/h at level 1 to 80-150 mm/h at level 5. The mirror on wet
+ground follows the darkening, so a damp road is darker without being a
+mirror.
+
+**The ground then got a ladder of its own.** For a while the rain ladder
+carried the ground with it, `wetness_probability` and
+`wetness_darkening_range` climbing from a usually dry road at level 1 to a
+soaked one at level 5. That made rain legible at every level and made two
+ordinary frames impossible: a cloudburst on a road that is still dry, and a
+soaked road under the last few drops. How wet a road is follows how long it
+has rained. `SEVERITY["RandomRain"]` now sets the rate only, and
+`GROUND_SEVERITY` (0 dry to 5 soaked) sets the ground; with neither given,
+`RandomRain` draws the ground over the whole range, damp to soaked, 70% of
+the time. The consequence is the one this document predicts: with the road
+dry, daylight rain at any rate is close to invisible, and the frames in
+which that happens are correct.
 
 A note on snow, which was checked against the same error and not changed:
 `V = 0.6/R` km could not be confirmed against Rasmussen et al. directly, and

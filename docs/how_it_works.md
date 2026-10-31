@@ -281,6 +281,31 @@ reflectance is Fresnel over the depression angle below the horizon — mirror-
 bright toward the horizon, dark and matte underfoot. A single blend weight
 cannot produce that gradient in either direction.
 
+Four more things decide whether it reads as wet, and each was missing at
+some point:
+
+- **Dark surfaces darken most.** Light scattered inside a wet surface is
+  partly turned back at the water over it for another pass at being
+  absorbed. Asphalt loses about half its brightness, white paint almost
+  none, and colours deepen because the weak channels fall furthest
+  (`wet_albedo`). A flat multiplier greys the markings instead.
+- **A reflection lies under the thing reflected.** Everything far off is
+  mirrored about the horizon. A compact object standing on the road is
+  mirrored about its own foot, for as far down the road as it is tall.
+  Mirrored about the horizon, a car's reflection lands far below it, under
+  nothing; mirrored about its foot with no limit, every car and lamp post
+  rules a stripe down the whole road.
+- **Film and puddles are different mirrors.** The film is as rough as the
+  road: it smears a reflection a long way down the road and its
+  reflectance rises sooner towards the horizon. Standing water
+  (`puddle_coverage_range`), laid out in ground coordinates so it
+  foreshortens with the road, is smooth and mirrors the sky cleanly.
+- **The whole road is wet, and stays dark.** Level ground now carries the
+  full effect up to the foot of each object, where estimated normals used
+  to leave it at 40-70% with a dry outline round every car; and the
+  exposure correction runs before the ground, not after, where it handed
+  the darkening back.
+
 ### Snow — the same skeleton, different constants
 
 ```mermaid
@@ -479,7 +504,7 @@ flowchart LR
     ISP --> CODEC["codec"]
     SENS -.-> S1["NightIrMode, NightRain, NightSnow, AcFlicker, RollingShutter, SensorNoise"]
     ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts"]
-    CODEC -.-> S3["VideoCodecArtifacts"]
+    CODEC -.-> S3["VideoCodecArtifacts, TransmissionFaults"]
 ```
 
 `physical_order()` sorts a list of transforms into this chain. Out of order
@@ -537,12 +562,18 @@ noise does not have. It runs before the ISP, which is what gives
 
 ### Night fog and glare: what the lights in the frame do
 
-At night the fog is not lit by a sky, so it is not a veil. `NightFog` dims
-everything by `exp(-beta z)` as by day, then gives back 60% of what it took
-through a wide heavy-tailed blur: droplets scatter forward, so light removed
-from a lamp's beam still arrives from just beside it. The result is a glow
-round each lamp that widens with the fog in front of it, and darkness
-everywhere else. Under the infrared ring it adds the camera's own
+At night the fog is not lit by a sky, so its veil is not even. `NightFog`
+dims everything by `exp(-beta z)` as by day and fades it towards the fog's
+own brightness, which it reads off the frame: the light the surfaces in a
+region send back, divided by a typical albedo, is the light that fell
+there, and fog under it is `0.4` of a white surface. Blurred over a tenth
+of the diagonal, that is a veil bright and lamp-coloured near the lamps and
+dark between and above them. Each lamp also gets a halo: droplets scatter
+forward, so 60% of what leaves its beam arrives from just beside it, wider
+the more fog is in front. (The first version had the halo and no veil, and
+made its halo by blurring everything the fog removed. That is a dim frame
+plus a blurred copy, and it looked blurred, not foggy.) Under the infrared
+ring it adds the camera's own
 backscatter — an even wall across the beam, because the lamp's `1/z^2` and
 the lit volume's `z^2` cancel — and attenuates the scene twice.
 
@@ -552,6 +583,24 @@ transforms treat a clipped pixel as several times full scale, since a lamp's
 recorded value is a lower bound; that factor is a parameter, not a
 measurement. Large clipped areas — a blown sky, a sunlit wall — are not
 lights and are left alone.
+
+### Packet loss: done to the bitstream, not drawn
+
+`TransmissionFaults` encodes a clip of two to six frames with x264, cuts
+the slices into 1200-byte packets, loses some in bursts, and has ffmpeg
+decode the rest. A slice that lost its first packet is gone; one that lost
+a later packet is either cut off there or passed on with the gap closed,
+and the second is where blocks of garbage come from. The decoder either
+conceals a missing region from the previous picture or leaves it as zeroed
+memory, which is green. Damage is then where a decoder puts it: from a
+macroblock to the end of its slice, and carried into every later frame of
+the group.
+
+A still image has no previous picture to conceal from, so the clip is the
+image sliding into place from `scene_motion_range` away, with the last
+frame where it was given. On an unmoving scene concealed loss is nearly
+invisible, which is true of real streams. Moving objects are not modelled:
+nothing puts a car where it was two seconds ago.
 
 ### Night rain: the same drop, lit by the camera
 

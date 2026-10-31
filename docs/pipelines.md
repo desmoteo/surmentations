@@ -338,6 +338,14 @@ frames did — the compression artefacts are already in the pixels, and
 and you lose nothing your data does not already have. It earns its place only
 when training on clean or synthetic imagery destined for a compressed stream.
 
+**Packet loss rides with the codec.** `TransmissionFaults` damages a real
+H.264 stream and decodes it, about 150 ms a call, at `faults=0.03` by
+default. It needs ffmpeg as the codec stage does, so when `codec=0.0` an
+unset `faults` is zero too and the pipeline still builds on a machine
+without the binary. Unlike compression, loss is not already in decoded
+frames unless the link that carried them was bad: set `faults` explicitly
+to keep it with `codec=0.0`.
+
 Physically honest probabilities for the always-on camera properties would put
 codec at `p≈0.6`, WDR at `p≈0.25` and denoise at `p≈0.3`, costing roughly
 **210 ms** instead of 112. The values above are a deliberate trade, and they
@@ -385,7 +393,7 @@ default range, which also covers lenses that stop down in sunlight.
 
 Fog follows the lighting state too. By day it is `RandomFog`, an even veil
 lit by the sky. In the street-lit branch it is `NightFog`, lit by the lamps
-in the frame; under infrared it is `NightFog` placed *after* `NightIrMode`
+in the frame, so its veil is bright near them and dark between; under infrared it is `NightFog` placed *after* `NightIrMode`
 with `illuminator_backscatter_range` set, because the wall of light it raises
 is the camera's own. Both night branches also carry `SourceGlare` at
 `p=0.35`, which flares the lamps and headlights the frame contains and does
@@ -396,7 +404,12 @@ The rain in the street-lit night branch is seen by the same camera, so it is
 metered for 5-150 lux with that open iris. `RandomRain` derives its shutter
 time from the light level and the aperture, and at those levels it sits at
 the slow end of the shutter's range: long faint streaks, where the day
-branch mostly gets short flecks and dashes.
+branch mostly gets short flecks and dashes. It is also lit differently.
+`lamp_glint_range` is set, so each streak is lit by the lamps near it in
+the picture and by the dark sky otherwise: rain shows as bright flecks
+round each lamp and not at all between them, and a soaked road reflects
+the lamps as streaks of light. `overcast_range` is zero there, since cloud
+changes nothing about light that comes from a pole.
 
 So that branch builds its own four-way weather choice with the shared tail
 duplicated across the arms. That costs four sets of constructed objects and
@@ -438,7 +451,14 @@ speed at which daylight rain becomes dramatic.
 
 What actually says "rain" in a daylit frame is the **wet road** and water on
 the glass, which is why this pipeline raises `wetness_probability` to 0.85
-inside the rain branch rather than leaving it at the severity preset's value.
+inside the rain branch rather than leaving it at the transform's default.
+
+How wet the road is, and how much snow has settled, are **not** tied to
+`weather_severity`. They follow how long the weather has lasted, so by
+default each frame draws the ground over its whole range under whatever is
+falling: a downpour on a road still dry, a flurry over deep snow. Pass
+`ground_severity` (0 dry and bare, 5 soaked and buried, from
+`GROUND_SEVERITY`) to `surveillance` or `weather_state` to fix it.
 Streaks become visible against dark backgrounds — night, dark buildings,
 shadowed foliage — so they carry the effect at night and the wet road
 carries it by day, with a distance veil only in views a kilometre or more

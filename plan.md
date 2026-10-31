@@ -1347,8 +1347,8 @@ Open items it raised, not yet actioned:
 Effects proposed after Phase 7 and not yet scheduled into a phase are
 specified in [`docs/proposed_augmentations.md`](docs/proposed_augmentations.md):
 colour-night sensor noise, overcast lighting for rain and snow, glare from
-in-frame lights, night fog, transmission faults, on-screen overlays, focus
-shift and camera vibration, and heat shimmer.
+in-frame lights, night fog and transmission faults (all since built), and
+on-screen overlays, focus shift and camera vibration, and heat shimmer.
 
 ### Phase 0 — Repo & scaffolding
 - [x] `git init`, `.gitignore`, `LICENSE` (MIT), `README.md` skeleton
