@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere import (
+    NightFog,
     NightRain,
     NightSnow,
     RandomFog,
@@ -65,6 +66,7 @@ _needs_ffmpeg = pytest.mark.skipif(ffmpeg_path() is None, reason="needs the ffmp
 
 BUILDERS: dict[str, Callable[[], Any]] = {
     "RandomFog": lambda: RandomFog(depth_provider=_PROVIDER, p=1.0),
+    "NightFog": lambda: NightFog(depth_provider=_PROVIDER, p=1.0),
     "RandomRain": lambda: RandomRain(depth_provider=_PROVIDER, p=1.0, wetness_probability=1.0),
     "RandomSnow": lambda: RandomSnow(
         depth_provider=_PROVIDER, p=1.0, accumulation_probability=1.0
@@ -123,7 +125,9 @@ def test_every_exported_transform_is_covered() -> None:
     exported = {
         name for module in (atmosphere, camera, lens, scene) for name in module.__all__
     }
-    assert exported == set(BUILDERS)
+    # SourceGlare acts only on lights in the frame and this file's scene has
+    # none, so its contract (dtype parity included) is in test_night_lights.py.
+    assert exported == set(BUILDERS) | {"SourceGlare"}
 
 
 @pytest.mark.parametrize("name", ALL)

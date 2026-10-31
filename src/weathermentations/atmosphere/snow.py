@@ -83,7 +83,11 @@ from weathermentations.base import WeatherTransform, first_frame, require_depth_
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
-from weathermentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
+from weathermentations.utils.color import (
+    TYPICAL_SCENE_ALBEDO,
+    illuminant_radiance_linear,
+    veil_radiance_linear,
+)
 from weathermentations.utils.noise import value_noise
 from weathermentations.utils.overcast import apply_overcast, cloud_cover
 from weathermentations.utils.photometry import (
@@ -835,13 +839,18 @@ class RandomSnow(WeatherTransform):
             # one dead tone; a real snow-covered road still has its shadows,
             # its bright and dull patches, and whatever the sky is doing to
             # it. So the snow is lit by a low-frequency estimate of the local
-            # illumination, normalised so an averagely-lit patch renders at
-            # the nominal snow colour.
+            # illumination: the light falling on a patch is about what the
+            # patch sends back divided by a typical albedo, and snow returns
+            # nearly all of it.
+            #
+            # That is an absolute estimate, and has to be. Normalising by the
+            # frame's own mean instead, as this did, renders an averagely-lit
+            # patch at full white whatever the frame — so at night settled
+            # snow came out as a daylit floor under a black sky.
             illumination = cv2.GaussianBlur(
                 luminance(out), (0, 0), sigmaX=max(2.0, 0.02 * max(height, width))
             )
-            mean_illumination = max(float(illumination.mean()), 1e-4)
-            shading = np.clip(illumination / mean_illumination, 0.25, 2.5)[..., None]
+            shading = np.clip(illumination / TYPICAL_SCENE_ALBEDO, 0.0, 1.15)[..., None]
 
             coverage = np.clip(settled * accumulation_strength, 0.0, 1.0)[..., None]
             out = out * (1.0 - coverage) + snow_albedo * shading * coverage

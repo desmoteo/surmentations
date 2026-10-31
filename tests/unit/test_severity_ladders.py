@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
@@ -110,6 +111,9 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     "WdrToneMapping": lambda k: WdrToneMapping(p=1.0, **k),
     "TemporalDenoiseArtifacts": lambda k: TemporalDenoiseArtifacts(p=1.0, **k),
     "RandomFog": lambda k: RandomFog(depth_provider=_provider(), p=1.0, **k),
+    # SourceGlare is absent on purpose: it acts only on lights in the frame,
+    # and this photograph has none. Its ladder is in test_night_lights.py.
+    "NightFog": lambda k: NightFog(depth_provider=_provider(), p=1.0, **k),
     "RandomRain": lambda k: RandomRain(depth_provider=_provider(), p=1.0, **k),
     "RandomSnow": lambda k: RandomSnow(
         depth_provider=_provider(), p=1.0, accumulation_probability=1.0, **k

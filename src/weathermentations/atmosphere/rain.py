@@ -679,6 +679,13 @@ class RandomRain(WeatherTransform):
             # Water lies as a film on paving. On grass and crops it is held
             # in the canopy and the soil, and there is no mirror.
             wetness *= _paved_weight(linear_scene)
+            # And on ground near enough to be a road. Level ground hundreds of
+            # metres off is terrain, seen at so shallow an angle that a film
+            # on it would be a perfect mirror: a bright band of reflected sky
+            # along the horizon of every landscape.
+            wetness *= np.clip(
+                (_WET_GROUND_FAR_M - depth_pm) / (_WET_GROUND_FAR_M - _WET_GROUND_NEAR_M), 0.0, 1.0
+            )
             # Fit the horizon on the surface actually being wet, not on the
             # raw cosine. A distant flat plane's normal points at the camera,
             # so `n . up` there is sin(pitch) and crosses a lenient threshold
@@ -957,6 +964,11 @@ def render_streak_layer(
 
 # Water's normal-incidence reflectance, ((n - 1)/(n + 1))^2 for n = 1.33.
 _WATER_R0 = 0.02
+
+# Distance over which wet ground stops being rendered: all of it out to the
+# first, none beyond the second. The default 3-50 m scene is untouched.
+_WET_GROUND_NEAR_M = 120.0
+_WET_GROUND_FAR_M = 400.0
 
 # Fraction of the frame's height over which a reflection hands over from the
 # mirrored picture to the sky, as its source row nears the top edge.

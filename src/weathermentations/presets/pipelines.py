@@ -28,6 +28,7 @@ from typing import Any
 import albumentations as A
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
@@ -43,7 +44,7 @@ from weathermentations.camera import (
     WdrToneMapping,
 )
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.lens import DirtSoil, HousingOccluders, SourceGlare, SunFlare, WaterDroplets
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
 
@@ -87,6 +88,11 @@ _IR_RING_GLOW = (0.6, 1.6)
 #: contrast. By day the transform's own default applies, which also covers
 #: lenses that stop down in sunlight and so render the same drops crisply.
 _OPEN_IRIS_MM = (1.4, 3.0)
+
+#: Brightness of the wall of light the infrared ring raises in fog, relative
+#: to full scale. Enough to cost the frame most of its contrast, which is
+#: what fog does to an infrared camera.
+_IR_FOG_BACKSCATTER = (0.08, 0.3)
 
 #: Illuminance of a street at night under its own lighting, in lux. Rain's
 #: shutter time is metered from the light level, and at these levels it sits
@@ -167,6 +173,9 @@ def _stream(
             severity,
             glow_range=_IR_RING_GLOW if infrared else (0.0, 0.0),
         ),
+        # Glare from headlights and lamps: only where lights are what the
+        # frame is exposed against.
+        *([_at(SourceGlare, "SourceGlare", 0.35, severity)] if lit_by_mains else []),
         # Sensor. Mains banding needs artificial light, so outdoors it belongs
         # to the night branches; indoors it would apply all day.
         _at(AcFlicker, "AcFlicker", 0.45 if lit_by_mains else 0.05, severity),
@@ -283,7 +292,12 @@ def weather_state(
             ),
             A.Sequential(
                 [
-                    _at(RandomFog, "RandomFog", 1.0, severity, depth_provider=depth_provider),
+                    # At night fog is lit by the lamps in it, not by a sky.
+                    _at(NightFog, "NightFog", 1.0, severity, depth_provider=depth_provider)
+                    if night
+                    else _at(
+                        RandomFog, "RandomFog", 1.0, severity, depth_provider=depth_provider
+                    ),
                     _droplets(wet_fog),
                 ],
                 p=fog,
@@ -373,11 +387,14 @@ def _infrared_night(
             ),
             A.Sequential(
                 _with(
-                    _at(
-                        RandomFog, "RandomFog", 1.0, weather_severity,
-                        depth_provider=depth_provider,
-                    ),
                     ir,
+                    # After the conversion, unlike daylight fog: the wall of
+                    # light it raises is the illuminator's own.
+                    _at(
+                        NightFog, "NightFog", 1.0, weather_severity,
+                        depth_provider=depth_provider,
+                        illuminator_backscatter_range=_IR_FOG_BACKSCATTER,
+                    ),
                     _droplets(wet_fog),
                 ),
                 p=fog,

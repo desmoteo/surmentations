@@ -19,7 +19,7 @@ from weathermentations.diagnostics import recording
 from weathermentations.presets import surveillance, surveillance_lite, weather_state
 from weathermentations.presets.pipeline import stage_of
 
-WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain", "NightSnow"}
+WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain", "NightSnow", "NightFog"}
 # Which transforms render each weather state. Snow at night is two of them by
 # design — the veil and settled snow before the infrared conversion, the
 # lamp-lit flakes after it — so exclusivity is a property of states, not of
@@ -27,7 +27,7 @@ WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain", "NightSnow"}
 STATES = {
     "rain": {"RandomRain", "NightRain"},
     "snow": {"RandomSnow", "NightSnow"},
-    "fog": {"RandomFog"},
+    "fog": {"RandomFog", "NightFog"},
 }
 
 

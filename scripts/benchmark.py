@@ -45,6 +45,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from weathermentations.atmosphere import (  # noqa: E402
+    NightFog,
     NightRain,
     NightSnow,
     RandomFog,
@@ -69,6 +70,7 @@ from weathermentations.depth import (  # noqa: E402
 from weathermentations.lens import (  # noqa: E402
     DirtSoil,
     HousingOccluders,
+    SourceGlare,
     SunFlare,
     WaterDroplets,
 )
@@ -114,6 +116,7 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "dirt_soil": DirtSoil(p=1.0),
         "sun_flare": SunFlare(p=1.0),
         "housing_occluders": HousingOccluders(p=1.0),
+        "source_glare": SourceGlare(p=1.0),
         "ac_flicker": AcFlicker(p=1.0),
         "rolling_shutter": RollingShutter(p=1.0),
         "sensor_noise": SensorNoise(p=1.0),
@@ -134,6 +137,7 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
             "rain": RandomRain(depth_provider=depth_provider, p=1.0),
             "snow": RandomSnow(depth_provider=depth_provider, p=1.0),
             "night_ir": NightIrMode(depth_provider=depth_provider, p=1.0),
+            "night_fog": NightFog(depth_provider=depth_provider, p=1.0),
             "cast_shadows": CastShadows(depth_provider=depth_provider, p=1.0),
         }
     return transforms
