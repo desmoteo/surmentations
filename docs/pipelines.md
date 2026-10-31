@@ -125,7 +125,8 @@ flowchart TD
     T1 --> T2["HousingOccluders p=0.12"]
     T2 --> T3["AcFlicker p=0.45 night / 0.05 day"]
     T3 --> T4["RollingShutter p=0.50"]
-    T4 --> T5["ExposureTransient p=0.10"]
+    T4 --> T4b["SensorNoise p=0.70 lit night / 0.15 day / none under IR"]
+    T4b --> T5["ExposureTransient p=0.10"]
     T5 --> T6["WdrToneMapping p=0.12"]
     T6 --> T7["TemporalDenoiseArtifacts p=0.30 night / 0.12 day"]
     T7 --> T8["VideoCodecArtifacts p=0.15"]
@@ -151,7 +152,7 @@ nothing about whether the encoder dropped a frame.
 import albumentations as A
 from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow
 from weathermentations.camera import (
-    AcFlicker, ExposureTransient, NightIrMode, RollingShutter,
+    AcFlicker, ExposureTransient, NightIrMode, RollingShutter, SensorNoise,
     TemporalDenoiseArtifacts, VideoCodecArtifacts, WdrToneMapping,
 )
 from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
@@ -206,6 +207,16 @@ def _stream(lit_by_mains, codec_p, infrared=False):
         # night branches outdoors (and would be all-day indoors).
         AcFlicker(p=0.45 if lit_by_mains else 0.05),
         RollingShutter(p=0.50),
+        # Colour sensor noise follows the light: high gain and usual under
+        # artificial light, low and occasional by day, and none under the
+        # infrared ring, where NightIrMode has its own.
+        *(
+            []
+            if infrared
+            else [SensorNoise(p=0.70, gain_range_db=(14.0, 23.0))]
+            if lit_by_mains
+            else [SensorNoise(p=0.15, gain_range_db=(4.0, 10.0))]
+        ),
         # ISP.
         ExposureTransient(p=0.10),
         WdrToneMapping(p=0.12),
