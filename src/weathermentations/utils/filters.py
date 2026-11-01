@@ -24,7 +24,10 @@ _WIDE_BLUR_WORK_SIGMA = 8.0
 
 
 def wide_blur(
-    image: np.ndarray, sigma: float, work_sigma: float = _WIDE_BLUR_WORK_SIGMA
+    image: np.ndarray,
+    sigma: float,
+    work_sigma: float = _WIDE_BLUR_WORK_SIGMA,
+    sigma_y: float | None = None,
 ) -> np.ndarray:
     """Gaussian blur for a sigma of many pixels, computed on a smaller copy.
 
@@ -42,14 +45,23 @@ def wide_blur(
     already halved: for a field that is soft by nature, a defocused deposit
     on the glass, say. Below twice the working sigma, and in exact mode
     (:mod:`weathermentations.mode`), it is the plain blur.
+
+    ``sigma_y`` is the sigma down the frame where that differs from the one
+    across it, and each axis is then reduced by its own factor: a reflection
+    smeared 36 pixels down a road and 11 across is reduced four times in
+    height and not at all in width.
     """
-    factor = int(sigma / work_sigma) if mode.fast() else 1
-    if factor < 2:
-        return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma)
+    down = sigma if sigma_y is None else sigma_y
+    across_factor = max(1, int(sigma / work_sigma)) if mode.fast() else 1
+    down_factor = max(1, int(down / work_sigma)) if mode.fast() else 1
+    if across_factor < 2 and down_factor < 2:
+        return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma, sigmaY=down)
     height, width = image.shape[:2]
-    size = (max(1, round(width / factor)), max(1, round(height / factor)))
+    size = (max(1, round(width / across_factor)), max(1, round(height / down_factor)))
     small = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
-    small = cv2.GaussianBlur(small, (0, 0), sigmaX=sigma * size[0] / width)
+    small = cv2.GaussianBlur(
+        small, (0, 0), sigmaX=sigma * size[0] / width, sigmaY=down * size[1] / height
+    )
     return cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
 
 

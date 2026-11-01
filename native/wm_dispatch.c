@@ -3,7 +3,8 @@
  * wm_kernels.c is compiled once per tier; each compilation exports one
  * table. On x86-64 there are two, the psABI baseline (SSE2) and AVX2, and
  * the best one the CPU and the operating system support is chosen when the
- * library is loaded. Elsewhere there is one. Every tier gives the same
+ * library is loaded. Elsewhere there is one. A build may add a "native"
+ * tier, compiled for the machine it was built on. Every tier gives the same
  * floats, so which one runs is a matter of speed only.
  */
 #include <string.h>
@@ -23,32 +24,52 @@ extern const wm_kernel_table WM_BASE_TABLE;
 #ifdef WM_HAVE_AVX2
 extern const wm_kernel_table wm_table_avx2;
 #endif
+#ifdef WM_HAVE_NATIVE
+extern const wm_kernel_table wm_table_native;
+/* Defined with the native tier: whether this CPU has what it was built for. */
+extern int wm_native_usable(void);
+#endif
 
-static const wm_kernel_table *active = &WM_BASE_TABLE;
+static int always(void) { return 1; }
 
+#ifdef WM_HAVE_AVX2
 static int cpu_has_avx2(void) {
-#if defined(WM_HAVE_AVX2)
     __builtin_cpu_init();
     return __builtin_cpu_supports("avx2");
-#else
-    return 0;
-#endif
 }
+#endif
+
+/* The tiers of this build, slowest first. */
+static const struct {
+    const wm_kernel_table *table;
+    int (*usable)(void);
+} tiers[] = {
+    {&WM_BASE_TABLE, always},
+#ifdef WM_HAVE_AVX2
+    {&wm_table_avx2, cpu_has_avx2},
+#endif
+#ifdef WM_HAVE_NATIVE
+    {&wm_table_native, wm_native_usable},
+#endif
+};
+enum { N_TIERS = sizeof(tiers) / sizeof(tiers[0]) };
+
+static const wm_kernel_table *active = &WM_BASE_TABLE;
 
 WM_EXPORT int wm_abi_version(void) { return WM_ABI_VERSION; }
 
 /* The tiers this build holds, best last, separated by commas. */
 WM_EXPORT const char *wm_tiers(void) {
-#ifdef WM_HAVE_AVX2
-    static char names[64];
+    static char names[96];
     if (!names[0]) {
-        strcpy(names, WM_BASE_TABLE.name);
-        strcat(names, ",avx2");
+        for (int i = 0; i < N_TIERS; i++) {
+            if (i) {
+                strcat(names, ",");
+            }
+            strcat(names, tiers[i].table->name);
+        }
     }
     return names;
-#else
-    return WM_BASE_TABLE.name;
-#endif
 }
 
 WM_EXPORT const char *wm_tier(void) { return active->name; }
@@ -56,25 +77,13 @@ WM_EXPORT const char *wm_tier(void) { return active->name; }
 /* Choose a tier by name, or the best the CPU has with "auto". Returns 0 when
  * the tier is now active, 1 when this build or this CPU does not have it. */
 WM_EXPORT int wm_select(const char *name) {
-    if (strcmp(name, "auto") == 0) {
-        active = &WM_BASE_TABLE;
-#ifdef WM_HAVE_AVX2
-        if (cpu_has_avx2()) {
-            active = &wm_table_avx2;
+    const int best = strcmp(name, "auto") == 0;
+    for (int i = N_TIERS - 1; i >= 0; i--) {
+        if ((best || strcmp(name, tiers[i].table->name) == 0) && tiers[i].usable()) {
+            active = tiers[i].table;
+            return 0;
         }
-#endif
-        return 0;
     }
-    if (strcmp(name, WM_BASE_TABLE.name) == 0) {
-        active = &WM_BASE_TABLE;
-        return 0;
-    }
-#ifdef WM_HAVE_AVX2
-    if (strcmp(name, "avx2") == 0 && cpu_has_avx2()) {
-        active = &wm_table_avx2;
-        return 0;
-    }
-#endif
     return 1;
 }
 
@@ -113,4 +122,14 @@ WM_EXPORT int wm_render_streaks(
         layer, height, width, select, n_select, x0, y0, patch_w, patch_h, vertices, n_vertices,
         thickness, alpha, col_offset, col_rate, row_offset, row_rate, phase, blur_sigma, beading,
         beading_size);
+}
+
+WM_EXPORT int wm_wet_composite(
+    float *out, const float *dry, const float *sharp, const float *rough,
+    const float *wetness, const float *puddles, const float *fresnel,
+    const float *film_fresnel, ptrdiff_t rows, ptrdiff_t width,
+    float ratio, float spare, float film, float gloss) {
+    return active->wet_composite(
+        out, dry, sharp, rough, wetness, puddles, fresnel, film_fresnel, rows, width, ratio,
+        spare, film, gloss);
 }

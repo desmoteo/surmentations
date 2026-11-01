@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WM_ABI_VERSION 2
+#define WM_ABI_VERSION 3
 
 typedef struct {
     const char *name;
@@ -55,6 +55,17 @@ typedef struct {
         const float *alpha, const float *col_offset, const float *col_rate,
         const float *row_offset, const float *row_rate, const float *phase,
         const float *blur_sigma, const float *beading, int beading_size);
+
+    /* The wet road, for the rows that hold any (rain._apply_ground_wetness
+     * in fast mode): `dry`, `sharp`, `rough` and `out` are (rows, width, 3),
+     * `wetness` and `puddles` (rows, width), `puddles` may be NULL, and
+     * `fresnel` and `film_fresnel` hold one value a row. Nonzero if it could
+     * not allocate a row of scratch. */
+    int (*wet_composite)(
+        float *out, const float *dry, const float *sharp, const float *rough,
+        const float *wetness, const float *puddles, const float *fresnel,
+        const float *film_fresnel, ptrdiff_t rows, ptrdiff_t width,
+        float ratio, float spare, float film, float gloss);
 } wm_kernel_table;
 
 #endif

@@ -10,11 +10,18 @@ build() { # tier, extra flags
     $cc $flags $2 -DWM_TIER="$1" -DWM_TABLE="wm_table_$1" \
         "$here/../wm_kernels.c" "$here/wm_hashes.c" -lm -o "$out" && "$out"
 }
+# With WEATHERMENTATIONS_BUILD_MARCH=native, the tier built for this machine too.
+native=${WEATHERMENTATIONS_BUILD_MARCH:-}
 case "$(uname -m)" in
     x86_64 | amd64)
         build sse2 ""
         build avx2 "-mavx2"
+        [ "$native" = native ] && build native "-march=native -mtune=native -DWM_NATIVE"
         ;;
-    aarch64 | arm64) build neon "" ;;
+    aarch64 | arm64)
+        build neon ""
+        [ "$native" = native ] && build native "-mcpu=native -DWM_NATIVE"
+        ;;
     *) build portable "" ;;
 esac
+true

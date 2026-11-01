@@ -88,12 +88,13 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations import _native
+from weathermentations import _native, mode
 from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
 from weathermentations.depth.normals import horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
+from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.ground import (
     fill_to_edges,
     ground_noise,
@@ -314,6 +315,9 @@ class RandomRain(WeatherTransform):
             single-frame transform cannot know. ``GROUND_SEVERITY`` in
             ``presets/severity.py`` is a ladder for this and
             ``wetness_darkening_range`` on their own, from dry to soaked.
+            The wet road is also most of what this transform costs: a frame
+            with it takes two to three times one without, which is why the
+            default is 0.4 and not higher.
         wetness_darkening_range: diffuse albedo of wet ground relative to
             dry. Water fills the surface pores and traps light in the film by
             total internal reflection, so wet asphalt scatters back much less
@@ -488,7 +492,7 @@ class RandomRain(WeatherTransform):
         wobble_range: tuple[float, float] = (0.05, 0.2),
         definition_softness: float = 0.45,
         veil_beta_range: tuple[float, float] | None = None,
-        wetness_probability: float = 0.7,
+        wetness_probability: float = 0.4,
         wetness_darkening_range: tuple[float, float] = (0.4, 0.9),
         wetness_falloff_range: tuple[float, float] = (4.0, 9.0),
         overcast_range: tuple[float, float] = (0.7, 1.0),
@@ -1212,7 +1216,10 @@ def wet_albedo(dry: np.ndarray, ratio: float) -> np.ndarray:
     # darkens, and wet roads came out dry. The power keeps the protection
     # for what is close to white in the picture and gives everything below
     # it nearly the full ratio.
-    kept = np.maximum(1.0 - (1.0 - ratio) * dry**_WHITE_PROTECTION, 1e-6)
+    # A power is a library call per value, and this one is a cube: two
+    # multiplications in fast mode, a rounding apart from it.
+    spared = dry * dry * dry if mode.fast() and _WHITE_PROTECTION == 3.0 else dry**_WHITE_PROTECTION
+    kept = np.maximum(1.0 - (1.0 - ratio) * spared, 1e-6)
     return (ratio * dry / kept).astype(np.float32)
 
 
@@ -1329,21 +1336,38 @@ def _apply_ground_wetness(
     factor clipped pixels are raised by before they are reflected.
     """
     height, width = linear.shape[:2]
-    rows = np.arange(height, dtype=np.float32)
+
+    # Only the rows that hold wet ground are worked on: a road is the lower
+    # part of a frame, and everything below is arithmetic over whole rows.
+    # Nothing is left out of them. The reflection is blurred down the frame,
+    # so it is made for a margin of rows above and below as wide as the
+    # blur's kernel reaches, and the band then blurs to the same values the
+    # whole frame would.
+    wet_rows = np.flatnonzero(wetness.any(axis=1))
+    if wet_rows.size == 0:
+        return linear.copy()
+    top, bottom = int(wet_rows[0]), int(wet_rows[-1]) + 1
+    smear = max(4.0, _FILM_SMEAR * height)
+    reach = (round(smear * 8.0 + 1.0) | 1) // 2
+    band_top, band_bottom = max(0, top - reach), min(height, bottom + reach)
+    band = slice(band_top, band_bottom)
+    inner = slice(top - band_top, bottom - band_top)
+    rows = np.arange(top, bottom, dtype=np.float32)
 
     # Mirror each point about the foot of whatever stands above it. A row
     # whose reflection looks above the top of the frame sees something the
     # picture does not contain, which under an open sky is the sky.
     about_horizon, about_foot, under_object = _mirrored_rows(wetness, horizon_px)
+    about_horizon, about_foot = about_horizon[band], about_foot[band]
+    under_object = under_object[band]
     source = linear
     if lamp_gain > 1.0:
         source = linear * (1.0 + (lamp_gain - 1.0) * source_mask(linear)[..., None])
-    map_x = np.ascontiguousarray(
-        np.broadcast_to(np.arange(width, dtype=np.float32), (height, width))
-    )
+    band_shape = (band_bottom - band_top, width)
+    map_x = np.ascontiguousarray(np.broadcast_to(np.arange(width, dtype=np.float32), band_shape))
 
     def mirror(source_rows: np.ndarray) -> np.ndarray:
-        map_y = np.clip(np.broadcast_to(source_rows, (height, width)), 0.0, height - 1.0)
+        map_y = np.clip(np.broadcast_to(source_rows, band_shape), 0.0, height - 1.0)
         return cv2.remap(
             source,
             map_x,
@@ -1365,17 +1389,17 @@ def _apply_ground_wetness(
         reflection = distant * (1.0 - weight) + mirror(about_foot) * weight
 
     # A puddle is nearly smooth. The film elsewhere is a rough mirror, which
-    # smears a reflection along the line of sight far more than across it.
-    sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)
-    smear = max(4.0, _FILM_SMEAR * height)
-    rough = cv2.GaussianBlur(reflection, (0, 0), sigmaX=max(1.5, 0.3 * smear), sigmaY=smear)
+    # smears a reflection along the line of sight far more than across it:
+    # tens of pixels on a large frame, so on a reduced copy in fast mode.
+    sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)[inner]
+    rough = wide_blur(reflection, max(1.5, 0.3 * smear), sigma_y=smear)[inner]
 
     # Schlick: R = R0 + (1 - R0)(1 - cos t)^5, where t is measured from the
     # surface normal, i.e. from vertical. cos t is the *sine* of the ray's
     # depression below the horizon.
     drop = np.maximum(rows - horizon_px, 0.0)
     cos_theta = drop / np.sqrt(drop * drop + focal_px * focal_px)
-    grazing = (1.0 - cos_theta).reshape(height, 1, 1)
+    grazing = (1.0 - cos_theta).reshape(-1, 1, 1)
     fresnel = _WATER_R0 + (1.0 - _WATER_R0) * grazing**5
     # A rough film has facets tilted towards the camera, which the camera
     # sees at a more grazing angle than the road as a whole: its reflectance
@@ -1389,13 +1413,35 @@ def _apply_ground_wetness(
         )
     )
 
+    dry = linear[top:bottom]
+    out = linear.copy()
+    if mode.fast():
+        # The rest is nine expressions over the frame, each making a frame.
+        # The compiled kernel does the same arithmetic in one pass.
+        composed = _native.wet_composite(
+            dry,
+            sharp,
+            rough,
+            wetness[top:bottom],
+            None if puddles is None else puddles[top:bottom],
+            fresnel,
+            film_fresnel,
+            darkening,
+            float(film),
+            _FILM_GLOSS,
+        )
+        if composed is not None:
+            out[top:bottom] = composed
+            return out
+
     # Standing water needs a film to stand in: a damp road has no puddles.
-    water = np.zeros((height, width, 1), dtype=np.float32)
+    water = np.zeros((bottom - top, width, 1), dtype=np.float32)
     if puddles is not None:
-        water = (puddles * film)[..., None]
+        water = (puddles[top:bottom] * film)[..., None]
     mirror_weight = fresnel * water + film_fresnel * (1.0 - water) * film * _FILM_GLOSS
     mirrored = sharp * water + rough * (1.0 - water)
 
-    wet = wet_albedo(linear, darkening) * (1.0 - mirror_weight) + mirrored * mirror_weight
-    w = wetness[..., None]
-    return (linear * (1.0 - w) + wet * w).astype(linear.dtype)
+    wet = wet_albedo(dry, darkening) * (1.0 - mirror_weight) + mirrored * mirror_weight
+    w = wetness[top:bottom, :, None]
+    out[top:bottom] = (dry * (1.0 - w) + wet * w).astype(linear.dtype)
+    return out

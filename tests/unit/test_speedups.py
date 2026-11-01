@@ -8,17 +8,21 @@ with. Fast-mode forms, which are allowed to differ, are in test_modes.py.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 import torch
 
 from weathermentations import mode
+from weathermentations.atmosphere import rain
 from weathermentations.camera import NightIrMode
 from weathermentations.depth import DepthAnythingV2Estimator
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw, recording
 from weathermentations.utils import precipitation
+from weathermentations.utils.color import veil_radiance_linear
+from weathermentations.utils.sources import source_mask
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the depth model requires CUDA"
@@ -163,3 +167,101 @@ def test_half_precision_follows_the_mode_unless_told() -> None:
         assert np.abs(fast - exact).mean() < 0.01
     finally:
         mode.set_fast(was_fast)
+
+
+# ----------------------------------------------------------------- wet road
+
+
+def _wet_road_over_the_whole_frame(linear, wetness, darkening, horizon_px, focal_px,
+                                   sky_radiance=None, lamp_gain=1.0, puddles=None):  # fmt: skip
+    """`_apply_ground_wetness` before it worked on the wet rows alone: every
+    array the height of the frame."""
+    height, width = linear.shape[:2]
+    rows = np.arange(height, dtype=np.float32)
+    about_horizon, about_foot, under_object = rain._mirrored_rows(wetness, horizon_px)
+    source = linear
+    if lamp_gain > 1.0:
+        source = linear * (1.0 + (lamp_gain - 1.0) * source_mask(linear)[..., None])
+    map_x = np.ascontiguousarray(
+        np.broadcast_to(np.arange(width, dtype=np.float32), (height, width))
+    )
+
+    def mirror(source_rows):
+        map_y = np.clip(np.broadcast_to(source_rows, (height, width)), 0.0, height - 1.0)
+        map_y = np.ascontiguousarray(map_y, dtype=np.float32)
+        linear_, edge = cv2.INTER_LINEAR, cv2.BORDER_REPLICATE
+        return cv2.remap(source, map_x, map_y, interpolation=linear_, borderMode=edge)
+
+    if sky_radiance is None:
+        sky_radiance = veil_radiance_linear(linear)
+    margin = rain._OFF_FRAME_BLEND * height
+    off_frame = np.clip((margin - about_horizon) / margin, 0.0, 1.0)[..., None]
+    distant = mirror(about_horizon) * (1.0 - off_frame) + sky_radiance.reshape(1, 1, -1) * off_frame
+    reflection = distant
+    if float(under_object.max()) > 0.0:
+        weight = under_object[..., None]
+        reflection = distant * (1.0 - weight) + mirror(about_foot) * weight
+    sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)
+    smear = max(4.0, rain._FILM_SMEAR * height)
+    rough = cv2.GaussianBlur(reflection, (0, 0), sigmaX=max(1.5, 0.3 * smear), sigmaY=smear)
+    drop = np.maximum(rows - horizon_px, 0.0)
+    cos_theta = drop / np.sqrt(drop * drop + focal_px * focal_px)
+    grazing = (1.0 - cos_theta).reshape(height, 1, 1)
+    fresnel = rain._WATER_R0 + (1.0 - rain._WATER_R0) * grazing**5
+    film_fresnel = rain._WATER_R0 + (1.0 - rain._WATER_R0) * grazing**rain._FILM_GRAZING_EXPONENT
+    film = np.float32(
+        np.clip(
+            (rain._DAMP_ALBEDO_RATIO - darkening)
+            / (rain._DAMP_ALBEDO_RATIO - rain._SOAKED_ALBEDO_RATIO),
+            0.0,
+            1.0,
+        )
+    )
+    water = np.zeros((height, width, 1), dtype=np.float32)
+    if puddles is not None:
+        water = (puddles * film)[..., None]
+    mirror_weight = fresnel * water + film_fresnel * (1.0 - water) * film * rain._FILM_GLOSS
+    mirrored = sharp * water + rough * (1.0 - water)
+    wet = rain.wet_albedo(linear, darkening) * (1.0 - mirror_weight) + mirrored * mirror_weight
+    w = wetness[..., None]
+    return (linear * (1.0 - w) + wet * w).astype(linear.dtype)
+
+
+def _road(seed: int, top: int, height: int = 240, width: int = 320):
+    """A frame with wet ground from row ``top`` down, a dry island in it and
+    a clipped lamp above it."""
+    rng = np.random.default_rng(seed)
+    linear = rng.uniform(0.02, 0.9, (height, width, 3)).astype(np.float32)
+    linear[30:36, 100:106] = 1.0
+    wetness = np.zeros((height, width), dtype=np.float32)
+    wetness[top:] = rng.uniform(0.0, 1.0, (height - top, width)).astype(np.float32)
+    wetness[top + 20 : top + 50, 60:130] = 0.0
+    puddles = np.clip(rng.uniform(-1.0, 1.0, (height, width)), 0.0, 1.0).astype(np.float32)
+    return linear, wetness, puddles
+
+
+@pytest.mark.parametrize("top", [0, 90, 200, 239], ids=["all-wet", "half", "a-strip", "one-row"])
+@pytest.mark.parametrize("with_puddles", [True, False])
+def test_working_on_the_wet_rows_alone_gives_the_whole_frame_s_road(
+    top: int, with_puddles: bool
+) -> None:
+    """In exact mode. The reflection is blurred down the frame, so the rows
+    worked on include a margin as deep as the blur's kernel; with it the
+    band blurs to the values the whole frame would."""
+    linear, wetness, puddles = _road(top, top)
+    arguments = {
+        "sky_radiance": np.array([0.5, 0.6, 0.7], dtype=np.float32),
+        "lamp_gain": 4.0,
+        "puddles": puddles if with_puddles else None,
+    }
+    with mode.exact():
+        ours = rain._apply_ground_wetness(linear, wetness, 0.5, 80.0, 300.0, **arguments)
+        whole = _wet_road_over_the_whole_frame(linear, wetness, 0.5, 80.0, 300.0, **arguments)
+    assert np.abs(whole - linear).max() > 0.05, "the fixture's road is not wet"
+    assert np.array_equal(ours, whole)
+
+
+def test_a_frame_with_no_wet_ground_comes_back_as_it_was() -> None:
+    linear, wetness, _ = _road(1, 100)
+    untouched = rain._apply_ground_wetness(linear, np.zeros_like(wetness), 0.5, 80.0, 300.0)
+    assert np.array_equal(untouched, linear) and untouched is not linear

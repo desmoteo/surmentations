@@ -14,6 +14,10 @@ or ``=0`` to skip it and build a pure-Python wheel.
 flags, and ``wm_dispatch.c`` picks a tier when the library loads; nothing but
 the tier's own object is compiled for more than the platform's baseline, so
 one binary runs on every CPU of the architecture. See docs/native_kernels.md.
+
+``WEATHERMENTATIONS_BUILD_MARCH=native`` adds a tier compiled with
+``-march=native -mtune=native`` (``-mcpu=native`` on arm64), for the machine
+doing the build and not for distribution.
 """
 
 from __future__ import annotations
@@ -76,10 +80,18 @@ def tiers() -> list[tuple[str, list[str]]]:
     """``(name, extra flags)`` per tier, baseline first."""
     machine = platform.machine().lower()
     if machine in ("x86_64", "amd64"):
-        return [("sse2", []), ("avx2", ["-mavx2"])]
-    if machine in ("aarch64", "arm64"):
-        return [("neon", [])]
-    return [("portable", [])]
+        built = [("sse2", []), ("avx2", ["-mavx2"])]
+        native = ["-march=native", "-mtune=native"]
+    elif machine in ("aarch64", "arm64"):
+        built = [("neon", [])]
+        native = ["-mcpu=native"]
+    else:
+        return [("portable", [])]
+    # A third tier, for the machine this is built on and no other: see
+    # "Building for one machine" in docs/native_kernels.md.
+    if os.environ.get("WEATHERMENTATIONS_BUILD_MARCH", "").lower() == "native":
+        built.append(("native", [*native, "-DWM_NATIVE"]))
+    return built
 
 
 def find_compiler() -> str:
@@ -116,7 +128,7 @@ def build_native(
             )
             objects.append(obj)
         dispatch = str(Path(scratch) / "dispatch.o")
-        defines = [f"-DWM_BASE={base}"] + (["-DWM_HAVE_AVX2"] if len(built) > 1 else [])
+        defines = [f"-DWM_BASE={base}"] + [f"-DWM_HAVE_{name.upper()}" for name, _ in built[1:]]
         _run([*compiler, *flags, *defines, "-c", str(SOURCES / "wm_dispatch.c"), "-o", dispatch])
         output_dir.mkdir(parents=True, exist_ok=True)
         # Link to a temporary name and rename, so a process that has the old
