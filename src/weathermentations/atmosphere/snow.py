@@ -987,11 +987,17 @@ class RandomSnow(WeatherTransform):
         airlight = veil_radiance_linear(linear, sky)
 
         # Heavy snow scatters hard: the veil is most of what says "snowing".
-        t_veil = veil_transmission[..., None]
-        out = linear * t_veil + airlight[None, None, :] * (1.0 - t_veil)
-
-        alpha = np.clip(flake_layer, 0.0, 1.0)[..., None]
-        out = out * (1.0 - alpha) + flake_radiance[None, None, :] * alpha
+        # One compiled pass where there is one, with the arithmetic of the
+        # two expressions below in their order: the same floats.
+        cover = np.clip(flake_layer, 0.0, 1.0)
+        blended = _native.veil_blend(linear, veil_transmission, airlight, cover, flake_radiance)
+        if blended is None:
+            t_veil = veil_transmission[..., None]
+            out = linear * t_veil + airlight[None, None, :] * (1.0 - t_veil)
+            alpha = cover[..., None]
+            out = out * (1.0 - alpha) + flake_radiance[None, None, :] * alpha
+        else:
+            out = blended
 
         if accumulation_strength > 0.0:
             snow_albedo = srgb_to_linear(

@@ -162,32 +162,46 @@ def sky_to_depth_edge(
     if not core.any():
         return sky
     level = float(np.median(relative_depth[core]))
-    near_level = np.clip(
-        2.0 - np.abs(relative_depth - level) / _SKY_DEPTH_TOLERANCE, 0.0, 1.0
+    reach = max(3, round(_SKY_EDGE_REACH * float(np.hypot(*sky.shape))) | 1)
+    grown = wide_dilate(sky, reach)
+
+    # Everything below is arithmetic on a pixel and what the mask, grown,
+    # says of it. Below the lowest row the grown mask reaches both are zero
+    # and so is the result, so it is done on the rows in between: the same
+    # values there, and in a street scene half the frame not gone over.
+    reached = np.flatnonzero(
+        (cv2.reduce(grown, 1, cv2.REDUCE_MAX) > 0) | (cv2.reduce(sky, 1, cv2.REDUCE_MAX) > 0)
     )
+    band = slice(int(reached[0]), int(reached[-1]) + 1)
+    sky_band, grown_band, depth_band = sky[band], grown[band], relative_depth[band]
+    redrawn = np.zeros(sky.shape, dtype=np.float32)
+
     # What the mask already holds is kept unless the depth map plainly says
     # otherwise. Depth is blurred across every skyline, and holding the
     # mask's own pixels to the tolerance used for new ones cut a band of sky
     # out along it: left as photographed while the rest was relit, a pale
     # outline round every building.
     plainly_not = np.clip(
-        2.0 - np.abs(relative_depth - level) / (_SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE),
+        2.0 - np.abs(depth_band - level) / (_SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE),
         0.0,
         1.0,
     )
-    kept = sky * plainly_not
-    reach = max(3, round(_SKY_EDGE_REACH * float(np.hypot(*sky.shape))) | 1)
-    grown = wide_dilate(sky, reach)
+    kept = sky_band * plainly_not
     if linear_rgb is not None:
         # The sky's colour near each pixel, since a sky is not one colour.
         sigma = float(reach)
-        weight = wide_blur(sky, sigma)
-        nearby = wide_blur(linear_rgb * sky[..., None], sigma)
+        weight = wide_blur(sky, sigma)[band]
+        of_sky = np.zeros_like(linear_rgb)
+        of_sky[band] = linear_rgb[band] * sky_band[..., None]
+        nearby = wide_blur(of_sky, sigma)[band]
         nearby = nearby / np.maximum(weight, 1e-4)[..., None]
-        unlike = channel_max(np.abs(linear_rgb - nearby))
+        unlike = channel_max(np.abs(linear_rgb[band] - nearby))
         alike = np.clip(2.0 - unlike / _SKY_COLOUR_TOLERANCE, 0.0, 1.0) * (weight > 0.02)
         # With colour to go by, depth only has to not contradict it: the
         # last pixels of sky before a roofline are sky-coloured and, in a
         # depth map blurred across that roofline, already half building.
-        return np.maximum(kept, grown * alike * plainly_not).astype(np.float32)
-    return np.maximum(kept, grown * near_level).astype(np.float32)
+        redrawn[band] = np.maximum(kept, grown_band * alike * plainly_not)
+        return redrawn
+    near_level = np.clip(2.0 - np.abs(depth_band - level) / _SKY_DEPTH_TOLERANCE, 0.0, 1.0)
+    redrawn[band] = np.maximum(kept, grown_band * near_level)
+    return redrawn

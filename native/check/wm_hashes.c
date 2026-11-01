@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same ten lines. It needs only a
+ * architecture, the program must print the same twelve lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -215,5 +215,24 @@ int main(void) {
     WM_TABLE.dirt_composite(road, linear, dry, cover, sharp, sky, W * H, 0.6f, 0.7f, 0.09f, 0.35f);
     printf("%-9s dirt     %016llx\n", WM_TABLE.name,
            (unsigned long long)(emphasised ^ fnv(road, N * sizeof(float))));
+
+    /* A frame through a veil and a layer of particles, lit by one colour and
+     * then by a field; and the overcast relighting, with and without sky. */
+    for (int i = 0; i < W * H; i++) {
+        luma[i] = uniform();
+        cover[i] = uniform();
+    }
+    WM_TABLE.veil_blend(road, linear, luma, sky, cover, sky, NULL, W * H);
+    uint64_t veiled = fnv(road, N * sizeof(float));
+    WM_TABLE.veil_blend(road, linear, luma, sky, cover, NULL, dry, W * H);
+    veiled ^= fnv(road, N * sizeof(float));
+    WM_TABLE.veil_blend(road, linear, luma, sky, NULL, NULL, NULL, W * H);
+    printf("%-9s veil     %016llx\n", WM_TABLE.name,
+           (unsigned long long)(veiled ^ fnv(road, N * sizeof(float))));
+    WM_TABLE.overcast_blend(road, linear, luma, cover, wet, sky, W * H, 0.3f, 0.6f, 0.41f);
+    const uint64_t relit = fnv(road, N * sizeof(float));
+    WM_TABLE.overcast_blend(road, linear, luma, cover, NULL, sky, W * H, 0.3f, 0.6f, 0.41f);
+    printf("%-9s overcast %016llx\n", WM_TABLE.name,
+           (unsigned long long)(relit ^ fnv(road, N * sizeof(float))));
     return 0;
 }

@@ -56,6 +56,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from weathermentations import mode
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.scale import (
     DEFAULT_MAX_DISTANCE_METERS,
@@ -127,15 +128,23 @@ class _Alias:
 
 
 class _Scene:
-    """A depth map and the arrays it is valid for."""
+    """A depth map and the arrays it is valid for.
 
-    __slots__ = ("aliases", "depth")
+    And the mode it was estimated in (:mod:`weathermentations.mode`): the
+    bundled estimator runs in half precision in fast mode, so a map made
+    there is not the one exact mode would make, and is not handed to it.
+    """
+
+    __slots__ = ("aliases", "depth", "fast")
 
     def __init__(self, depth: np.ndarray, image: np.ndarray) -> None:
         self.depth = depth
         self.aliases = [_Alias(image)]
+        self.fast = mode.fast()
 
     def knows(self, image: np.ndarray) -> bool:
+        if self.fast != mode.fast():
+            return False
         return any(alias.matches(image) for alias in self.aliases)
 
     def adopt(self, image: np.ndarray) -> None:

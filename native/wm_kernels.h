@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WM_ABI_VERSION 6
+#define WM_ABI_VERSION 7
 
 typedef struct {
     const char *name;
@@ -101,6 +101,24 @@ typedef struct {
         float *out, const float *linear, const float *spread, const float *mask,
         const float *albedo, const float *surroundings, ptrdiff_t pixels,
         float forward, float veil_strength, float absorption, float body);
+
+    /* A frame seen through a veil, and then through a layer of particles:
+     * out = linear * t + airlight * (1 - t), and with `alpha` not NULL
+     * out = out * (1 - alpha) + light * alpha, as RandomRain and RandomSnow
+     * write them. `transmission` and `alpha` hold one value a pixel,
+     * `airlight` three; the particles' light is the three values of `light`
+     * or, with `light_map` not NULL, a value for every one of the frame's. */
+    void (*veil_blend)(
+        float *out, const float *linear, const float *transmission, const float *airlight,
+        const float *alpha, const float *light, const float *light_map, ptrdiff_t pixels);
+
+    /* overcast.apply_overcast in fast mode, after its statistics: each
+     * pixel scaled by `gain`, drawn towards its grey, covered by cloud where
+     * `sky` (which may be NULL) says, and clipped to [0, 1]. */
+    void (*overcast_blend)(
+        float *out, const float *linear, const float *gain, const float *grey,
+        const float *sky, const float *cloud, ptrdiff_t pixels,
+        float desaturate, float cover_scale, float mean_grey);
 } wm_kernel_table;
 
 #endif

@@ -49,6 +49,7 @@ __all__ = [
     "enabled",
     "encode_f32",
     "encode_u8",
+    "overcast_blend",
     "render_flakes",
     "render_streaks",
     "set_enabled",
@@ -56,13 +57,14 @@ __all__ = [
     "mirror_rows",
     "tier",
     "tiers",
+    "veil_blend",
     "wet_composite",
     "wet_reflection",
 ]
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 6
+_ABI_VERSION = 7
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -91,6 +93,8 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
         None,
         [_pointer] * 6 + [ctypes.c_ssize_t] + [ctypes.c_float] * 4,
     ),
+    "wm_veil_blend": (None, [_pointer] * 7 + [ctypes.c_ssize_t]),
+    "wm_overcast_blend": (None, [_pointer] * 6 + [ctypes.c_ssize_t] + [ctypes.c_float] * 3),
     "wm_mirror_rows": (
         ctypes.c_int,
         [_pointer, ctypes.c_ssize_t, ctypes.c_ssize_t, ctypes.c_double, _pointer, _pointer],
@@ -595,5 +599,108 @@ def dirt_composite(
         float(veil_strength),
         float(absorption),
         float(body),
+    )
+    return out
+
+
+def _is_plane_of(plane: np.ndarray, image: np.ndarray) -> bool:
+    return plane.dtype == np.float32 and plane.shape == image.shape[:2]
+
+
+def veil_blend(
+    linear: np.ndarray,
+    transmission: np.ndarray,
+    airlight: np.ndarray,
+    alpha: np.ndarray | None = None,
+    light: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """A frame through a veil and then a layer of particles; ``None`` if not done.
+
+    ``linear * t + airlight * (1 - t)`` with ``t`` the ``(H, W)``
+    ``transmission``, and with ``alpha`` given
+    ``out * (1 - alpha) + light * alpha`` after it, ``light`` three values
+    or an ``(H, W, 3)`` field. One pass, with numpy's float32 arithmetic in
+    numpy's order, so the result is those expressions' to the bit.
+    """
+    usable = (
+        _enabled
+        and _is_rgb_float32(linear)
+        and _is_plane_of(transmission, linear)
+        and airlight.dtype == np.float32
+        and airlight.size == 3
+    )
+    lit_everywhere = None
+    if usable and alpha is not None:
+        usable = _is_plane_of(alpha, linear) and light is not None and light.dtype == np.float32
+        if usable and light is not None and light.size != 3:
+            usable = light.shape == linear.shape
+            lit_everywhere = np.ascontiguousarray(light) if usable else None
+    if not usable:
+        return None
+    assert _library is not None
+    scene, through = np.ascontiguousarray(linear), np.ascontiguousarray(transmission)
+    air = np.ascontiguousarray(airlight).reshape(-1)
+    cover = None if alpha is None else np.ascontiguousarray(alpha)
+    three = None
+    if light is not None and lit_everywhere is None:
+        three = np.ascontiguousarray(light).reshape(-1)
+    out = np.empty(scene.shape, dtype=np.float32)
+    _library.wm_veil_blend(
+        out.ctypes.data,
+        scene.ctypes.data,
+        through.ctypes.data,
+        air.ctypes.data,
+        None if cover is None else cover.ctypes.data,
+        None if three is None else three.ctypes.data,
+        None if lit_everywhere is None else lit_everywhere.ctypes.data,
+        through.size,
+    )
+    return out
+
+
+def overcast_blend(
+    linear: np.ndarray,
+    gain: np.ndarray,
+    grey: np.ndarray,
+    sky: np.ndarray | None,
+    cloud: np.ndarray,
+    desaturate: float,
+    cover_scale: float,
+    mean_grey: float,
+) -> np.ndarray | None:
+    """The last step of ``overcast.apply_overcast`` in fast mode; ``None`` if not done.
+
+    Each pixel scaled by its ``gain``, drawn towards its ``grey`` by
+    ``desaturate``, covered with ``cloud`` where ``sky`` says, and clipped:
+    the arithmetic of ``overcast._relight``, in one pass.
+    """
+    usable = (
+        _enabled
+        and _is_rgb_float32(linear)
+        and _is_plane_of(gain, linear)
+        and _is_plane_of(grey, linear)
+        and (sky is None or _is_plane_of(sky, linear))
+        and cloud.dtype == np.float32
+        and cloud.size == 3
+    )
+    if not usable:
+        return None
+    assert _library is not None
+    scene = np.ascontiguousarray(linear)
+    gains, greys = np.ascontiguousarray(gain), np.ascontiguousarray(grey)
+    covered = None if sky is None else np.ascontiguousarray(sky)
+    tint = np.ascontiguousarray(cloud).reshape(-1)
+    out = np.empty(scene.shape, dtype=np.float32)
+    _library.wm_overcast_blend(
+        out.ctypes.data,
+        scene.ctypes.data,
+        gains.ctypes.data,
+        greys.ctypes.data,
+        None if covered is None else covered.ctypes.data,
+        tint.ctypes.data,
+        gains.size,
+        float(desaturate),
+        float(cover_scale),
+        float(mean_grey),
     )
     return out

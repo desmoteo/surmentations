@@ -28,7 +28,7 @@ from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import TemporalDenoiseArtifacts
 from weathermentations.camera import denoise as denoise_module
 from weathermentations.lens import DirtSoil
-from weathermentations.utils import photometry
+from weathermentations.utils import overcast, photometry
 
 # Built and switched on: with WEATHERMENTATIONS_NATIVE=0 the library is there
 # and every comparison below would be numpy against itself.
@@ -619,6 +619,65 @@ def test_dirt_does_not_depend_on_the_kernels_in_either_mode(fast: bool, dtype) -
         assert np.array_equal(native, reference)
 
 
+# ------------------------------------------------- veils and relighting
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("light", ["none", "three", "map"])
+def test_the_veil_kernel_is_the_two_numpy_expressions_to_the_bit(tier: str, light: str) -> None:
+    """`RandomRain.apply` and `RandomSnow.apply`: a frame through a veil,
+    then through a layer of particles lit by one colour or by a field."""
+    _native.set_tier(tier)
+    for seed in range(3):
+        v = _dirt_inputs(seed)
+        linear, through, air = v["linear"], v["luma"].clip(0.0, 1.0), v["around"]
+        cover = v["mask"].clip(0.0, 1.0)
+        t = through[..., None]
+        expected = linear * t + air[None, None, :] * (1.0 - t)
+        if light == "none":
+            ours = _native.veil_blend(linear, through, air)
+        else:
+            lit = v["albedo"][0, 0].copy() if light == "three" else v["spread"]
+            a = cover[..., None]
+            expected = expected * (1.0 - a) + lit * a
+            ours = _native.veil_blend(linear, through, air, cover, lit)
+        assert expected.dtype == np.float32
+        assert np.array_equal(ours, expected)
+
+
+@requires_native
+def test_the_veil_kernel_declines_what_it_was_not_written_for() -> None:
+    v = _dirt_inputs(0, (16, 16))
+    linear, through, air, cover = v["linear"], v["luma"], v["around"], v["mask"]
+    assert _native.veil_blend(linear.astype(np.float64), through, air) is None
+    assert _native.veil_blend(linear, np.stack([through] * 3, axis=-1), air) is None
+    assert _native.veil_blend(linear, through, air.astype(np.float64)) is None
+    assert _native.veil_blend(linear, through, air, cover, None) is None
+    assert _native.veil_blend(linear, through, air, cover, v["spread"][:8]) is None
+    assert _native.veil_blend(linear, through, air, cover, air.astype(np.float64)) is None
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("with_sky", [True, False])
+def test_the_overcast_kernel_is_the_numpy_it_stands_in_for(tier: str, with_sky: bool) -> None:
+    """Fast mode's relighting with the kernel and without it: the same floats,
+    so that the frame does not depend on the kernels being installed."""
+    _native.set_tier(tier)
+    mode.set_fast(True)
+    for seed in range(3):
+        v = _dirt_inputs(seed)
+        linear = v["linear"].clip(0.0, 1.0)
+        sky = v["mask"].clip(0.0, 1.0) if with_sky else None
+        native = overcast.apply_overcast(linear, 0.3 + 0.3 * seed, sky)
+        with _native.disabled():
+            reference = overcast.apply_overcast(linear, 0.3 + 0.3 * seed, sky)
+        assert not np.array_equal(native, linear)
+        assert native.dtype == np.float32
+        assert np.array_equal(native, reference)
+
+
 # ------------------------------------------------------------------ tiers
 
 
@@ -645,6 +704,13 @@ def test_every_tier_gives_the_same_bytes() -> None:
                 _native.edge_preserving(frame, 20.0, 0.2, tabled=False),
                 _native.edge_preserving(frame, 20.0, 0.2, tabled=True),
                 _native.dirt_emphasise(dirt["linear"], dirt["luma"], 3.0),
+                _native.veil_blend(
+                    dirt["linear"], dirt["luma"], dirt["around"], dirt["mask"], dirt["spread"]
+                ),
+                _native.overcast_blend(
+                    dirt["linear"], dirt["luma"], dirt["mask"], dirt["luma"], dirt["around"],
+                    0.3, 0.5, 0.4,
+                ),
                 _native.dirt_composite(
                     dirt["linear"], dirt["spread"], dirt["mask"], dirt["albedo"], dirt["around"],
                     0.6, 0.6, 0.08, 0.35,
@@ -716,6 +782,7 @@ def test_without_the_kernels_every_entry_point_declines() -> None:
         assert _native.decode_u8(codes, photometry._U8_TO_LINEAR_LUT) is None
         assert _native.edge_preserving(codes, 10.0, 0.2, tabled=False) is None
         assert _native.dirt_emphasise(linear, linear[..., 0], 2.0) is None
+        assert _native.veil_blend(linear, linear[..., 0], linear[0, 0]) is None
         assert np.array_equal(
             photometry.from_linear_unit(linear, 255.0, True, np.uint8),
             _textbook_encode_u8(linear),

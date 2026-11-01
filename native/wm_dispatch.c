@@ -167,3 +167,17 @@ WM_EXPORT void wm_dirt_composite(
         out, linear, spread, mask, albedo, surroundings, pixels, forward, veil_strength,
         absorption, body);
 }
+
+WM_EXPORT void wm_veil_blend(
+    float *out, const float *linear, const float *transmission, const float *airlight,
+    const float *alpha, const float *light, const float *light_map, ptrdiff_t pixels) {
+    active->veil_blend(out, linear, transmission, airlight, alpha, light, light_map, pixels);
+}
+
+WM_EXPORT void wm_overcast_blend(
+    float *out, const float *linear, const float *gain, const float *grey,
+    const float *sky, const float *cloud, ptrdiff_t pixels,
+    float desaturate, float cover_scale, float mean_grey) {
+    active->overcast_blend(
+        out, linear, gain, grey, sky, cloud, pixels, desaturate, cover_scale, mean_grey);
+}
