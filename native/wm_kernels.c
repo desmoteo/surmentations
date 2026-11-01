@@ -235,6 +235,26 @@ static inline void next_plane_row(
     }
 }
 
+/* Fast mode: the division by the support is folded into the normal, once
+ * per sprite, so a plane is two multiplies and an add. The quotient and the
+ * product with a rounded reciprocal differ in the last bit or two. */
+static inline void first_plane_row_fast(
+    float *restrict row, const float *restrict dx, ptrdiff_t size, float dy, float nx, float ny) {
+    const float dyny = dy * ny;
+    WM_VECTORISED for (ptrdiff_t c = 0; c < size; c++) {
+        row[c] = dx[c] * nx + dyny;
+    }
+}
+
+static inline void next_plane_row_fast(
+    float *restrict row, const float *restrict dx, ptrdiff_t size, float dy, float nx, float ny) {
+    const float dyny = dy * ny;
+    WM_VECTORISED for (ptrdiff_t c = 0; c < size; c++) {
+        const float plane = dx[c] * nx + dyny;
+        row[c] = row[c] > plane ? row[c] : plane;
+    }
+}
+
 /* The cat's-eye stop: a second, displaced aperture. */
 static inline void stop_row(
     float *restrict row, const float *restrict dx, ptrdiff_t size,
@@ -263,6 +283,20 @@ static WM_NOINLINE void shade_row(float *restrict row, ptrdiff_t size, float rim
     }
 }
 
+/* Fast mode: the two divisions by constants as multiplications. */
+static WM_NOINLINE void shade_row_fast(
+    float *restrict row, ptrdiff_t size, float rim, float level) {
+    const float per_edge = 1.0f / 0.12f, per_core = 1.0f / 0.35f;
+    WM_VECTORISED for (ptrdiff_t c = 0; c < size; c++) {
+        const float inside = clamp01(1.0f - row[c]);
+        float edge = inside * per_edge;
+        edge = edge < 1.0f ? edge : 1.0f;
+        float fall = 1.0f - inside * per_core;
+        fall = fall > 0.0f ? fall : 0.0f;
+        row[c] = edge * (1.0f + rim * fall) * level;
+    }
+}
+
 static inline void max_row(float *restrict dst, const float *restrict src, ptrdiff_t size) {
     WM_VECTORISED for (ptrdiff_t c = 0; c < size; c++) {
         dst[c] = dst[c] > src[c] ? dst[c] : src[c];
@@ -274,7 +308,7 @@ static int WM_FN(render_flakes)(
     const float *x, const float *y, const float *radius, const float *blur_radius,
     const float *smear, const float *dir_x, const float *dir_y, const float *gain,
     int blades, double blade_rotation, double rim_gain, double cats_eye,
-    double centre_x, double centre_y) {
+    double centre_x, double centre_y, int fast) {
     float normal_x[WM_MAX_BLADES], normal_y[WM_MAX_BLADES];
     double base_support = 0.0;
     if (blades > WM_MAX_BLADES) {
@@ -372,16 +406,24 @@ static int WM_FN(render_flakes)(
         const double smear_area = 1.0 + 2.0 * half_smear / WM_PI;
         const float level = (float)((gain ? (double)gain[i] : 1.0) * coverage / smear_area);
 
-        float support[WM_MAX_BLADES];
+        float support[WM_MAX_BLADES], scaled_x[WM_MAX_BLADES], scaled_y[WM_MAX_BLADES];
         for (int b = 0; b < blades && blades >= 3; b++) {
-            support[b] =
-                (float)(base_support + half_smear * fabs((double)ux * normal_x[b] + (double)uy * normal_y[b]));
+            const double reach_b =
+                base_support + half_smear * fabs((double)ux * normal_x[b] + (double)uy * normal_y[b]);
+            support[b] = (float)reach_b;
+            scaled_x[b] = (float)(normal_x[b] / reach_b);
+            scaled_y[b] = (float)(normal_y[b] / reach_b);
         }
 
         for (ptrdiff_t r = 0; r < size; r++) {
             float *row = sprite + r * size;
             const float dy = axis[r];
-            if (blades >= 3) {
+            if (blades >= 3 && fast) {
+                first_plane_row_fast(row, axis, size, dy, scaled_x[0], scaled_y[0]);
+                for (int b = 1; b < blades; b++) {
+                    next_plane_row_fast(row, axis, size, dy, scaled_x[b], scaled_y[b]);
+                }
+            } else if (blades >= 3) {
                 first_plane_row(row, axis, size, dy, normal_x[0], normal_y[0], support[0]);
                 for (int b = 1; b < blades; b++) {
                     next_plane_row(row, axis, size, dy, normal_x[b], normal_y[b], support[b]);
@@ -392,7 +434,11 @@ static int WM_FN(render_flakes)(
             if (clipped) {
                 stop_row(row, axis, size, dy, clip_x, clip_y);
             }
-            shade_row(row, size, rim, level);
+            if (fast) {
+                shade_row_fast(row, size, rim, level);
+            } else {
+                shade_row(row, size, rim, level);
+            }
         }
 
         int ksize = (int)(render_radius * 0.12);
@@ -431,9 +477,17 @@ static int WM_FN(render_flakes)(
 #define WM_XY_SHIFT 16
 #define WM_XY_ONE (1 << WM_XY_SHIFT)
 
+/* A pixel of a patch. Sixteen bits a coordinate: the pair is the size of
+ * the flat index it replaces, and reading it back needs no division. (That
+ * made no difference that could be measured.) Patches are held to
+ * WM_MAX_SIDE, well inside sixteen bits. */
+typedef struct {
+    int16_t x, y;
+} wm_pixel;
+
 typedef struct {
     uint8_t *seen;
-    int32_t *pixels;
+    wm_pixel *pixels;
     ptrdiff_t n_pixels;
     int32_t patch_w, patch_h;
 } wm_patch;
@@ -445,7 +499,9 @@ static inline void plot(wm_patch *patch, int64_t px, int64_t py) {
     const int32_t at = (int32_t)py * patch->patch_w + (int32_t)px;
     if (!patch->seen[at]) {
         patch->seen[at] = 1;
-        patch->pixels[patch->n_pixels++] = at;
+        patch->pixels[patch->n_pixels].x = (int16_t)px;
+        patch->pixels[patch->n_pixels].y = (int16_t)py;
+        patch->n_pixels++;
     }
 }
 
@@ -659,8 +715,9 @@ static void wide_line(
     }
 }
 
-/* The largest patch, in pixels, and the widest blur the kernel will draw. */
-#define WM_MAX_PATCH (1 << 26)
+/* The longest side of a patch, in pixels, and the widest blur the kernel
+ * will draw. */
+#define WM_MAX_SIDE 8192
 #define WM_MAX_SIGMA 256.0f
 
 /* The kernel size cv2.GaussianBlur(patch, (0, 0), sigma) takes on float32. */
@@ -687,7 +744,7 @@ static int WM_FN(render_streaks)(
             continue;
         }
         const ptrdiff_t area = (ptrdiff_t)patch_w[i] * patch_h[i];
-        if (area > WM_MAX_PATCH) {
+        if (patch_w[i] > WM_MAX_SIDE || patch_h[i] > WM_MAX_SIDE) {
             return 1;
         }
         largest = area > largest ? area : largest;
@@ -707,7 +764,7 @@ static int WM_FN(render_streaks)(
     wm_patch patch;
     patch.seen = calloc((size_t)largest, 1);
     /* Each pixel of a patch is listed at most once. */
-    patch.pixels = malloc((size_t)largest * sizeof(int32_t));
+    patch.pixels = malloc((size_t)largest * sizeof(wm_pixel));
     float *soft = NULL, *tmp = NULL, *line = NULL;
     if (blurred) {
         soft = malloc((size_t)largest * sizeof(float));
@@ -751,9 +808,9 @@ static int WM_FN(render_streaks)(
             memset(soft, 0, (size_t)pw * (size_t)ph * sizeof(float));
         }
         for (ptrdiff_t k = 0; k < patch.n_pixels; k++) {
-            const int32_t at = patch.pixels[k];
+            const int32_t px = patch.pixels[k].x, py = patch.pixels[k].y;
+            const int32_t at = py * pw + px;
             patch.seen[at] = 0;
-            const int32_t py = at / pw, px = at - py * pw;
             const int32_t fx = left + px, fy = top + py;
             const int in_frame =
                 (uint32_t)fx < (uint32_t)width && (uint32_t)fy < (uint32_t)height;

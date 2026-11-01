@@ -11,7 +11,9 @@ to it.
 The two paths give the same pictures. The colour kernels are exact. The
 particle kernels match the numpy code to float rounding (see
 ``tests/unit/test_native_kernels.py`` for the bounds), which moves an 8-bit
-output by one level in a few pixels at most.
+output by one level in a few pixels at most. In fast mode
+(:mod:`weathermentations.mode`) the sprite kernel also trades its divisions
+for multiplications, within the bounds in ``tests/unit/test_modes.py``.
 
 Environment:
 
@@ -54,7 +56,7 @@ __all__ = [
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 1
+_ABI_VERSION = 2
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -70,7 +72,8 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
         [_pointer, ctypes.c_int, ctypes.c_int, ctypes.c_ssize_t]
         + [_pointer] * 8
         + [ctypes.c_int]
-        + [ctypes.c_double] * 5,
+        + [ctypes.c_double] * 5
+        + [ctypes.c_int],
     ),
     "wm_render_streaks": (
         ctypes.c_int,
@@ -234,8 +237,13 @@ def render_flakes(
     rim_gain: float,
     cats_eye: float,
     frame_centre: tuple[float, float],
+    fast: bool = False,
 ) -> bool:
-    """Max-blend every flake's sprite into ``canvas``; ``False`` if not done."""
+    """Max-blend every flake's sprite into ``canvas``; ``False`` if not done.
+
+    ``fast`` replaces the per-pixel divisions by multiplications with a
+    reciprocal: the sprites differ in the last bits of a float.
+    """
     if (
         not _enabled
         or canvas.dtype != np.float32
@@ -263,6 +271,7 @@ def render_flakes(
         float(cats_eye),
         float(frame_centre[0]),
         float(frame_centre[1]),
+        int(bool(fast)),
     )
     return failed == 0
 

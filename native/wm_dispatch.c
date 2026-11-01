@@ -95,10 +95,10 @@ WM_EXPORT int wm_render_flakes(
     const float *x, const float *y, const float *radius, const float *blur_radius,
     const float *smear, const float *dir_x, const float *dir_y, const float *gain,
     int blades, double blade_rotation, double rim_gain, double cats_eye,
-    double centre_x, double centre_y) {
+    double centre_x, double centre_y, int fast) {
     return active->render_flakes(
         canvas, height, width, count, x, y, radius, blur_radius, smear, dir_x, dir_y, gain,
-        blades, blade_rotation, rim_gain, cats_eye, centre_x, centre_y);
+        blades, blade_rotation, rim_gain, cats_eye, centre_x, centre_y, fast);
 }
 
 WM_EXPORT int wm_render_streaks(

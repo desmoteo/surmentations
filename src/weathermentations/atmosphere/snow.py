@@ -97,7 +97,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations import _native
+from weathermentations import _native, mode
 from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
@@ -182,8 +182,10 @@ def _smeared_aperture_distance(
         base_support = np.cos(np.pi / blades)
         planes = []
         for angle in angles:
-            nx, ny = np.cos(angle), np.sin(angle)
-            support = base_support + half_smear * abs(ux * nx + uy * ny)
+            # float64 scalars in the reference code, and so a float64 field;
+            # fast mode keeps it float32, as the compiled kernel does.
+            nx, ny = mode.scalar(np.cos(angle)), mode.scalar(np.sin(angle))
+            support = mode.scalar(base_support + half_smear * abs(ux * nx + uy * ny))
             planes.append((dx * nx + dy * ny) / support)
         return np.max(np.stack(planes, axis=0), axis=0)
 
@@ -313,7 +315,7 @@ def render_flake_field(
     dir_xs, dir_ys = flakes["dir_x"], flakes["dir_y"]
     if _native.render_flakes(
         canvas, xs, ys, radii, blurs, smears, dir_xs, dir_ys, gain,
-        blades, blade_rotation, rim_gain, cats_eye, frame_centre,
+        blades, blade_rotation, rim_gain, cats_eye, frame_centre, fast=mode.fast(),
     ):  # fmt: skip
         return
     for i in range(len(xs)):

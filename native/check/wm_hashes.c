@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same four lines. It needs only a
+ * architecture, the program must print the same five lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -73,15 +73,22 @@ int main(void) {
     float *canvas = calloc(W * H, sizeof(float));
     WM_TABLE.render_flakes(
         canvas, H, W, FLAKES, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7],
-        0, 0.0, 1.0, 0.0, W / 2.0, H / 2.0);
+        0, 0.0, 1.0, 0.0, W / 2.0, H / 2.0, 0);
     printf("%-9s round    %016llx\n", WM_TABLE.name,
            (unsigned long long)fnv(canvas, W * H * sizeof(float)));
     memset(canvas, 0, W * H * sizeof(float));
     WM_TABLE.render_flakes(
         canvas, H, W, FLAKES, f[0], f[1], f[2], f[3], f[4], f[5], f[6], NULL,
-        6, 0.3, 1.4, 0.5, W / 2.0, H / 2.0);
+        6, 0.3, 1.4, 0.5, W / 2.0, H / 2.0, 0);
     printf("%-9s iris     %016llx\n", WM_TABLE.name,
            (unsigned long long)fnv(canvas, W * H * sizeof(float)));
+
+    memset(canvas, 0, W * H * sizeof(float));
+    WM_TABLE.render_flakes(
+        canvas, H, W, FLAKES, f[0], f[1], f[2], f[3], f[4], f[5], f[6], NULL,
+        6, 0.3, 1.4, 0.5, W / 2.0, H / 2.0, 1);
+    printf("%-9s iris-fast %015llx\n", WM_TABLE.name,
+           (unsigned long long)fnv(canvas, W * H * sizeof(float)) >> 4);
 
     /* Streaks: thin and wide, sharp and blurred, with room in every patch. */
     int32_t *select = malloc(STREAKS * sizeof(int32_t));
