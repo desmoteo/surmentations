@@ -19,6 +19,7 @@ import pytest
 import weathermentations
 from weathermentations import _native, mode
 from weathermentations.atmosphere import NightSnow, rain
+from weathermentations.atmosphere.night_rain import _beam_profile
 from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import SensorNoise, TemporalDenoiseArtifacts
 from weathermentations.depth.normals import upward_facing
@@ -231,14 +232,44 @@ def test_puddles_laid_out_at_the_depth_map_s_size_cover_the_same_share() -> None
 
 def test_the_ground_pattern_is_folded_to_the_same_place_either_way() -> None:
     """Fast mode folds the noise tile's coordinate with a floor where exact
-    mode takes a remainder. Millionths of a pixel apart."""
-    depth = np.repeat(np.linspace(40.0, 2.0, 200, dtype=np.float32)[:, None], 300, axis=1)
-    fields = {}
-    for flag in (True, False):
-        mode.set_fast(flag)
-        fields[flag] = ground_noise(depth, 400.0, 20.0, 1.2, np.random.default_rng(5))
-    assert fields[False].std() > 0.05
-    assert np.abs(fields[True] - fields[False]).max() < 1e-3
+    mode takes a remainder, and keeps it float32 where the reference widened
+    it to float64 by adding a random offset that numpy hands back as one.
+    Thousandths of a tile pixel apart at most, out to hundreds of metres."""
+    for far, scale in ((40.0, 1.2), (400.0, 0.3)):
+        depth = np.repeat(np.linspace(far, 2.0, 200, dtype=np.float32)[:, None], 300, axis=1)
+        fields = {}
+        for flag in (True, False):
+            mode.set_fast(flag)
+            fields[flag] = ground_noise(depth, 400.0, 20.0, scale, np.random.default_rng(5))
+        assert fields[True].dtype == fields[False].dtype == np.float32
+        assert fields[False].std() > 0.05
+        assert np.abs(fields[True] - fields[False]).max() < 1e-3
+        assert np.abs(fields[True] - fields[False]).mean() < 1e-4
+
+
+def _beam_as_first_written(height: int, width: int, falloff: float) -> np.ndarray:
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    radius = np.hypot(
+        (xx - width / 2.0) / max(width / 2.0, 1.0),
+        (yy - height / 2.0) / max(height / 2.0, 1.0),
+    )
+    return np.exp(-falloff * radius**2).astype(np.float32)
+
+
+@pytest.mark.parametrize("size", [(240, 320), (97, 131), (1, 1), (64, 1)])
+def test_the_lamp_s_beam_is_the_same_field_from_two_lines(size: tuple[int, int]) -> None:
+    """A Gaussian of the distance from the centre is a profile across the
+    frame times one down it. Exact mode still takes it from the distance,
+    on coordinates that broadcast, and gives the first version's floats;
+    fast mode takes the product and is a float's last bit away."""
+    for falloff in (0.4, 1.7, 3.0):
+        reference = _beam_as_first_written(*size, falloff)
+        mode.set_fast(False)
+        assert np.array_equal(_beam_profile(*size, falloff), reference)
+        mode.set_fast(True)
+        product = _beam_profile(*size, falloff)
+        assert product.dtype == np.float32 and product.shape == size
+        assert np.abs(product - reference).max() < 1e-6
 
 
 def test_fast_mode_keeps_aperture_fields_float32_and_within_rounding() -> None:

@@ -144,7 +144,10 @@ def ground_noise(
 
     offset = rng.uniform(0.0, 100.0, size=2)
     return cv2.remap(
-        noise, tile(across + offset[0]), tile(along + offset[1]), interpolation=cv2.INTER_LINEAR
+        noise,
+        tile(across + mode.scalar(offset[0])),
+        tile(along + mode.scalar(offset[1])),
+        interpolation=cv2.INTER_LINEAR,
     )
 
 

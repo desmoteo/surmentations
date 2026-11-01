@@ -50,9 +50,11 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import mode
 from weathermentations.atmosphere.rain import render_streak_layer
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
+from weathermentations.utils.grids import pixel_grid
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import (
     focal_length_px,
@@ -349,12 +351,27 @@ class NightRain(WeatherTransform):
 
 
 def _beam_profile(height: int, width: int, falloff: float) -> np.ndarray:
-    """Relative irradiance across the frame from a lamp on the optical axis."""
-    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    radius = np.hypot(
-        (xx - width / 2.0) / max(width / 2.0, 1.0),
-        (yy - height / 2.0) / max(height / 2.0, 1.0),
-    )
+    """Relative irradiance across the frame from a lamp on the optical axis.
+
+    A Gaussian of the distance from the frame's centre, ``(H, W)`` float32.
+    The coordinates are a row and a column that numpy broadcasts, the same
+    floats as two frame-sized grids cast from int64 and a third of the time.
+
+    In fast mode (:mod:`weathermentations.mode`) it is the product of a
+    profile across the frame and one down it, which a Gaussian of a sum of
+    squares is: two exponentials of a line where the reference takes a
+    square root, a square and an exponential of a frame. It differs in the
+    last bit of a float32, 2e-7 of the peak.
+    """
+    yy, xx = pixel_grid(height, width)
+    across = (xx - width / 2.0) / max(width / 2.0, 1.0)
+    down = (yy - height / 2.0) / max(height / 2.0, 1.0)
+    if mode.fast():
+        profile: np.ndarray = np.exp(-falloff * (across * across)) * np.exp(
+            -falloff * (down * down)
+        )
+        return profile
+    radius = np.hypot(across, down)
     return np.exp(-falloff * radius**2).astype(np.float32)
 
 
