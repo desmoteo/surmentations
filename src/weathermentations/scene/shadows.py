@@ -360,8 +360,8 @@ class CastShadows(WeatherTransform):
             sun_elevation_deg=sun_elevation,
             shadow_count=shadow_count,
             penumbra_px=penumbra,
-            surface_fraction=float((surface > 0.5).mean()),
-            shadowed_fraction=float((occlusion > 0.1).mean()),
+            surface_fraction=lambda: float((surface > 0.5).mean()),
+            shadowed_fraction=lambda: float((occlusion > 0.1).mean()),
         )
 
         return {

@@ -765,7 +765,7 @@ class RandomRain(WeatherTransform):
             wetness_darkening=wetness_darkening,
             wetness_falloff=wetness_falloff,
             horizon_row=horizon,
-            ground_fraction=float((wetness > 0.05).mean()),
+            ground_fraction=lambda: float((wetness > 0.05).mean()),
         )
 
         return {

@@ -42,7 +42,22 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
+from weathermentations import mode
 from weathermentations.base import WeatherTransform
+from weathermentations.utils.filters import wide_blur
+
+
+def _blur_plane(plane: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian blur of one uint8 plane.
+
+    Exact mode is OpenCV's blur of the bytes. Fast mode blurs a reduced copy
+    when the sigma is many pixels, in float32 so that reducing and enlarging
+    do not each round to a whole level, and rounds once at the end.
+    """
+    if not mode.fast():
+        return cv2.GaussianBlur(plane, (0, 0), sigmaX=sigma)
+    blurred = wide_blur(plane.astype(np.float32), sigma)
+    return np.clip(np.rint(blurred), 0, 255).astype(np.uint8)
 
 
 class TemporalDenoiseArtifacts(WeatherTransform):
@@ -173,8 +188,8 @@ class TemporalDenoiseArtifacts(WeatherTransform):
         if chroma_blur > 1e-4:
             ycrcb = cv2.cvtColor(denoised, cv2.COLOR_RGB2YCrCb)
             sigma = max(0.6, chroma_blur * diagonal)
-            ycrcb[..., 1] = cv2.GaussianBlur(ycrcb[..., 1], (0, 0), sigmaX=sigma)
-            ycrcb[..., 2] = cv2.GaussianBlur(ycrcb[..., 2], (0, 0), sigmaX=sigma)
+            ycrcb[..., 1] = _blur_plane(ycrcb[..., 1], sigma)
+            ycrcb[..., 2] = _blur_plane(ycrcb[..., 2], sigma)
             denoised = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
 
         blended = (

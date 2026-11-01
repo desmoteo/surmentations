@@ -187,8 +187,8 @@ class RandomFog(WeatherTransform):
             scattering_gamma=gamma,
             beta_rgb=beta_rgb,
             koschmieder_visibility_m=3.912 / beta if beta > 1e-9 else float("inf"),
-            depth_min_m=float(depth_pm.min()),
-            depth_max_m=float(depth_pm.max()),
+            depth_min_m=lambda: float(depth_pm.min()),
+            depth_max_m=lambda: float(depth_pm.max()),
         )
 
         if self.atmospheric_light is not None:

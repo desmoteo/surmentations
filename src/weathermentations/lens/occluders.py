@@ -47,6 +47,7 @@ from pydantic import AfterValidator
 
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
+from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
 
@@ -232,7 +233,8 @@ class HousingOccluders(WeatherTransform):
         # The defining property: this close to the lens, nothing keeps an
         # edge. The blur *is* the appearance, not a finishing touch.
         sigma = max(1.0, self.py_random.uniform(*self.defocus_range) * diagonal)
-        mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=sigma)
+        # Tens of pixels on a large frame, so on a reduced copy in fast mode.
+        mask = wide_blur(mask, sigma)
 
         # Counts and sizes are local: only the composited mask reaches the
         # renderer, so "how many insects, how big" is unanswerable from the
@@ -242,7 +244,7 @@ class HousingOccluders(WeatherTransform):
             insect_size_px=np.array(insect_sizes, dtype=np.float32),
             web_count=web_count,
             defocus_sigma_px=sigma,
-            covered_fraction=float((mask > 0.05).mean()),
+            covered_fraction=lambda: float((mask > 0.05).mean()),
         )
 
         return {

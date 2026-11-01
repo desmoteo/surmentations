@@ -11,8 +11,15 @@ SharedDepthProvider`.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import numpy as np
+
+from weathermentations import mode
+
+# PIL's code for bicubic resampling, which is what the processor's
+# `resample` holds.
+_BICUBIC = 3
 
 _NO_CUDA_MESSAGE = (
     "{cls} requires a CUDA GPU: depth-conditioned effects (fog/rain/snow) run "
@@ -73,6 +80,7 @@ class DepthAnythingV2Estimator(DepthEstimator):
         model_name: str = "depth-anything/Depth-Anything-V2-Small-hf",
         device: str = "cuda",
         disparity_offset: float = 0.03,
+        half_precision: bool | None = None,
     ) -> None:
         # Imported here, like transformers below. Every transform's base class
         # imports this package for the depth provider, so a module-level
@@ -85,6 +93,7 @@ class DepthAnythingV2Estimator(DepthEstimator):
         if disparity_offset <= 0:
             raise ValueError("disparity_offset must be > 0 (it bounds the farthest depth)")
         self.disparity_offset = disparity_offset
+        self.half_precision = half_precision
 
         # Imported lazily: transformers is a heavy import and only needed once
         # a depth-conditioned transform is actually constructed.
@@ -95,6 +104,105 @@ class DepthAnythingV2Estimator(DepthEstimator):
         self._model = (
             AutoModelForDepthEstimation.from_pretrained(model_name).to(self.device).eval()
         )
+        # Skip the processor's overhead where doing so changes nothing.
+        self._direct = False
+        self._direct = self._direct_matches_processor()
+
+    def _model_input_size(self, height: int, width: int) -> tuple[int, int] | None:
+        """The size the model's own processor would resize a frame to.
+
+        ``None`` when the processor is set up in a way this does not
+        reproduce, which sends the frame through the processor itself.
+        """
+        processor = self._processor
+        size = getattr(processor, "size", None)
+        if isinstance(size, dict):
+            target = (size.get("height"), size.get("width"))
+        else:
+            target = (getattr(size, "height", None), getattr(size, "width", None))
+        reproducible = (
+            getattr(processor, "do_resize", False)
+            and getattr(processor, "do_rescale", False)
+            and getattr(processor, "do_normalize", False)
+            and not getattr(processor, "do_pad", False)
+            and getattr(processor, "resample", None) == _BICUBIC
+        )
+        target_height, target_width = target
+        if not reproducible or not target_height or not target_width:
+            return None
+        multiple = int(getattr(processor, "ensure_multiple_of", 1) or 1)
+        scale_h, scale_w = target_height / height, target_width / width
+        if getattr(processor, "keep_aspect_ratio", False):
+            # "Scale as little as possible", as the processor puts it.
+            if abs(1.0 - scale_w) < abs(1.0 - scale_h):
+                scale_h = scale_w
+            else:
+                scale_w = scale_h
+        new_height = round(scale_h * height / multiple) * multiple
+        new_width = round(scale_w * width / multiple) * multiple
+        if new_height <= 0 or new_width <= 0:
+            return None
+        return new_height, new_width
+
+    def _preprocess_directly(self, image: np.ndarray) -> Any:
+        """The processor's resize, rescale and normalise, without the processor.
+
+        The same three steps by the same arithmetic: torch's antialiased
+        bicubic resize of the uint8 frame on the CPU, which is what the
+        processor calls, then the rescale and the normalisation on the GPU.
+        What is left out is the processor's own bookkeeping, which was most of
+        its time: 3 to 5 ms a frame against 1 to 2.
+
+        Returns ``None`` for a frame or a processor this does not reproduce.
+        Whether it does reproduce this processor is not assumed:
+        :meth:`_direct_matches_processor` compares the two once, when the
+        estimator is built.
+        """
+        import torch
+
+        size = self._model_input_size(image.shape[0], image.shape[1])
+        if size is None or image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+            return None
+        processor = self._processor
+        pixels = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).unsqueeze(0)
+        if size != (image.shape[0], image.shape[1]):
+            pixels = torch.nn.functional.interpolate(
+                pixels, size=size, mode="bicubic", align_corners=False, antialias=True
+            )
+        pixels = pixels.to(self.device).float()
+        # The processor folds the rescale into the mean and the deviation and
+        # divides once. Written as rescale, subtract, divide, the tensor was
+        # the same to six decimals and the depth map not the same bytes.
+        per_unit = 1.0 / float(processor.rescale_factor)
+        mean = torch.tensor(processor.image_mean, device=self.device) * per_unit
+        std = torch.tensor(processor.image_std, device=self.device) * per_unit
+        return (pixels - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
+
+    def _direct_matches_processor(self) -> bool:
+        """Whether the direct preprocessing gives this processor's tensor, bit
+        for bit.
+
+        Tried on two frames, one that is resized down and one up. Another
+        version of transformers may resize by other code (the older
+        processors go through PIL); then the two differ, and the processor is
+        used for every frame as before.
+        """
+        import torch
+
+        rng = np.random.default_rng(0)
+        try:
+            for shape in ((700, 900, 3), (160, 96, 3)):
+                frame = rng.integers(0, 256, shape, dtype=np.uint8)
+                direct = self._preprocess_directly(frame)
+                if direct is None:
+                    return False
+                reference = self._processor(images=frame, return_tensors="pt")["pixel_values"]
+                reference = reference.to(self.device)
+                if direct.shape != reference.shape or not torch.equal(direct, reference):
+                    return False
+        except Exception:
+            return False
+        return True
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
         import torch
@@ -107,8 +215,15 @@ class DepthAnythingV2Estimator(DepthEstimator):
             # a black frame.
             image = np.clip(np.rint(image.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
         with torch.inference_mode():
-            inputs = self._processor(images=image, return_tensors="pt").to(self.device)
-            raw_disparity = self._model(**inputs).predicted_depth  # (1, h', w'), larger = closer
+            pixel_values = self._preprocess_directly(image) if self._direct else None
+            if pixel_values is None:
+                inputs = self._processor(images=image, return_tensors="pt").to(self.device)
+                pixel_values = inputs["pixel_values"]
+            half = mode.fast() if self.half_precision is None else self.half_precision
+            with torch.autocast(self.device.type, dtype=torch.float16, enabled=half):
+                # (1, h', w'), larger = closer
+                raw_disparity = self._model(pixel_values=pixel_values).predicted_depth
+            raw_disparity = raw_disparity.float()
 
             resized = torch.nn.functional.interpolate(
                 raw_disparity.unsqueeze(1),
