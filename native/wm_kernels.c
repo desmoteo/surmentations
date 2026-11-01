@@ -328,6 +328,11 @@ static int WM_FN(render_flakes)(
     const float rim = (float)(rim_gain - 1.0);
 
     for (ptrdiff_t i = 0; i < count; i++) {
+        /* A sprite's set-up is in double, divisions and all, because the
+         * numpy code's is: its scalars are Python floats, and a patch's size
+         * and corner are rounded from them. It runs once per flake, against
+         * thousands of pixels each. Done in float it measured no faster,
+         * even on a field of the smallest sprites, and moved patches. */
         const double fx = x[i], fy = y[i];
         double render_radius = hypot((double)radius[i], (double)blur_radius[i]);
         if (render_radius < 0.5) {

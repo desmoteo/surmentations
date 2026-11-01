@@ -5,7 +5,7 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 out=${TMPDIR:-/tmp}/wm_simd_explicit
 cc=${CC:-cc}
-flags="-O3 -std=c11 -ffp-contract=off -fno-math-errno -fno-trapping-math -fno-thread-jumps -Wall -Wextra"
+flags="-O3 -std=c11 -ffp-contract=off -fno-math-errno -fno-trapping-math -fno-thread-jumps -funroll-loops -Wall -Wextra"
 case "$(uname -m)" in
     x86_64 | amd64)
         $cc $flags "$here/simd_explicit.c" -lm -o "$out" && "$out" "x86-64 baseline"

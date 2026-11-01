@@ -41,7 +41,14 @@ LIBRARY_STEM = "_wmkernels"
 # floating-point exception flags). -fno-thread-jumps stops GCC turning a
 # chain of clamps into branches before the vectoriser sees it: with jump
 # threading on, the same loop was vectorised in one function and left scalar
-# in another, four times slower. No -ffast-math, ever.
+# in another, four times slower. -funroll-loops is worth 8 to 18% on the
+# colour encode's table lookups and nothing elsewhere, for 40 KB of binary.
+#
+# Tried and left out, with the numbers in docs/native_kernels.md: -Ofast
+# (9% at most, on sprites only, and every tier and compiler then rounds its
+# own way, which is the one thing the build promises not to do), fused
+# multiply-add (4% at most, same objection), and -fstrict-overflow, which
+# GCC already applies at -O3: the machine code is identical with it.
 COMMON_FLAGS = [
     "-O3",
     "-std=c11",
@@ -51,6 +58,7 @@ COMMON_FLAGS = [
     "-fno-math-errno",
     "-fno-trapping-math",
     "-fno-thread-jumps",
+    "-funroll-loops",
     "-Wall",
     "-Wextra",
 ]
