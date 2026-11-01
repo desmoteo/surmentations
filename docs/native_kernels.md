@@ -17,12 +17,14 @@ before any of it was changed.
 **Its method, yes, all of it. Its kernels, no.** Pillow-AllSIMD's design
 notes prescribe an order: find where the time goes, fix the algorithm, help
 the compiler, and only then write SIMD by hand. Followed here, the first
-three steps made fog, rain and snow 5 to 8 times faster on one core at
-1024 pixels, and the 22 transforms 2.8 times faster as a geometric mean
-(2.1 at 512 pixels), and left nothing for the fourth to do.
+three steps made fog, rain and snow 6 to 13 times faster on one core at
+1024 pixels, and the 22 transforms 3.8 times faster as a geometric mean
+(2.8 at 512 pixels), and left nothing for the fourth to do.
 
 **C, yes, in a few places.** Colour conversion, snowflake sprites, rain
-streaks and the wet road's reflection are now plain C, compiled per instruction-set tier and loaded
+streaks, the wet road's reflection, the denoise filter, and the compositing
+of lens dirt, of rain and snow over their veil and of overcast light are
+now plain C, compiled per instruction-set tier and loaded
 through `ctypes`, with the numpy code kept as the definition and the
 fallback. The loops they replace were slow because of the interpreter, not
 the arithmetic: one Python call per snowflake, a dozen numpy and OpenCV
@@ -50,47 +52,56 @@ one thread, which is what a `DataLoader` worker has. "Original" is the
 branch this one started from, plain numpy and OpenCV; "now" is this branch
 as built, in fast mode with the kernels. Each figure is the mean over four
 of the example scenes and two seeds, depth already estimated, and the best
-of three interleaved rounds.
+of three interleaved rounds. The rows marked "with PyAV" are the same
+branch with the optional `codec` extra installed, which changes only the
+two codec transforms.
 
 | Transform | 512: original | now | | 1024: original | now | |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `NightFog` | 97.6 | 26.5 | 3.7x | 827.7 | 102.0 | 8.1x |
-| `AcFlicker` | 6.8 | 1.0 | 6.5x | 33.2 | 4.1 | 8.0x |
-| `RandomFog` | 88.7 | 23.8 | 3.7x | 802.0 | 108.5 | 7.4x |
-| `RandomRain`, wet road drawn | 272.7 | 89.2 | 3.1x | 1684.9 | 254.1 | 6.6x |
-| `HousingOccluders` | 14.8 | 6.1 | 2.4x | 103.4 | 16.2 | 6.4x |
-| `RandomRain`, dry road | 159.4 | 42.0 | 3.8x | 1036.3 | 163.4 | 6.3x |
-| `NightSnow` | 45.8 | 8.6 | 5.3x | 255.5 | 46.6 | 5.5x |
-| `NightRain` | 117.4 | 27.2 | 4.3x | 341.0 | 66.4 | 5.1x |
-| `RandomSnow` | 180.1 | 73.0 | 2.5x | 1294.8 | 274.0 | 4.7x |
-| `ExposureTransient` | 7.7 | 2.1 | 3.6x | 35.2 | 8.6 | 4.1x |
-| `SensorNoise` | 13.4 | 6.0 | 2.2x | 66.9 | 27.7 | 2.4x |
-| `SourceGlare` | 49.0 | 22.0 | 2.2x | 215.9 | 92.9 | 2.3x |
-| the depth estimate, once per new frame | 31.5 | 12.1 | 2.6x | 36.2 | 15.9 | 2.3x |
-| `CastShadows` | 26.9 | 21.0 | 1.3x | 140.9 | 76.0 | 1.9x |
-| `NightIrMode` | 19.1 | 12.6 | 1.5x | 87.5 | 53.1 | 1.6x |
-| `DirtSoil` | 49.0 | 42.7 | 1.1x | 256.0 | 156.4 | 1.6x |
-| `SunFlare` | 28.0 | 17.9 | 1.6x | 125.2 | 77.1 | 1.6x |
-| `WdrToneMapping` | 121.9 | 116.3 | 1.0x | 163.5 | 127.9 | 1.3x |
-| `WaterDroplets` | 53.1 | 46.5 | 1.1x | 139.6 | 110.1 | 1.3x |
-| `TemporalDenoiseArtifacts` | 67.2 | 63.0 | 1.1x | 325.7 | 260.5 | 1.3x |
-| `TransmissionFaults` | 173.1 | 173.6 | 1.0x | 282.2 | 280.7 | 1.0x |
-| `VideoCodecArtifacts` | 145.8 | 145.5 | 1.0x | 182.8 | 182.4 | 1.0x |
-| `RollingShutter` | 1.9 | 1.9 | 1.0x | 7.5 | 7.7 | 1.0x |
-| **Geometric mean of the 22 transforms** | | | **2.10x** | | | **2.79x** |
-| **All 22 once each** | 1740 | 968 | **1.80x** | 8408 | 2497 | **3.37x** |
+| `RandomRain`, dry road | 158.1 | 23.3 | 6.8x | 1035.2 | 81.8 | 12.6x |
+| `RandomRain`, wet road drawn | 270.5 | 68.1 | 4.0x | 1692.1 | 181.7 | 9.3x |
+| `DirtSoil` | 48.8 | 7.0 | 7.0x | 254.0 | 28.9 | 8.8x |
+| `AcFlicker` | 6.7 | 1.0 | 6.5x | 31.8 | 3.8 | 8.3x |
+| `NightFog` | 97.0 | 26.7 | 3.6x | 832.3 | 112.6 | 7.4x |
+| `TemporalDenoiseArtifacts` | 66.5 | 14.8 | 4.5x | 333.6 | 46.8 | 7.1x |
+| `RandomSnow` | 179.2 | 51.5 | 3.5x | 1298.6 | 188.4 | 6.9x |
+| `NightSnow` | 45.2 | 6.2 | 7.3x | 254.0 | 37.2 | 6.8x |
+| `HousingOccluders` | 14.6 | 6.1 | 2.4x | 104.2 | 16.1 | 6.5x |
+| `SunFlare` | 27.8 | 6.7 | 4.2x | 130.5 | 21.4 | 6.1x |
+| `RandomFog` | 88.1 | 22.9 | 3.8x | 800.1 | 132.8 | 6.0x |
+| `SourceGlare` | 48.7 | 11.6 | 4.2x | 221.5 | 39.0 | 5.7x |
+| `NightRain` | 116.8 | 25.0 | 4.7x | 341.7 | 60.5 | 5.6x |
+| `ExposureTransient` | 7.6 | 2.1 | 3.6x | 35.0 | 8.6 | 4.1x |
+| the depth estimate, once per new frame | 31.1 | 12.0 | 2.6x | 36.0 | 15.8 | 2.3x |
+| `SensorNoise` | 13.4 | 6.0 | 2.2x | 65.2 | 31.1 | 2.1x |
+| `CastShadows` | 26.7 | 21.0 | 1.3x | 138.6 | 76.0 | 1.8x |
+| `NightIrMode` | 19.0 | 12.3 | 1.5x | 83.8 | 51.3 | 1.6x |
+| `WdrToneMapping` | 121.8 | 116.5 | 1.0x | 164.4 | 127.7 | 1.3x |
+| `WaterDroplets` | 52.4 | 45.8 | 1.1x | 140.2 | 125.4 | 1.1x |
+| `RollingShutter` | 2.0 | 1.9 | 1.0x | 7.7 | 7.7 | 1.0x |
+| `VideoCodecArtifacts` | 143.6 | 145.8 | 1.0x | 182.3 | 186.7 | 1.0x |
+| `VideoCodecArtifacts`, with PyAV | 143.6 | 9.2 | 15.7x | 182.3 | 29.4 | 6.2x |
+| `TransmissionFaults` | 171.9 | 172.3 | 1.0x | 281.6 | 293.4 | 1.0x |
+| `TransmissionFaults`, with PyAV | 171.9 | 23.1 | 7.4x | 281.6 | 79.1 | 3.6x |
+| **Geometric mean of the 22 transforms** | | | **2.80x** | | | **3.80x** |
+| **All 22 once each** | 1727 | 795 | **2.17x** | 8428 | 1859 | **4.53x** |
+| **Geometric mean, with PyAV** | | | **3.48x** | | | **4.38x** |
+| **All once each, with PyAV** | 1727 | 509 | **3.39x** | 8428 | 1487 | **5.67x** |
 
-- **The geometric mean** is over the 22 rows above it, each counted once
-  whatever it costs: 2.1 times at 512 pixels and 2.8 at 1024. Three of them
-  did not change. Over the 19 that did it is 2.4 and 3.3.
+- **The geometric mean** is over the 22 transforms, each counted once
+  whatever it costs: 2.8 times at 512 pixels and 3.8 at 1024. Three of them
+  did not change. Over the 19 that changed by more than a tenth it is 3.3
+  and 4.7. With PyAV the two codec transforms change as well, and it is 3.5
+  and 4.4 over all 22.
 - **"All 22 once each"** adds the times up instead, so the heavy transforms
-  weigh more: 1.8 and 3.4 times. Neither figure is a pipeline's: that
-  depends on which transforms it holds and how often each fires.
+  weigh more: 2.2 and 4.5 times, 3.4 and 5.7 with PyAV. Neither figure is a
+  pipeline's: that depends on which transforms it holds and how often each
+  fires.
 - **`RandomRain` is two rows** because its default changed. The original
   drew the wet road in 70% of frames and this branch draws it in 40%, which
   is a choice about pictures and not a speed-up; the rows show the same
   work in both. Weighted by each branch's own default, a rain frame at
-  1024 pixels went from about 1490 ms to about 200.
+  1024 pixels went from about 1490 ms to about 120.
 - **The depth estimate** is paid once for each new frame, by the first
   depth-conditioned transform that fires, and is not in the means.
 - **Part of the first four rows is a regression being undone.** The sky-edge
@@ -308,6 +319,7 @@ all three. What remains is listed under [Not done](#not-done).
 | `WEATHERMENTATIONS_NATIVE=require` | a missing library is an `ImportError` |
 | `WEATHERMENTATIONS_ISA=sse2` | use that tier, to compare tiers on one machine |
 | `WEATHERMENTATIONS_FAST=0` | exact mode |
+| `WEATHERMENTATIONS_CODEC=ffmpeg` | encode with the ffmpeg binary even when PyAV is installed |
 | `WEATHERMENTATIONS_BUILD_NATIVE=0` / `require` | skip the build, or fail if it fails |
 | `WEATHERMENTATIONS_BUILD_MARCH=native` | at build time, add a tier compiled for this machine only |
 
@@ -323,20 +335,35 @@ all three. What remains is listed under [Not done](#not-done).
   OpenCV's line, polygon-fill and circle rasterisers and is compared with
   `cv2.polylines` over 36,000 streaks at every heading and width.
 - **On real scenes**: every transform on four of the example scenes with two
-  seeds, 152 frames. With the kernels on and off all 152 are byte-identical,
-  in exact mode and in fast mode, and exact mode without the kernels is
-  byte-identical to the parent branch. The SSE2 and AVX2 tiers are identical
-  on all 152.
+  seeds, 152 frames. With the kernels on and off all 152 are byte-identical
+  in exact mode, and exact mode without the kernels is byte-identical to
+  the parent branch. In fast mode 149 are, and three differ by one level:
+  the denoise filter, whose tabled form needs the kernels, in 3 values of
+  the 9 million in its eight frames, and one snow frame in one value of
+  1.2 million. The SSE2 and AVX2 tiers are identical on all 152.
+- **Blurred sprites and streaks are the kernels' one tolerance, and it can
+  reach a frame.** They agree with numpy to the last bit of a float and
+  not always in it, because a blur's sums are taken in another order. Now
+  and then that bit decides a rounding to a code value: the snow frame
+  above, and in exact mode one value in one of 24 further snow frames tried
+  on other seeds. Everything else a kernel computes is numpy's to the bit.
 - **Across machines**: [`native/check/run.sh`](../native/check/run.sh) prints
-  a hash per kernel, and one more for the fast-mode sprites. The SSE2, AVX2
-  and native builds (glibc, GCC 13.3) and an arm64 build under QEMU (musl,
-  GCC 13.2) print the same seven.
+  a hash per kernel, and one more each for the fast-mode sprites and the
+  tabled filter. The SSE2 and AVX2 builds (glibc, GCC 13.3) and an arm64
+  build under QEMU (musl, GCC 13.2) print the same twelve, the denoise
+  filter's among them, which also holds one C library's `powf` to the
+  other's.
+- **Against OpenCV and against ffmpeg**, where a kernel or PyAV stands in
+  for one of them: tried once on each installation and relied on in exact
+  mode only where it gave the same bytes
+  ([the fifth round](#a-fifth-round-the-remaining-heavy-effects)).
 - **Memory**: the kernel tests pass with the library built with
   `-fsanitize=address,undefined`.
 - **Refused input**: a NaN in a frame still raises, as the table lookup
   always has, instead of becoming a black pixel in C.
 - **The full suite** passes in fast mode with the kernels, in exact mode
-  with them, and in exact mode without them.
+  with them, in exact mode without them, and in fast mode with PyAV
+  installed.
 
 ## Fast and exact mode
 
@@ -355,7 +382,9 @@ with weathermentations.exact():        # or for one block
 `WEATHERMENTATIONS_FAST=0` selects exact mode at import. Use that with a
 `DataLoader` whose workers are spawned, since a spawned worker does not see a
 `set_fast` call made in its parent. The mode is independent of the compiled
-kernels: either mode runs with or without them.
+kernels: either mode runs with or without them, and gives the same frame
+with them as without, with one exception in fast mode, the denoise filter
+in the table below.
 
 What fast mode changes, and by how much, on 152 frames (every transform on
 four example scenes, two seeds):
@@ -372,11 +401,20 @@ four example scenes, two seeds):
 | The wet road's reflection blurred on a copy reduced down the frame only | `RandomRain` | 95 ms to 11 ms at 1024 px | within the figures below |
 | A cube as two multiplications, not a power | the wet road's darkening | 20 ms at 1024 px | a rounding |
 | Folding the ground-noise tile with a floor, not a remainder | settled snow, puddles | 26 ms to 3 ms per field at 1024 px | millionths of a pixel |
+| The denoise filter's power function from a table of its 766 values | `TemporalDenoiseArtifacts`, with the kernels | 48 ms a pass to 19 at 1024 px | one level, in a few values in a million a pass; two at most over a frame |
+| The deposit field built at a quarter of the size | `DirtSoil` | 107 ms to 13 at 1024 px | 0.15 levels on average, 10 at most: the same deposits, placed to within two pixels |
+| Broad light on a coarse grid, streaks and glows evaluated only where they reach, an affine warp for the starburst | `SunFlare` | 115 ms to 31 at 1024 px | one level at most at 1024 px, two below |
+| The lamp's beam as a product of two profiles | `NightRain`, `NightSnow` | 5 ms to 0.6 at 1024 px | one level, in two values in a million |
+| float32 where two scalars had widened the settled-snow fields | `RandomSnow` | 6% of a frame with settled snow | one level, in 0.002% of values |
+| Overcast light's contrast gain from a table of 65536 values, and the relighting in one pass | `RandomRain`, `RandomSnow` | 46 ms to 13 at 1024 px | within a level; one level in 0.1% of values on the scenes |
+| The brightest pixels' mean from a histogram; a frame's mean colour summed by OpenCV | `RandomRain`, `RandomSnow`, `RandomFog` | 37 ms to 12 at 1024 px | the fifth digit of a colour |
+| H.265 encoded in the process, and damaged streams decoded there | `VideoCodecArtifacts(codec="h265")`, `TransmissionFaults`, with PyAV | 2 to 9 times at 512 px and below | another release of libx265; an unconcealed loss is always the zeroed hole |
 
-Eight transforms give the same bytes in both modes on these frames:
+Six transforms give the same bytes in both modes on these frames:
 `WaterDroplets`, `AcFlicker`, `RollingShutter`, `SensorNoise`,
-`ExposureTransient`, `WdrToneMapping`, `NightRain` and `NightSnow`.
-`DirtSoil` does too below about 1100 pixels.
+`ExposureTransient` and `WdrToneMapping`. `VideoCodecArtifacts` with H.264
+does as well, with or without PyAV. `NightRain` and `NightSnow` are one
+level away in two values in a million.
 
 **What is read off depth moves at its edges.** Half precision changes the
 network's output by 0.01% of its range on average, and reading the normals
@@ -401,7 +439,10 @@ network at full precision in fast mode; the normals follow the mode.
 **Exact mode is the parent branch.** With the kernels off, all 152 frames
 are byte-identical to the frames the parent branch makes, and with the
 kernels on they are byte-identical again. That was checked after each round
-of changes, the second round's included.
+of changes, the fifth round's included. The two codec transforms are not
+among the 152; with PyAV installed their exact-mode frames were compared
+with the binary's separately, and were identical on every seed and size
+tried.
 
 **The skyline is the difference that can matter.** The reduced dilation
 decides how far the sky mask may grow, and it is largest in the night street
@@ -552,44 +593,194 @@ Two things to know about the mirror image:
 is two small blurs, a median filter, the ground reading at 518 pixels and
 the arithmetic around the kernels, none above 13 ms.
 
-## The remaining heavy effects, assessed
+## A fifth round: the remaining heavy effects
 
-Four transforms were looked at for what else could be done, a new
-dependency included. Nothing in this section is built; the figures are from
-prototypes and probes, on one thread at 1024 pixels unless said.
+Five transforms were still slow after the wet road: the three camera and
+lens effects with no hot loop of their own, and the two that start ffmpeg.
+All five were first assessed and then built. One pinned core, 1024 pixels
+unless said. The figures in this section are of one scene over a dozen
+seeds or more, so they are not the table's at the top, which is four scenes
+and two seeds.
 
-| Transform | Where the time is | What was tried | Result |
+| Transform | Where the time was | What was done | Result |
 | --- | --- | --- | --- |
-| `TemporalDenoiseArtifacts` (267 ms) | OpenCV's `edgePreservingFilter`, 175 ms a pass, one to three passes | the same filter as one C function | 62 ms, the same bytes as OpenCV; 35 ms with a table for its power function, one level off in a handful of pixels |
-| `VideoCodecArtifacts` (150 to 190 ms) | starting two ffmpeg processes; the encoding is a tenth of it | encoding and decoding in-process with PyAV | H.264: 151 ms to 10 at 512 px, 189 to 31 at 1024. H.265: 209 to 105 at 512, no gain at 1024 |
-| `TransmissionFaults` (134 ms) | the same two processes, 85 to 125 ms each | not prototyped | by the figures above, about 20 ms |
-| `DirtSoil` (165 ms) | building the deposit field at full size, 100 ms; compositing it, 20 ms | profiled only | the field is blurred as soon as it is made, so it could be built at half size; perhaps 165 ms to 95 |
-| `SunFlare` (107 ms) | spread thin: 20 ms in one float64 expression, 14 and 12 ms in two overlays, 9 ms in a re-encode | profiled only | perhaps 15 to 20%, from keeping that expression float32 and drawing the smooth radial fields small |
+| `TemporalDenoiseArtifacts` | OpenCV's `edgePreservingFilter`, 157 ms a pass, one to three passes | the same filter as one C function; in fast mode its power function from a table | 48 ms a pass with OpenCV's bytes, 19 ms tabled |
+| `DirtSoil` | building the deposit field at full size, 107 ms; compositing it, 49 ms | the field at a quarter of the size in fast mode; the compositing as two C passes | 156 ms to 25 |
+| `SunFlare` | one float64 expression, 21 ms; scratch streaks tested over the whole frame, 14 ms; the starburst, 10 ms; the final conversion, 10 ms | each rewritten for fast mode, in numpy | 115 ms to 31 |
+| `VideoCodecArtifacts` | starting two ffmpeg processes | PyAV, where installed, encodes in the process | H.264: 217 ms to 12 at 512 px, the same bytes |
+| `TransmissionFaults` | the same two processes | the same | 168 ms to 20 at 512 px in fast mode |
 
-- **The denoise filter is the one to do.** OpenCV's implementation takes a
-  power per pixel six times a call and walks the frame through checked
-  element accessors. A straight port, `powf` and all, gave byte-identical
-  output on every frame and setting tried, three times faster; the power
-  only ever takes 766 values, and tabled it is five times faster. It needs
-  no dependency. Equality with OpenCV rests on the two using the same
-  `powf` and neither fusing a multiply-add, which holds on x86-64 with
-  glibc and would have to be checked when the estimator is built, as the
-  depth preprocessing is, before being relied on in exact mode elsewhere.
-- **An in-process codec pays for H.264 and costs a dependency.** PyAV is the
-  realistic one: its wheels carry their own FFmpeg with libx264 and
-  libx265. Installed it is 127 MB, and those builds are GPL, which matters
-  to anyone redistributing an environment. It would be an optional extra,
-  used when present. Its frames are not the ffmpeg binary's: they differed
-  by 2.4 to 4.7 levels on average, where the codec itself changes the frame
-  by 3.7 to 8.2, so the colour conversion at least would have to be matched
-  and the output re-examined before it replaced anything. H.265 gains
-  little because there the encoder is the cost, and the binary uses every
-  core where the probe used one.
-- **`DirtSoil` and `SunFlare` want the same treatment as the wet road**:
-  build what is soft at the size its softness allows, and fuse the last
-  compositing step. Neither has a single hot loop.
+### The denoise filter
 
-## Three suggestions, measured
+OpenCV's `edgePreservingFilter` with `RECURS_FILTER` is Gastal and
+Oliveira's domain transform: three passes, each smoothing every row there
+and back and then every column, with a weight per pixel that is a power of
+how unlike the pixel is from its neighbour. OpenCV takes that power for
+every pixel twice in each pass and walks the frame through checked element
+accessors.
+
+- **The port is OpenCV's arithmetic in OpenCV's order**, and gives OpenCV's
+  bytes: on 40 random frames down to one pixel, on the example scenes, on
+  both tiers and on arm64. That rests on the two calling the same `powf`
+  and neither fusing a multiply into an add, so the transform tries it once
+  on two small frames (`denoise._kernel_matches_opencv`) and uses the
+  kernel in exact mode only where it passed. 157 ms to 48.
+- **The power only ever takes 766 values**, one for each possible sum of
+  three byte differences. Fast mode takes it once for each and looks it up:
+  19 ms, and 2 values in 3 million one level away. This is the one place
+  where a fast-mode frame depends on whether the kernels are installed,
+  by that much: without them fast mode runs OpenCV's filter.
+- **Half its time was one recurrence waiting for itself.** Smoothing along
+  a row is `p[x] += (p[x-1] - p[x]) * w[x]`: each step needs the one
+  before, twelve cycles of subtract, multiply and add, while the core could
+  have done several times as much. Four rows are taken together with their
+  steps interleaved, the running pixels in local variables: 30 ms to 21.
+  Two rows gave nothing and eight no more than four.
+
+### Lens dirt
+
+- **The deposit field is built at a quarter of the size** in fast mode and
+  enlarged, as asked. Everything on the glass is out of focus: the field's
+  last step is a blur of 0.6% of the diagonal, 8.7 pixels on a 1024-pixel
+  frame, so a quarter of the size holds all of it. 107 ms to 13.
+  - *The draws are the same ones.* Positions and sizes are drawn as shares
+    of the frame and scaled, so a seed puts the same deposits in the same
+    places.
+  - *Thin shapes are not drawn small.* Wipe marks and water-spot rings are
+    a pixel or two wide in places. Drawn at a quarter of the size with
+    their widths rounded they came out up to twice too heavy or too light
+    (a frame 32 levels off at worst). They are drawn at full size, which is
+    cheap, and averaged down, so each pixel of the field takes the share of
+    it they cover.
+  - *The reduction follows the blur.* It is 4 wherever the field's blur is
+    still a pixel wide at that size, a diagonal of 670 pixels or more;
+    smaller frames are reduced by less, and one under 240 pixels not at
+    all.
+  - *Enlarged bilinearly.* Bicubic measured no closer to the full-size
+    field and slower.
+  - *Against exact mode*: as much grime (coverage within 1%), a frame 0.10
+    levels away on average at 1024 pixels and 8 at most, 0.18 and 10 at
+    512. What is left is each patch's corner being rounded to a pixel of
+    the smaller field, two pixels of the frame.
+- **The compositing is two C passes** either side of the scatter blur, where
+  numpy made eleven frame-sized results. They are numpy's arithmetic in
+  numpy's order, so the frame is the same to the bit with and without them,
+  in both modes. 49 ms to 11.
+
+### Sun flare
+
+No kernel: each of these is the numpy code doing less. Milliseconds at 1024
+pixels, from a line profile, so a little above what the stages cost
+untraced.
+
+| Stage | Was | Now | How |
+| --- | ---: | ---: | --- |
+| veiling glare, halo, infrared glow | 32 ms | 5 ms | float32 colours; drawn on a grid four times coarser and enlarged |
+| scratch streaks | 14 ms | 1.5 ms | evaluated on the few thousand pixels within reach of each line, found from where it crosses each row |
+| starburst | 10 ms | 5 ms | an affine warp in place of two frame-sized coordinate maps a channel |
+| window ghost | 7 ms | under 1 ms | in the square the glow reaches, not over the frame |
+| the final conversion | 13 ms | 8 ms | intensity and scale in one pass, clipped in place |
+
+- **The reference was float64 by accident again**: the flare's colour was a
+  float64 array, so every field it multiplied was widened. The round before
+  fixed the scalars; this fixes the colour.
+- **Against exact mode** the frame is one level away at most at 1024
+  pixels, in 0.3% of values, and two at 256 and 512. The coarse grid is
+  within a quarter of a level of the full one, and that much only at the
+  glare's very peak.
+
+### The codecs in process
+
+PyAV binds FFmpeg's libraries into Python. It is an optional extra
+(`pip install "weathermentations[codec]"`), used when present.
+
+- **For H.264 it is the binary's frame to the byte.** The first probe
+  differed from the binary by 2.4 to 4.7 levels on average. Three settings
+  account for all of it: the colour conversion's interpolation (the binary's
+  is bicubic, PyAV's default bilinear), one encoder thread (PyAV's default
+  lets libx264 cut the frame into a slice per thread), and the binary's
+  frame rate. With those, 75 of 75 round trips were identical, three images
+  at five sizes and five qualities, although the two carry different
+  releases of libx264 and libswscale.
+- **That is checked on each installation, not assumed.** It rests on two
+  builds of FFmpeg, neither of them this library's. Each encoder is tried
+  once on a small frame against the binary, and exact mode encodes in
+  process only where it passed. Fast mode does whenever PyAV is there.
+- **H.265 is not the binary's frame**, and is used in fast mode only. The
+  two carry libx265 3.5 and 4.3, which make different decisions: 3 to 4
+  levels apart on average, where the codec changes the frame by 5. It is as
+  much real H.265 either way. It gains less, because there the encoder is
+  the cost: 218 ms to 30 at 256 pixels, 250 to 92 at 512, nothing at 1024.
+  libx265 is told to be quiet and to use one thread; by default it starts
+  one for every core, for each frame.
+- **A damaged stream is decoded by the binary in exact mode.** The encoded
+  slices are the binary's to the byte (the streams differ in one message,
+  which names the libx264 release that wrote them and is never put at risk
+  of loss). With error concealment on, the two decoders gave the same frame
+  every time. With it off, a lost slice shows whatever the decoder's frame
+  buffer held: in process that is the zeroed, green hole every time, and
+  from the binary sometimes that and sometimes a stale picture, depending
+  on which buffer it reused. 15 of 120 streams differed, all of them
+  unconcealed. Neither is wrong and neither can be held to the other, so
+  exact mode keeps one of its two processes: 184 ms to 104 at 512 pixels,
+  where fast mode is 19.
+- **What it costs**: about 130 MB installed, wheels that bundle FFmpeg
+  built with GPL components (libx264, libx265), which matters to anyone
+  redistributing an environment, and Python 3.12 for the release tested
+  (19.0.2). `WEATHERMENTATIONS_CODEC=ffmpeg` keeps to the binary. Without
+  the binary PyAV alone is enough, in either mode.
+
+## A sixth round: rain with a dry road
+
+A rain frame with a dry road was 174 ms at 1024 pixels, and the streaks
+were 5% of it. The rest was relighting the scene, reading its colours and
+blending, in numpy. By line, one pinned core, milliseconds a frame over
+four scenes and two seeds:
+
+| Stage | Was | Now | What changed |
+| --- | ---: | ---: | --- |
+| overcast light | 45.9 | 13.4 | the contrast gain from a table; luminance once; one C pass |
+| the light a streak is lit by | 28.5 | 7.2 | the frame's mean colour summed by OpenCV; the brightest pixels found from a histogram |
+| the veil and the streaks over it | 26.0 | 2.4 | one C pass, numpy's arithmetic |
+| the sky's edge | 25.7 | 22.2 | redrawn on the rows the mask reaches |
+| the veil's colour | 8.8 | 5.2 | the mean colour, as above |
+| streaks, their opacity, the veil's transmission, sampling | 26.6 | 25.3 | nothing |
+| **a frame, untraced** | **175** | **86** | |
+
+- **The blend is exact.** `linear * t + airlight * (1 - t)` and then
+  `out * (1 - a) + light * a` are two expressions and ten frame-sized
+  results. One kernel does both with the same arithmetic in the same
+  order, for `RandomRain` and `RandomSnow`, so the frame is the same to
+  the bit in both modes.
+- **Overcast light took a power for every pixel.** The contrast gain is
+  `(level / luminance) ** exponent`, and luminance is in `[0, 1]`, so fast
+  mode takes the power for 65536 values of it and looks the gain up, a
+  luminance within 8 millionths of the pixel's own. The reference also
+  computed luminance three times, the third being the first again, and the
+  grey of the relit frame, which is the gain times the luminance it came
+  from. What is left is one pass, by a kernel that gives the floats of the
+  numpy written beside it. Within a level of exact mode, and that in 0.1%
+  of values on the scenes.
+- **Half of one estimate was a mean.** `frame.reshape(-1, 3).mean(axis=0)`
+  runs numpy's reduction down a million three-element rows: 13 ms, and
+  good to five digits, since it adds float32 values in sequence. OpenCV
+  does it in 0.6 ms in double. The mean of the brightest 3% of pixels was
+  a percentile, which is a partial sort, and a copy of those pixels out of
+  the frame; fast mode counts a histogram and averages above its threshold
+  in place.
+- **The sky's edge gave least.** Its blurs were already on a reduced copy.
+  What remains is arithmetic on each pixel and what the grown mask says of
+  it, and below the lowest row that mask reaches the answer is zero, so it
+  is done on the rows above: the same bytes in both modes, and 14% here
+  because in these scenes the sky's reach is most of the frame. It is
+  shared by fog, snow and night fog.
+- **Not done**: the veil's transmission is an exponential of depth with
+  the sky's sharp edge in it, which a reduced copy would blur where
+  earlier artefacts were; and taking the streaks' opacity only where there
+  are streaks measured slower (see [Found on the way](#found-on-the-way)).
+- **What it carried with it**: `RandomSnow` 296 ms to 199 and the wet road
+  265 to 175 at 1024 pixels, from the same blend, overcast and statistics.
+
 ## Three suggestions, measured
 
 Three general prescriptions were tried against this code. Each was worth
@@ -606,6 +797,26 @@ something in one place and nothing in the others.
 - *Random draws* stay float64. Drawing float32 directly changes the stream,
   so a seed would give a different picture, not a rounded one, for 10% of
   one call.
+- *A second audit, of every allocation.* The first looked at a function's
+  local variables when it returned, and so missed an array that was float64
+  for three lines and then cast. The second interposes `malloc` and counts
+  allocations of exactly 8, 16 and 24 bytes a pixel on a frame whose sides
+  are primes, which nothing float32 or uint8 comes to, and a line tracer
+  says which line of the library was running. It sees temporaries with no
+  name. In fast mode, over every transform, it found three things:
+
+  | Where | Why it was wide | Made float32 | Gain |
+  | --- | --- | --- | --- |
+  | settled snow: six fields a frame, and four more in each ground pattern | two scalars: `np.ptp` of a pair of constants, and an offset drawn with `rng.uniform`, both `np.float64` | fast mode | 409 ms to 385 at 1024 px on a frame with settled snow; one level in 0.002% of values |
+  | the lamp's beam in `NightRain` and `NightSnow` | coordinates made as two int64 grids and cast | both modes, the same floats: a row and a column that broadcast | 13 ms to 5 at 1024 px |
+  | Gaussian noise in `SensorNoise` and `NightIrMode`; the particle sampler's 2 million uniforms | drawn as float64 and cast | no | drawn as float32 the draw is 10% faster and another stream |
+
+  The beam is also a Gaussian of a sum of squares, which is a profile
+  across the frame times one down it. Fast mode takes it that way, two
+  exponentials of a line for one of a frame: 5 ms to 0.6, a float's last
+  bit away. With both, `NightRain` is 1.2 to 1.3 times faster and
+  `NightSnow` 1.5 times. Nothing else in fast mode allocates a float64 or
+  int64 frame; what is left is index arrays, which numpy needs wide.
 
 **Multiplications in place of divisions.**
 - *Polygonal sprites* divided by a per-edge constant for every pixel and
@@ -726,6 +937,68 @@ On the types still visible in the source:
   vector loops are all float. Tried twice, in the pixel list and in the
   line walker, with no change either time.
 
+## Loop-level changes and an all-float build, measured
+
+Two more prescriptions were tried on the kernels. As before, each was
+applied, every kernel timed with and without it on one pinned core, best of
+eleven interleaved runs, and the outputs compared.
+
+**Hoisting, pointer walks and shared indices.** Every kernel's loops were
+gone over for what the usual list asks: values that do not change inside a
+loop taken out of it, row addresses stepped instead of multiplied, an index
+shared between arrays computed once. Milliseconds at 1024 pixels:
+
+| Kernel | Change | AVX2: before | after | SSE2: before | after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| what each pixel mirrors | whole numbers in place of a double per pixel | 2.18 | 1.55 | 3.29 | 3.16 |
+| the mirror image | no remainder by 3 per value; a row's sky share taken once | 2.07 | 1.13 | 2.11 | 1.28 |
+| the denoise filter, tabled | one sweep along and down, a row smoothed while it is in the cache; no test per pixel | 20.6 | 19.4 | 25.7 | 24.2 |
+| the denoise filter, exact | the same | 48.0 | 48.0 | 53.8 | 53.2 |
+| streaks | a span's row address and bounds once per span; the patch's corner in the frame once per streak | 24.9 | 25.4 | 24.6 | 24.4 |
+| wet composite | rows by stepped pointers | 1.97 | 2.03 | 2.75 | 2.76 |
+| large sprites and their blur | rows by stepped pointers; a row's borders found once | 18.3 | 18.1 | 23.6 | 23.3 |
+| colour | already one loop per block | 1.38 | 1.37 | 1.93 | 1.98 |
+
+- **It paid where the loop held something the compiler may not remove.**
+  A remainder by three on every value, and a conversion to double and back
+  on every pixel, are arithmetic the C asks for. Taking them out is 29% and
+  45% on the AVX2 tier.
+- **It paid nothing where it only restated the loop.** Stepping a pointer
+  in place of `base + row * width`, or naming a loop-invariant outside the
+  loop, is what `-O3` does already: every such change measured between
+  0.95 and 1.03, which is the noise. They are kept, since they are no
+  harder to read.
+- **Fusing the filter's sweeps is the cache.** The frame as floats is 12 MB
+  at 1024 pixels. Smoothing all rows and then sweeping down read it twice;
+  drawing each row towards the one above as soon as it has been smoothed
+  reads it once. 6% here, and more on a larger frame.
+- **Carrying a pixel's three channels in one four-wide register was
+  slower**, by 1.1 to 2.1 times. Written in plain C as a four-float load
+  and a three-float store, each load overlaps the store before it and
+  waits for it. It would need intrinsics or a four-channel frame.
+- **Every output is the same bytes** as before the changes.
+
+**Every `double` made `float`.** For a test, as asked: every `double` in
+the kernels became `float`, every maths call its `f` form, and constants
+were compiled single precision.
+
+| | encode | decode | small sprites | large round | iris, exact | iris, fast | streaks | mirror | reflection | composite | denoise | denoise, tabled |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| AVX2, float / double | 1.02 | 1.00 | 0.97 | 0.99 | 1.00 | 1.00 | 1.00 | 0.95 | 0.97 | 0.97 | 1.00 | 1.02 |
+| SSE2, float / double | 0.99 | 0.98 | 0.97 | 1.00 | 1.00 | 1.00 | 0.99 | 0.99 | 1.03 | 1.01 | 1.00 | 1.00 |
+| values that changed | none | none | 16% | 60% | 65% | 65% | 29% | none | none | none | none | none |
+
+- **No kernel is faster by more than the noise.** The doubles are in a
+  particle's set-up, once per flake or streak against thousands of pixels
+  each, and in a filter's set-up, once per frame. The per-pixel loops were
+  float already.
+- **Sprites and streaks change**, by a part in a million of their peak at
+  most (1.2e-5 for polygonal sprites). That is nothing to the eye and it
+  is the end of exact mode for them: 6 of the 49 kernel tests fail, the
+  ones that hold a kernel to numpy's bytes, because numpy's set-up is in
+  double.
+- **Not adopted**, for a cost with no gain to set against it.
+
 ## A memory pool for the kernels
 
 Asked: would keeping the kernels' scratch buffers between calls, in place of
@@ -773,6 +1046,23 @@ measured.
 
 ## Found on the way
 
+- **Exact mode could be handed fast mode's depth.** The shared depth
+  provider keyed its cache on the frame alone. The bundled estimator runs
+  in half precision in fast mode, so a frame whose depth had been
+  estimated there and was asked for again inside `with exact():` got the
+  half-precision map, and exact mode depended on what had run before it.
+  A cached map now carries the mode it was made in. It was found by a
+  check that switched modes in one process; the checks before it ran each
+  mode in its own.
+- **numpy's mean down a long axis is good to five digits.**
+  `frame.reshape(-1, 3).mean(axis=0)` adds a million float32 values one
+  after another, without the pairwise blocks its other reductions use, and
+  comes out 1e-5 from the mean taken in double. It was also 13 ms. Fast
+  mode's `frame_mean` is closer to the truth than the reference it departs
+  from.
+- **A ufunc's `where=` is not a way to skip work.** Taking `expm1` only
+  where a streak layer is not zero was 1.3 to 2 times slower than taking
+  it everywhere, which numpy already does fastest where the layer is zero.
 - **Rain streaks are not antialiased.** `render_streak_layer` asks
   `cv2.polylines` for `LINE_AA`, and OpenCV ignores that on a float32 image
   and draws 8-connected lines. The kernel reproduces what is drawn today.
@@ -804,17 +1094,22 @@ measured.
 - **NEON on real hardware**, above.
 - **What is left in the frame time**, at 1024 pixels on one thread, none of
   it a case for intrinsics:
-  - `edgePreservingFilter` (three quarters of `TemporalDenoiseArtifacts`)
-    and `bilateralFilter` (most of `WdrToneMapping`): OpenCV's, and the
-    effect itself. No shortcut found that keeps the picture.
-  - `apply_overcast`, a quarter of `RandomSnow` without settled snow: `pow`,
-    `exp` and `log` over the frame. A fused C pass would need a table or a
-    vector maths library to stay exact.
-  - Surface normals at full resolution in `RandomRain`, `RandomSnow` and
-    `CastShadows`: `optimizations.md` (C3) measured them six times faster
-    at the depth map's own 518 pixels.
-  - `VideoCodecArtifacts` and `TransmissionFaults`: two ffmpeg processes a
-    call. An in-process codec was not tried.
+  - `bilateralFilter`, most of `WdrToneMapping`: OpenCV's, and the effect
+    itself. No shortcut found that keeps the picture.
+  - The sky's edge, a quarter of a dry-road rain frame and shared by fog,
+    snow and night fog: a mean of the sky's colour near each pixel, and a
+    comparison with it, over most of the frame.
+  - The veil's transmission and the streaks' opacity: an exponential over
+    the frame each.
+  - The blob patches of `DirtSoil`'s deposit field, placed on whole pixels:
+    the two pixels fast mode moves them by would go with sub-pixel
+    placement.
+  - H.265 at 1024 pixels and above, where the encoder is the cost.
+- **PyAV on other versions.** The in-process codec was run against PyAV
+  19.0.2 only, which needs Python 3.12. The extra asks for `av>=12` and the
+  code keeps to calls that are old, but no older release was tried. A
+  release that encodes differently is caught by the check against the
+  binary and left out of exact mode.
 - **Threads.** The kernels run on one. A `DataLoader` already uses one
   worker per core, so splitting a frame across threads would oversubscribe.
 
@@ -826,10 +1121,14 @@ pytest tests/unit/test_native_kernels.py tests/unit/test_native_build.py -q
 sh native/check/run.sh                        # hashes, per tier
 taskset -c 2 sh native/experiments/run.sh     # plain C against intrinsics
 WEATHERMENTATIONS_NATIVE=0 pytest tests -q    # the numpy path alone
+pip install -e ".[codec]"                     # PyAV, then:
+pytest tests/unit/test_inprocess_codec.py -q  # the codecs in process against ffmpeg
 ```
 
-The table at the top came from `scripts/benchmark.py --sizes 512 1024
---repeats 7` with `cv2.setNumThreads(1)`, pinned with `taskset`, run six
-times each from a worktree of the parent branch, from this branch with
-`WEATHERMENTATIONS_NATIVE=0`, and from this branch as built, in that order
-and repeated.
+The table at the top came from a short driver around the transforms that
+`scripts/benchmark.py` builds: each on four of the example scenes at 512
+and 1024 pixels with two seeds, the best of three calls after a warm-up,
+with `cv2.setNumThreads(1)` and pinned with `taskset`. It was run from a
+worktree of the parent branch, from this branch, and from this branch with
+PyAV on the path, in that order, three times over, and each cell is the
+least of its three. The driver is not in the repository.
