@@ -140,6 +140,7 @@ Python.
 | `render_flakes`, six-blade iris | the same | 382 ms | 22 ms | 1.5e-6 |
 | `render_streaks`, one pixel wide | 15,000 streaks | 211 ms | 11 ms | exact |
 | `render_streaks`, wide and blurred | 15,000 streaks | 251 ms | 24 ms | exact unblurred, 6e-8 blurred |
+| `wet_composite` (fast mode) | the wet road's compositing, 600 rows | 24 ms | 1.8 ms | exact |
 
 Getting those figures took three corrections to how the C was written or
 built, none of them intrinsics. They are the substance of the answer to the
@@ -254,6 +255,7 @@ all three. What remains is listed under [Not done](#not-done).
 | `WEATHERMENTATIONS_ISA=sse2` | use that tier, to compare tiers on one machine |
 | `WEATHERMENTATIONS_FAST=0` | exact mode |
 | `WEATHERMENTATIONS_BUILD_NATIVE=0` / `require` | skip the build, or fail if it fails |
+| `WEATHERMENTATIONS_BUILD_MARCH=native` | at build time, add a tier compiled for this machine only |
 
 `weathermentations._native` has the same switches at run time
 (`set_enabled`, `disabled()`, `set_tier`, `tier()`, `tiers()`).
@@ -272,9 +274,9 @@ all three. What remains is listed under [Not done](#not-done).
   byte-identical to the parent branch. The SSE2 and AVX2 tiers are identical
   on all 152.
 - **Across machines**: [`native/check/run.sh`](../native/check/run.sh) prints
-  a hash per kernel, and one more for the fast-mode sprites. The SSE2 and
-  AVX2 builds (glibc, GCC 13.3) and an arm64 build under QEMU (musl,
-  GCC 13.2) print the same five.
+  a hash per kernel, and one more for the fast-mode sprites. The SSE2, AVX2
+  and native builds (glibc, GCC 13.3) and an arm64 build under QEMU (musl,
+  GCC 13.2) print the same six.
 - **Memory**: the kernel tests pass with the library built with
   `-fsanitize=address,undefined`.
 - **Refused input**: a NaN in a frame still raises, as the table lookup
@@ -312,6 +314,9 @@ four example scenes, two seeds):
 | Multiplying by a reciprocal for a division | polygonal sprites in the flake kernel | the kernel 1.2 times (AVX2) to 1.4 times (SSE2) | 2e-6 of a sprite's peak |
 | Blur on a reduced copy, once its sigma reaches 8 or 16 px | defocus in `HousingOccluders` and `DirtSoil`, chroma in `TemporalDenoiseArtifacts`, settled snow and ground filling in `RandomSnow` and `RandomRain` | 1.2 to 4 times at 1024 px, less at 512 | 2 levels at most in the first three |
 | The depth network in half precision | every depth-conditioned transform | the estimate 2.2 to 2.5 times | see below |
+| Surface normals read at the depth map's 518 px | `RandomRain` with a wet road, `RandomSnow`, `CastShadows` | 70 ms to 15 ms at 1024 px | see below |
+| The wet road's reflection blurred on a copy reduced down the frame only | `RandomRain` | 95 ms to 11 ms at 1024 px | within the figures below |
+| A cube as two multiplications, not a power | the wet road's darkening | 20 ms at 1024 px | a rounding |
 | Folding the ground-noise tile with a floor, not a remainder | settled snow, puddles | 26 ms to 3 ms per field at 1024 px | millionths of a pixel |
 
 Eight transforms give the same bytes in both modes on these frames:
@@ -319,14 +324,25 @@ Eight transforms give the same bytes in both modes on these frames:
 `ExposureTransient`, `WdrToneMapping`, `NightRain` and `NightSnow`.
 `DirtSoil` does too below about 1100 pixels.
 
-**Half precision moves depth edges.** The network's output differs by 0.01%
-of its range on average, and everything read off a threshold of depth moves
-with it by a pixel here and there: settled snow's outline, a cast shadow's.
-Against exact mode, `RandomSnow` differs in 8% of pixels (0.1 levels on
-average, 54 at most) and `CastShadows` in 3% (16 at most), with fog, rain
-and `NightIrMode` at 2 to 4 levels at most. Side by side the worst frames
-are not distinguishable. `DepthAnythingV2Estimator(half_precision=False)`
-keeps full precision in fast mode.
+**What is read off depth moves at its edges.** Half precision changes the
+network's output by 0.01% of its range on average, and reading the normals
+at 518 pixels moves what counts as level ground on 2 to 3% of pixels, all of
+them where the ground meets something standing on it. Everything drawn from
+those moves with them. Against exact mode, on the same 152 frames:
+
+| | Pixels that differ | Mean difference (levels) | Largest |
+| --- | ---: | ---: | ---: |
+| `RandomRain`, wet road drawn | 21% | 0.36 | 32 |
+| `RandomSnow` | 14% | 0.45 | 94 |
+| `CastShadows` | 8% | 0.15 | 62 |
+| `NightIrMode` | 3% | 0.03 | 2 |
+| `RandomFog`, `NightFog`, `RandomRain` with a dry road | 1 to 2% | 0.02 | 9 |
+
+These are the largest differences fast mode makes. Side by side the worst
+frames of each are not distinguishable: the same road is wet, the same
+ground is covered, and the outline of each differs by a pixel or two round
+a car or a kerb. `DepthAnythingV2Estimator(half_precision=False)` keeps the
+network at full precision in fast mode; the normals follow the mode.
 
 **Exact mode is the parent branch.** With the kernels off, all 152 frames
 are byte-identical to the frames the parent branch makes, and with the
@@ -399,6 +415,52 @@ What was tried and dropped:
   differs from the full-size filter by 1.7 levels on average where the
   filter itself changes the frame by 3.0.
 
+## A third round: the wet road
+
+`RandomRain` looked slow in the tables above, and the streaks were not why:
+the kernel draws them in 20 ms. It is the wet road, which the transform drew
+in 70% of frames and which cost three times a frame without it.
+Milliseconds per call on real scenes, one thread, depth already estimated:
+
+| | 512: before | after | | 1024: before | after | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `RandomRain`, wet road drawn | 136.1 | 107.3 | 1.3x | 642.5 | 407.0 | 1.6x |
+| `RandomRain`, dry road | 45.0 | 45.1 | 1.0x | 172.0 | 172.8 | 1.0x |
+| `CastShadows` | 21.0 | 21.6 | 1.0x | 120.5 | 82.0 | 1.5x |
+| `RandomSnow` | 95.2 | 99.8 | 1.0x | 368.9 | 340.2 | 1.1x |
+
+What was done:
+
+- **Only the rows that hold wet ground are worked on.** A road is the lower
+  part of a frame, and the wet-road pass was arithmetic over all of it. The
+  reflection is blurred down the frame, so the rows worked on include a
+  margin as deep as the blur's kernel, and the result is the same bytes.
+  Exact, in both modes.
+- **The reflection's blur on a reduced copy**, 11 pixels across and 36 down
+  at 1024 pixels: reduced four times in height and not in width. The blur
+  was 136 ms over the whole frame, is 95 ms over the wet rows, and 11 ms
+  reduced.
+- **Surface normals at the depth map's resolution.** They were differences
+  between neighbouring pixels of a map interpolated up from 518.
+- **A kernel for the compositing** (`wet_composite`): the darkened surface,
+  the mirror image over it and the blend with the dry frame, nine numpy
+  expressions in one pass, bit for bit what they give in fast mode.
+- **A wet road less often.** `wetness_probability` defaults to 0.4, from 0.7,
+  and the pipelines' rain branch asks for 0.5, from 0.85. The mean cost of
+  a default `RandomRain` frame at 1024 pixels goes from about 500 ms to
+  about 270: 0.7 of 642 and 0.3 of 172 before, 0.4 of 407 and 0.6 of 173
+  now. The example images of the pipelines were made before this.
+
+**Would more C help here? Little.** The compositing kernel is the one loop
+in the wet road that C could fuse. It is thirteen times the numpy it
+replaces, 24 ms to 1.8 ms, and that is 22 ms of a 400 ms frame.
+What is left is some twenty steps of 5 to 30 ms each: two image warps, the
+search up each column for whatever stands on the road, the sky's edge, the
+ground's edge, three small blurs, the overcast relight. None is a loop that
+is slow for being in Python; each is one OpenCV or numpy call doing its job
+once. Making the frame cheaper from here means drawing less of it, which is
+what the lower probability does.
+
 ## Three suggestions, measured
 
 Three general prescriptions were tried against this code. Each was worth
@@ -441,39 +503,80 @@ something in one place and nothing in the others.
 
 Each flag was applied to the whole library, every kernel timed with it on
 one pinned core, and its output compared with the standard build's. Times in
-milliseconds, AVX2 tier; "changed" means the output is no longer the bytes
-the standard build gives.
+milliseconds, AVX2 tier, best of nine interleaved runs; "changed" means the
+output is no longer the bytes the standard build gives.
 
-| Build | encode | small sprites | large round | large iris, exact | large iris, fast | streaks | Output |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| standard (`-O3` and the flags above) | 1.66 | 2.95 | 17.6 | 22.3 | 19.0 | 23.8 | |
-| `-fstrict-overflow` | 1.64 | 2.94 | 17.6 | 22.3 | 19.1 | 23.8 | same; the machine code is identical |
-| `-funroll-loops` | 1.36 | 3.02 | 17.8 | 22.5 | 19.1 | 24.2 | same |
-| `-Ofast` | 1.62 | 2.68 | 16.7 | 18.4 | 17.4 | 24.0 | changed |
-| `-Ofast -funroll-loops` | 1.17 | 2.66 | 16.8 | 18.5 | 17.4 | 24.2 | changed |
-| `-ffp-contract=fast -mfma` | 1.52 | 2.81 | 17.2 | 22.3 | 18.1 | 24.5 | changed |
-| `-O2` | 8.25 | 6.56 | 78.4 | 110.1 | 86.0 | 33.4 | same |
-| set-up in float, not double | 1.64 | 2.91 | 17.5 | 22.3 | 19.0 | 23.8 | changed |
-| int16 in the line walker | 1.54 | 2.96 | 17.6 | 22.4 | 18.8 | 24.1 | same |
+| Build | encode | decode | small sprites | large round | large iris, exact | large iris, fast | streaks | wet road | Output |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| standard | 1.33 | 0.98 | 2.85 | 18.4 | 23.1 | 19.7 | 24.7 | 88.2 | |
+| `-fstrict-overflow` | 1.30 | 0.98 | 2.84 | 18.5 | 23.2 | 19.7 | 24.7 | 87.5 | same; identical machine code |
+| `-fomit-frame-pointer` | 1.28 | 0.96 | 2.87 | 18.5 | 23.2 | 19.8 | 24.7 | 88.2 | same; identical machine code |
+| `-ffp-contract=fast` | 1.27 | 0.92 | 2.87 | 18.3 | 23.2 | 19.8 | 24.6 | 88.7 | same; identical machine code |
+| `-ffp-contract=fast -mfma` | 1.29 | 0.93 | 2.69 | 18.0 | 22.9 | 19.0 | 24.6 | 89.5 | changed |
+| `-flto` | 1.29 | 0.92 | 2.86 | 18.5 | 23.2 | 19.8 | 24.4 | 89.3 | same |
+| `-Ofast` | 1.17 | 0.94 | 2.50 | 17.0 | 18.5 | 17.5 | 24.5 | 88.4 | changed |
+| `-Ofast -ffp-contract=fast -fomit-frame-pointer -flto` | 1.18 | 0.93 | 2.51 | 16.9 | 18.7 | 17.5 | 24.6 | 87.8 | changed |
+| the same four with `-mfma` | 1.19 | 0.95 | 2.39 | 16.6 | 18.5 | 17.2 | 24.5 | 87.7 | changed |
+| `-march=native -mtune=native` | 1.28 | 0.94 | 2.85 | 18.5 | 23.1 | 19.7 | 24.7 | 88.2 | same |
+| without `-funroll-loops` | 1.59 | 0.93 | 2.78 | 18.2 | 22.9 | 19.7 | 24.4 | 89.6 | same |
+| `-O2` | 8.09 | 1.09 | 6.34 | 65.7 | 97.2 | 65.9 | 29.9 | 97.1 | same |
 
-- **`-fstrict-overflow` is already on.** GCC applies it at `-O2` and above
-  unless told otherwise. Python's own build tells it otherwise
-  (`-fno-strict-overflow`), which is why it mattered in Pillow-AllSIMD, but
-  this library is not compiled with Python's flags, and its loops count in
-  `ptrdiff_t` and `size_t` in any case.
-- **`-funroll-loops` is adopted.** It is worth 8 to 18% on the encode's table
-  lookups over three runs, nothing elsewhere, and changes no output. The
+"Wet road" is the whole wet-road pass, of which the kernel is 2 ms. The
+colour columns were timed with `keep_freed_memory()` on; without it the cost
+of mapping their output arrays hid the flags.
+
+- **Three of the flags change nothing at all.** `-fstrict-overflow` and
+  `-fomit-frame-pointer` are what GCC does at `-O3` on x86-64 already.
+  (Python's own build passes `-fno-strict-overflow`, which is why that one
+  mattered in Pillow-AllSIMD; this library is not compiled with Python's
+  flags, and its loops count in `ptrdiff_t` and `size_t` in any case.)
+  `-ffp-contract=fast` has nothing to contract into until the target has a
+  fused multiply-add, which the AVX2 tier's `-mavx2` does not give it.
+- **`-flto` changes no time.** Each tier is one translation unit whose
+  functions are static, so the compiler could already inline everything
+  that link-time optimisation would.
+- **`-funroll-loops` is adopted**: 16% on the encode's table lookups here,
+  8 to 18% over the runs made, nothing elsewhere, the same output. The
   library grows from 63 to 104 KB.
-- **`-Ofast` is not.** Its best case is the exact-mode iris, 17%, where it
-  does on its own what fast mode already does by hand; on the fast-mode
-  sprites it adds 8%, which is about half a percent of a snow frame, and on
-  streaks and the colour kernels nothing. The price is the build's one
-  promise: with `-ffast-math` each tier and each compiler may reorder
-  arithmetic its own way, so SSE2, AVX2 and NEON stop giving the same
-  bytes; the NaN that the encode refuses is assumed not to exist; and
-  there is no exact mode left in that binary.
-- **Fused multiply-add is not**, for the same reason and 4% at most.
-- **`-O2` is four to five times slower.** It is `-O3` that vectorises.
+- **`-Ofast` is not.** Its best case is the exact-mode iris, 20%, where it
+  does on its own what fast mode already does by hand. It gives 8 to 12% on
+  the encode and the other sprites, and nothing on streaks or the wet road. Of a snow frame that is about half a
+  percent. The price is the build's one promise: with `-ffast-math` each
+  tier and each compiler may reorder arithmetic its own way, so SSE2, AVX2
+  and NEON stop giving the same bytes; the NaN that the encode refuses is
+  assumed not to exist; and there is no exact mode left in that binary.
+- **Fused multiply-add is not**, for the same reason: 6% on the smallest
+  sprites and 4% at most elsewhere, and an AVX2 tier that no longer agrees
+  with the SSE2 one.
+- **All four of the flags together are `-Ofast`**, to within the noise, and
+  with `-mfma` a further 2 to 5% on sprites.
+- **`-march=native -mtune=native` changes no time on this machine**, and no
+  output. GCC 13 does not know the CPU (a Core Ultra 9 285H) and takes it
+  for `sierraforest`; what `native` adds over `-mavx2` here is FMA, which
+  the build does not contract into, and AVX-VNNI, which is integer. There
+  is no AVX-512 for it to find. See [below](#building-for-one-machine).
+- **`-O2` is two to six times slower** on everything vectorised.
+
+### Building for one machine
+
+`WEATHERMENTATIONS_BUILD_MARCH=native` at build time adds a third tier,
+`native`, compiled with `-march=native -mtune=native` (`-mcpu=native` on
+arm64), and the library prefers it:
+
+```bash
+WEATHERMENTATIONS_BUILD_MARCH=native python hatch_build.py
+python -c "from weathermentations import _native; print(_native.tiers(), _native.tier())"
+# ('sse2', 'avx2', 'native') native
+```
+
+It gives the same bytes as the other tiers, which the tests and the hash
+check confirm for it like any other. It gained nothing on the machine it was
+tried on; a CPU with AVX-512, where the compiler can use vectors twice as
+wide, is where it might. A library built this way is for the machine that
+built it. Before using the tier the dispatcher checks the CPU for the main
+instruction sets it was compiled with and falls back to `avx2` without
+them, but that check is not a guarantee for every extension `native` can
+turn on, so do not put such a build in a wheel.
 
 On the types still visible in the source:
 
