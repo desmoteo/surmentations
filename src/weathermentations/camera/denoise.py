@@ -143,6 +143,9 @@ class TemporalDenoiseArtifacts(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``TemporalDenoiseArtifacts`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         strength_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -178,6 +181,7 @@ class TemporalDenoiseArtifacts(WeatherTransform):
         chroma_blur_range: tuple[float, float] = (0.004, 0.022),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.strength_range = strength_range
         self.iterations_range = iterations_range
@@ -188,6 +192,12 @@ class TemporalDenoiseArtifacts(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw how hard the denoiser works on this frame.
+
+        Returns the blend ``strength``, the number of filter ``iterations``,
+        the ``edge_threshold`` it keeps edges above, its ``spatial_radius``
+        and the extra ``chroma_blur``.
+        """
         del data
         return {
             "strength": self.py_random.uniform(*self.strength_range),
@@ -207,6 +217,11 @@ class TemporalDenoiseArtifacts(WeatherTransform):
         chroma_blur: float,
         **params: Any,
     ) -> np.ndarray:
+        """Flatten low-contrast texture into patches and bleed the colour.
+
+        Repeated passes of an edge-preserving filter, then chroma blurred
+        harder than luma, blended into the frame by ``strength``.
+        """
         if strength < 1e-3:
             return img
 

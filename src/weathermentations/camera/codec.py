@@ -200,6 +200,9 @@ class VideoCodecArtifacts(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``VideoCodecArtifacts`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         codec: str
         crf_range: Annotated[
             tuple[int, int],
@@ -227,6 +230,12 @@ class VideoCodecArtifacts(WeatherTransform):
         stale_crf_delta_range: tuple[int, int] = (8, 18),
         p: float = 0.5,
     ):
+        """Store the settings; each argument is described in the class docstring.
+
+        Raises ``ValueError`` for a codec other than ``"h264"`` or ``"h265"``,
+        and ``RuntimeError`` where there is neither the ``ffmpeg`` binary nor
+        PyAV to encode with: this transform does not approximate a codec.
+        """
         super().__init__(p=p)
         if codec not in _CODECS:
             raise ValueError(f"codec must be one of {sorted(_CODECS)}, got {codec!r}")
@@ -248,6 +257,12 @@ class VideoCodecArtifacts(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the quality, and whether and how much of the frame is left stale.
+
+        Returns the ``crf``, the harder ``stale_crf`` for the stale regions,
+        the ``stale_fraction`` (0 when no reference is lost) and a
+        ``block_seed`` that decides which macroblocks are stale.
+        """
         del data
         crf = self.py_random.randint(*self.crf_range)
         stale = self.py_random.random() < self.stale_block_probability
@@ -269,6 +284,12 @@ class VideoCodecArtifacts(WeatherTransform):
         block_seed: int,
         **params: Any,
     ) -> np.ndarray:
+        """Encode the frame and decode it back; leave whole macroblocks stale if drawn.
+
+        The stale regions come from a second, harder encode of the same frame.
+        If the encoder fails the input is returned unchanged: substituting
+        another artefact would put it in a training set under this name.
+        """
         is_integer = np.issubdtype(img.dtype, np.integer)
         rgb = img if is_integer else np.clip(img * 255.0, 0, 255).astype(np.uint8)
         rgb = np.ascontiguousarray(rgb)

@@ -28,6 +28,7 @@ LAMP = (60, 80)
 def _night(
     lamps: tuple[tuple[int, int], ...] = (LAMP,), radius: int = 4, peak: int = 255
 ) -> np.ndarray:
+    """A dark frame with saturated lamps drawn as discs at ``lamps``."""
     image = np.full((SIZE, SIZE, 3), 12, dtype=np.uint8)
     for x, y in lamps:
         cv2.circle(image, (x, y), radius, (peak, peak - 20, peak - 65), -1)
@@ -38,16 +39,20 @@ class _Wall(DepthEstimator):
     """Everything at the far plane, so fog acts evenly on the whole frame."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """A wall at the far plane, with one near value so the provider's range does not collapse.
+        """
         depth = np.ones(image.shape[:2], dtype=np.float32)
         depth[0, 0] = 0.0  # keeps the provider's range from collapsing
         return depth
 
 
 def _provider() -> SharedDepthProvider:
+    """A depth provider over the wall, 3 to 50 m."""
     return SharedDepthProvider(_Wall(), depth_range_m=(3.0, 50.0))
 
 
 def _ring(image: np.ndarray, centre: tuple[int, int], inner: float, outer: float) -> np.ndarray:
+    """The pixels of ``image`` between ``inner`` and ``outer`` pixels from ``centre``."""
     yy, xx = np.mgrid[0:SIZE, 0:SIZE]
     distance = np.hypot(xx - centre[0], yy - centre[1])
     return image[(distance >= inner) & (distance < outer)].astype(np.float32)
@@ -143,6 +148,7 @@ def test_glare_ladder_orders_and_float_matches_uint8() -> None:
 
 
 def _fog(image: np.ndarray, visibility: float, **kwargs: object) -> np.ndarray:
+    """``image`` through ``NightFog`` at one visibility, seeded."""
     transform = NightFog(
         depth_provider=_provider(), p=1.0, visibility_range_m=(visibility, visibility), **kwargs
     )  # type: ignore[arg-type]

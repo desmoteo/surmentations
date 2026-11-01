@@ -1,4 +1,4 @@
-/* The kernels, in plain C written for the compiler to vectorise.
+/** The kernels, in plain C written for the compiler to vectorise.
  *
  * Compiled once per tier with -DWM_TIER=<name> and that tier's flags, always
  * with -ffp-contract=off and never with -ffast-math: every tier must give the
@@ -10,6 +10,8 @@
  * - a row of a sprite is one loop with no call and no branch in it;
  * - arithmetic is float where numpy's is float32 and in numpy's order.
  */
+/**/
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,17 +19,24 @@
 #include "wm_kernels.h"
 
 #ifndef WM_TIER
+/** The tier this compilation is for, set by the build with ``-DWM_TIER=``. */
 #define WM_TIER portable
 #endif
-#define WM_CAT_(a, b) a##_##b
-#define WM_CAT(a, b) WM_CAT_(a, b)
+/** A kernel's name for this tier: ``WM_FN(encode_u8)`` is ``encode_u8_avx2`` in the AVX2 object.
+ *
+ * Each tier's object defines its own copies, and only its table is exported.
+ */
 #define WM_FN(name) WM_CAT(name, WM_TIER)
 #define WM_STR_(a) #a
+/** The tier's name as a string, for the table. */
 #define WM_STR(a) WM_STR_(a)
+/** Keeps a function out of line: inlined into a caller with constant arguments, GCC lost the vectorisation of some loops (see ``shade_row``).
+ */
 #define WM_NOINLINE __attribute__((noinline))
-/* Marks a loop the build is checked to have vectorised (test_native_build.py). */
+/** Marks a loop the build is checked to have vectorised (test_native_build.py). */
 #define WM_VECTORISED
 
+/** ``v`` clamped to ``[0, 1]``; a NaN comes out as 0. */
 static inline float clamp01(float v) {
     /* NaN compares false both times and comes out as 0. */
     v = v > 0.0f ? v : 0.0f;
@@ -36,12 +45,15 @@ static inline float clamp01(float v) {
 
 /* ------------------------------------------------------------ colour */
 
-/* Table indices for a block of values. Kept apart from the lookups so that
- * it is one loop of float arithmetic and nothing else: written as a single
- * loop with the lookup in it, GCC compiled the clamp as two branches, which
- * a picture's highlights and shadows mispredict, and vectorised nothing. */
+/** Values a colour kernel converts at a time: their indices fit on the stack. */
 #define WM_BLOCK 512
 
+/** Table indices for a block of values. Kept apart from the lookups so that
+ * it is one loop of float arithmetic and nothing else: written as a single
+ * loop with the lookup in it, GCC compiled the clamp as two branches, which
+ * a picture's highlights and shadows mispredict, and vectorised nothing.
+ * Returns nonzero if a value was NaN.
+ */
 static inline int table_indices(const float *restrict in, int32_t *restrict index, size_t n) {
     int bad = 0;
     WM_VECTORISED for (size_t i = 0; i < n; i++) {
@@ -52,6 +64,11 @@ static inline int table_indices(const float *restrict in, int32_t *restrict inde
     return bad;
 }
 
+/** Linear light to 8-bit sRGB: each value clamped, scaled to a table index and looked up.
+ *
+ * Block by block, the indices of a block first and then its lookups.
+ * Returns nonzero if a value was NaN, which the caller refuses.
+ */
 static int WM_FN(encode_u8)(
     const float *restrict in, uint8_t *restrict out, size_t n, const uint8_t *restrict table) {
     int32_t index[WM_BLOCK];
@@ -67,6 +84,7 @@ static int WM_FN(encode_u8)(
     return bad;
 }
 
+/** As ``encode_u8``, looking up float32 sRGB values in ``[0, 1]``. */
 static int WM_FN(encode_f32)(
     const float *restrict in, float *restrict out, size_t n, const float *restrict table) {
     int32_t index[WM_BLOCK];
@@ -82,6 +100,7 @@ static int WM_FN(encode_f32)(
     return bad;
 }
 
+/** 8-bit sRGB to linear light: each byte looked up in a 256-entry table. */
 static void WM_FN(decode_u8)(
     const uint8_t *restrict in, float *restrict out, size_t n, const float *restrict table) {
     for (size_t i = 0; i < n; i++) {
@@ -91,13 +110,15 @@ static void WM_FN(decode_u8)(
 
 /* ------------------------------------------------------------- flakes */
 
+/** The most aperture blades a polygonal sprite may have. */
 #define WM_MAX_BLADES 32
-/* Half the side, in pixels, of the largest sprite the kernel will draw. */
+/** Half the side, in pixels, of the largest sprite the kernel will draw. */
 #define WM_MAX_REACH 4096.0
 static const double WM_PI = 3.14159265358979323846;
 
-/* cv2.getGaussianKernel(n, sigma <= 0), which is what
- * cv2.GaussianBlur(src, (n, n), 0) filters with. */
+/** cv2.getGaussianKernel(n, sigma <= 0), which is what
+ * cv2.GaussianBlur(src, (n, n), 0) filters with.
+ */
 static void gaussian_kernel(float *kernel, int n) {
     static const float small[4][7] = {
         {1.0f},
@@ -123,6 +144,7 @@ static void gaussian_kernel(float *kernel, int n) {
     }
 }
 
+/** The index ``i`` reflected into ``[0, n)`` as BORDER_REFLECT_101 reflects it: ``-1`` is ``1``. */
 static inline ptrdiff_t reflect101(ptrdiff_t i, ptrdiff_t n) {
     if (n == 1) {
         return 0;
@@ -133,7 +155,7 @@ static inline ptrdiff_t reflect101(ptrdiff_t i, ptrdiff_t n) {
     return i;
 }
 
-/* cv2.getGaussianKernel(n, sigma) for sigma > 0, as float32. */
+/** cv2.getGaussianKernel(n, sigma) for sigma > 0, as float32. */
 static void gaussian_kernel_sigma(float *kernel, int n, double sigma) {
     const double scale = -0.5 / (sigma * sigma);
     double sum = 0.0;
@@ -147,9 +169,10 @@ static void gaussian_kernel_sigma(float *kernel, int n, double sigma) {
     }
 }
 
-/* Separable blur of a width x height patch with a symmetric kernel and
+/** Separable blur of a width x height patch with a symmetric kernel and
  * BORDER_REFLECT_101, in place: cv2.GaussianBlur's filter. `tmp` is scratch
- * the size of the patch, `line` of width + ksize floats. */
+ * the size of the patch, `line` of width + ksize floats.
+ */
 static void blur_patch(
     float *restrict patch, float *restrict tmp, float *restrict line,
     ptrdiff_t width, ptrdiff_t height, const float *kernel, int ksize) {
@@ -208,7 +231,7 @@ static void blur_patch(
  * passes -fno-thread-jumps for that, shade_row is kept out of line as well,
  * and tests/unit/test_native_build.py fails if a loop marked WM_VECTORISED
  * stops being vectorised. */
-/* Distance to a segment: a circle swept along its motion is a capsule. */
+/** Distance to a segment: a circle swept along its motion is a capsule. */
 static inline void capsule_row(
     float *restrict row, const float *restrict dx, ptrdiff_t size,
     float dy, float ux, float uy, float hs) {
@@ -222,8 +245,9 @@ static inline void capsule_row(
     }
 }
 
-/* A polygon swept along a segment: each edge's support grows by the
- * segment's reach along that edge's normal. */
+/** A polygon swept along a segment: each edge's support grows by the
+ * segment's reach along that edge's normal.
+ */
 static inline void first_plane_row(
     float *restrict row, const float *restrict dx, ptrdiff_t size,
     float dy, float nx, float ny, float support) {
@@ -232,6 +256,7 @@ static inline void first_plane_row(
     }
 }
 
+/** As ``first_plane_row``, keeping the larger of the row and this edge's distance. */
 static inline void next_plane_row(
     float *restrict row, const float *restrict dx, ptrdiff_t size,
     float dy, float nx, float ny, float support) {
@@ -241,9 +266,10 @@ static inline void next_plane_row(
     }
 }
 
-/* Fast mode: the division by the support is folded into the normal, once
+/** Fast mode: the division by the support is folded into the normal, once
  * per sprite, so a plane is two multiplies and an add. The quotient and the
- * product with a rounded reciprocal differ in the last bit or two. */
+ * product with a rounded reciprocal differ in the last bit or two.
+ */
 static inline void first_plane_row_fast(
     float *restrict row, const float *restrict dx, ptrdiff_t size, float dy, float nx, float ny) {
     const float dyny = dy * ny;
@@ -252,6 +278,7 @@ static inline void first_plane_row_fast(
     }
 }
 
+/** As ``first_plane_row_fast``, keeping the larger of the row and this edge's distance. */
 static inline void next_plane_row_fast(
     float *restrict row, const float *restrict dx, ptrdiff_t size, float dy, float nx, float ny) {
     const float dyny = dy * ny;
@@ -261,7 +288,7 @@ static inline void next_plane_row_fast(
     }
 }
 
-/* The cat's-eye stop: a second, displaced aperture. */
+/** The cat's-eye stop: a second, displaced aperture. */
 static inline void stop_row(
     float *restrict row, const float *restrict dx, ptrdiff_t size,
     float dy, float clip_x, float clip_y) {
@@ -274,7 +301,7 @@ static inline void stop_row(
     }
 }
 
-/* Distance to brightness: a defined rim, then the aberration profile. */
+/** Distance to brightness: a defined rim, then the aberration profile. */
 static WM_NOINLINE void shade_row(float *restrict row, ptrdiff_t size, float rim, float level) {
     WM_VECTORISED for (ptrdiff_t c = 0; c < size; c++) {
         /* `inside` is in [0, 1], so the edge can only pass 1 and the fall
@@ -289,7 +316,7 @@ static WM_NOINLINE void shade_row(float *restrict row, ptrdiff_t size, float rim
     }
 }
 
-/* Fast mode: the two divisions by constants as multiplications. */
+/** Fast mode: the two divisions by constants as multiplications. */
 static WM_NOINLINE void shade_row_fast(
     float *restrict row, ptrdiff_t size, float rim, float level) {
     const float per_edge = 1.0f / 0.12f, per_core = 1.0f / 0.35f;
@@ -303,12 +330,23 @@ static WM_NOINLINE void shade_row_fast(
     }
 }
 
+/** ``dst`` set to the larger of itself and ``src``, value by value: max-blending a sprite. */
 static inline void max_row(float *restrict dst, const float *restrict src, ptrdiff_t size) {
     WM_VECTORISED for (ptrdiff_t c = 0; c < size; c++) {
         dst[c] = dst[c] > src[c] ? dst[c] : src[c];
     }
 }
 
+/** Max-blend every flake's sprite into ``canvas`` (snow.render_flake_field).
+ *
+ * For each flake: its patch's size and place from its radius, defocus and
+ * smear, in double as the numpy code works them out; its distance field,
+ * round (a capsule) or polygonal (the iris' blades), with a cat's-eye stop
+ * when asked; that distance shaded into brightness; the sprite blurred as
+ * cv2.GaussianBlur would; and the sprite max-blended into the canvas.
+ * Returns nonzero, having drawn nothing more, on a NaN or absurd flake or
+ * if scratch space cannot be had.
+ */
 static int WM_FN(render_flakes)(
     float *canvas, int height, int width, ptrdiff_t count,
     const float *x, const float *y, const float *radius, const float *blur_radius,
@@ -476,7 +514,7 @@ static int WM_FN(render_flakes)(
 
 /* ------------------------------------------------------------ streaks */
 
-/* A streak is a polyline that cv2.polylines draws into a small patch. What
+/** A streak is a polyline that cv2.polylines draws into a small patch. What
  * follows sets the pixels OpenCV sets, by the arithmetic OpenCV uses
  * (modules/imgproc/src/drawing.cpp: Line, Line2, FillConvexPoly, Circle,
  * ThickLine, PolyLine), for the case this library has: a float32 image, on
@@ -486,19 +524,29 @@ static int WM_FN(render_flakes)(
  * The pixels are not written as they are found. They are collected, each
  * once, and the streak's brightness is laid down afterwards: drawing only
  * ever sets a pixel to the same value again, and the list is all that the
- * beading and the accumulation need to visit. */
+ * beading and the accumulation need to visit.
+ */
+/**/
 
+/** Fractional bits of the fixed-point coordinates OpenCV's wide lines are drawn in. */
 #define WM_XY_SHIFT 16
+/** One pixel in those fixed-point coordinates. */
 #define WM_XY_ONE (1 << WM_XY_SHIFT)
 
-/* A pixel of a patch. Sixteen bits a coordinate: the pair is the size of
+/** A pixel of a patch. Sixteen bits a coordinate: the pair is the size of
  * the flat index it replaces, and reading it back needs no division. (That
  * made no difference that could be measured.) Patches are held to
- * WM_MAX_SIDE, well inside sixteen bits. */
+ * WM_MAX_SIDE, well inside sixteen bits.
+ */
 typedef struct {
     int16_t x, y;
 } wm_pixel;
 
+/** The pixels a streak covers in its patch, each listed once.
+ *
+ * ``seen`` marks the patch's pixels already listed; ``pixels`` lists them
+ * in the order they were drawn, which is the order their values are added.
+ */
 typedef struct {
     uint8_t *seen;
     wm_pixel *pixels;
@@ -506,6 +554,7 @@ typedef struct {
     int32_t patch_w, patch_h;
 } wm_patch;
 
+/** List the patch pixel ``(px, py)`` if it is inside the patch and not listed yet. */
 static inline void plot(wm_patch *patch, int64_t px, int64_t py) {
     if (px < 0 || px >= patch->patch_w || py < 0 || py >= patch->patch_h) {
         return;
@@ -519,8 +568,9 @@ static inline void plot(wm_patch *patch, int64_t px, int64_t py) {
     }
 }
 
-/* A run of pixels along one row. What the row shares, its address and
- * whether it is in the patch at all, is settled once and not per pixel. */
+/** A run of pixels along one row. What the row shares, its address and
+ * whether it is in the patch at all, is settled once and not per pixel.
+ */
 static inline void span(wm_patch *patch, int64_t py, int64_t left, int64_t right) {
     if (py < 0 || py >= patch->patch_h) {
         return;
@@ -541,9 +591,10 @@ static inline void span(wm_patch *patch, int64_t py, int64_t left, int64_t right
     patch->n_pixels = next - patch->pixels;
 }
 
-/* Line: OpenCV's LineIterator, 8-connected, left to right. Both ends must
+/** Line: OpenCV's LineIterator, 8-connected, left to right. Both ends must
  * lie inside the patch, which the caller checks, since OpenCV clips a line
- * before walking it and a clipped line takes other pixels. */
+ * before walking it and a clipped line takes other pixels.
+ */
 static void line8(wm_patch *patch, int32_t x1, int32_t y1, int32_t x2, int32_t y2) {
     int32_t dx = x2 - x1, dy = y2 - y1;
     int32_t step_x = 1, step_y = 1;
@@ -576,8 +627,9 @@ static void line8(wm_patch *patch, int32_t x1, int32_t y1, int32_t x2, int32_t y
     }
 }
 
-/* Line2: a line between points in 16.16 fixed point, the outline of a
- * filled polygon. */
+/** Line2: a line between points in 16.16 fixed point, the outline of a
+ * filled polygon.
+ */
 static void line2(wm_patch *patch, int64_t x1, int64_t y1, int64_t x2, int64_t y2) {
     int64_t dx = x2 - x1, dy = y2 - y1;
     const int64_t ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
@@ -623,7 +675,7 @@ static void line2(wm_patch *patch, int64_t x1, int64_t y1, int64_t x2, int64_t y
     }
 }
 
-/* FillConvexPoly for four vertices in 16.16 fixed point, not antialiased. */
+/** FillConvexPoly for four vertices in 16.16 fixed point, not antialiased. */
 static void fill_quad(wm_patch *patch, const int64_t vx[4], const int64_t vy[4]) {
     enum { N = 4 };
     const int64_t delta = WM_XY_ONE >> 1;
@@ -694,7 +746,7 @@ static void fill_quad(wm_patch *patch, const int64_t vx[4], const int64_t vy[4])
     } while (++y <= ymax);
 }
 
-/* Circle, filled: the round cap at the end of a wide segment. */
+/** Circle, filled: the round cap at the end of a wide segment. */
 static void disc(wm_patch *patch, int64_t cx, int64_t cy, int64_t radius) {
     int64_t err = 0, dx = radius, dy = 0, plus = 1, minus = (radius << 1) - 1;
     while (dx >= dy) {
@@ -713,8 +765,9 @@ static void disc(wm_patch *patch, int64_t cx, int64_t cy, int64_t radius) {
     }
 }
 
-/* ThickLine for a thickness above one: a filled rectangle about the segment
- * and a disc at each end `caps` asks for (bit 0 the start, bit 1 the end). */
+/** ThickLine for a thickness above one: a filled rectangle about the segment
+ * and a disc at each end `caps` asks for (bit 0 the start, bit 1 the end).
+ */
 static void wide_line(
     wm_patch *patch, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int thickness, int caps) {
     int64_t p0x = (int64_t)x1 * WM_XY_ONE, p0y = (int64_t)y1 * WM_XY_ONE;
@@ -743,16 +796,27 @@ static void wide_line(
     }
 }
 
-/* The longest side of a patch, in pixels, and the widest blur the kernel
- * will draw. */
+/** The longest side of a patch, in pixels, and the widest blur the kernel
+ * will draw.
+ */
 #define WM_MAX_SIDE 8192
+/** The widest blur, in pixels, the streak kernel draws; a wider one is left to numpy. */
 #define WM_MAX_SIGMA 256.0f
 
-/* The kernel size cv2.GaussianBlur(patch, (0, 0), sigma) takes on float32. */
+/** The kernel size cv2.GaussianBlur(patch, (0, 0), sigma) takes on float32. */
 static inline int streak_kernel_size(float sigma) {
     return (int)nearbyint((double)sigma * 8.0 + 1.0) | 1;
 }
 
+/** Add the streaks listed in ``select`` to ``layer`` (rain.render_streak_layer).
+ *
+ * Each streak's polyline is drawn into its patch as cv2.polylines draws it
+ * on a float image, thin or wide; each pixel takes the streak's opacity
+ * times the beading table at its place along the streak; a streak whose
+ * sigma is above 0.3 is blurred in its patch first; and the patch is added
+ * to the layer. Everything that could make it give up is checked before a
+ * pixel is added, since streaks accumulate.
+ */
 static int WM_FN(render_streaks)(
     float *layer, int height, int width,
     const int32_t *select, ptrdiff_t n_select,
@@ -893,12 +957,13 @@ static int WM_FN(render_streaks)(
 
 /* ----------------------------------------------------------- wet road */
 
-/* One row of the wet road: the darkened surface, the mirror image over it,
+/** One row of the wet road: the darkened surface, the mirror image over it,
  * and the blend with the dry frame, for values that have each been given
  * their pixel's weights. The numpy code this replaces is nine expressions
  * over the frame, each with a frame-sized result; the arithmetic and its
  * order are that code's, in fast mode, where the cube is two
- * multiplications. */
+ * multiplications.
+ */
 static WM_NOINLINE void wet_row(
     float *restrict out, const float *restrict dry, const float *restrict sharp,
     const float *restrict rough, const float *restrict water, const float *restrict mirror,
@@ -915,6 +980,13 @@ static WM_NOINLINE void wet_row(
     }
 }
 
+/** The wet road over the dry frame, row by row (rain._apply_ground_wetness, fast mode).
+ *
+ * Each pixel's weights, how much standing water and how much mirror it
+ * takes and how wet it is, are written out once per channel, and
+ * ``wet_row`` blends the row. ``spare`` is ``1 - ratio`` taken in double by
+ * the caller, as numpy takes it.
+ */
 static int WM_FN(wet_composite)(
     float *out, const float *dry, const float *sharp, const float *rough,
     const float *wetness, const float *puddles, const float *fresnel,
@@ -951,12 +1023,13 @@ static int WM_FN(wet_composite)(
     return 0;
 }
 
-/* Where a wet pixel's reflection comes from (rain._mirrored_rows): for
+/** Where a wet pixel's reflection comes from (rain._mirrored_rows): for
  * each pixel, the lowest solid row at or above it, the "foot" of whatever
  * stands there, and whether that thing is compact enough and the pixel near
  * enough below it to mirror it about its foot. One sweep down the frame with
  * a few integers of state per column, where numpy made six frame-sized
- * arrays. `limit` is the tallest run of solid rows that counts as compact. */
+ * arrays. `limit` is the tallest run of solid rows that counts as compact.
+ */
 static int WM_FN(mirror_rows)(
     const uint8_t *solid, ptrdiff_t height, ptrdiff_t width, double limit,
     float *about_foot, float *in_reach) {
@@ -999,15 +1072,17 @@ static int WM_FN(mirror_rows)(
     return 0;
 }
 
-/* A row of an image at a fractional height: the two rows about it and
+/** A row of an image at a fractional height: the two rows about it and
  * their weights, the lower one's being the fraction. (OpenCV's warp does
  * the same, with the fraction rounded to a 32nd before version 5 and not
- * since, which is why this is defined here and not copied from it.) */
+ * since, which is why this is defined here and not copied from it.)
+ */
 typedef struct {
     const float *upper, *lower;
     float w_upper, w_lower;
 } wm_row_pair;
 
+/** The two rows about the fractional row ``row``, clamped to the image, and their weights. */
 static inline wm_row_pair row_pair(
     const float *image, ptrdiff_t height, ptrdiff_t stride, float row) {
     const float last = (float)(height - 1);
@@ -1024,11 +1099,12 @@ static inline wm_row_pair row_pair(
     return pair;
 }
 
-/* The mirror image a wet road shows (rain._apply_ground_wetness): each row
+/** The mirror image a wet road shows (rain._apply_ground_wetness): each row
  * mirrored about the horizon, fading to the sky's radiance where it would
  * look above the frame, and under a compact object mirrored about the
  * object's foot instead. Two warps of the frame and three blends, as one
- * pass. `under` may be NULL. */
+ * pass. `under` may be NULL.
+ */
 static void WM_FN(wet_reflection)(
     float *out, const float *source, ptrdiff_t height, ptrdiff_t width, ptrdiff_t rows,
     const float *about_horizon, const float *off_frame, const float *about_foot,
@@ -1068,21 +1144,14 @@ static void WM_FN(wet_reflection)(
 
 /* ------------------------------------------------- edge-preserving filter */
 
-/* OpenCV's edgePreservingFilter with RECURS_FILTER (Gastal and Oliveira's
- * domain transform, recursive form), which TemporalDenoiseArtifacts runs one
- * to three times a frame. The arithmetic and its order are OpenCV's
- * (modules/photo/src/npr.hpp), so that with `tabled` off the output is
- * OpenCV's to the byte wherever the two share a powf and neither fuses a
- * multiply-add; the caller checks that before relying on it.
- *
- * OpenCV takes a power for every pixel, twice, in each of three iterations,
- * and that is most of its time. The exponent is one plus a multiple of the
- * summed byte differences between a pixel and its neighbour, which is one of
- * 766 values. With `tabled` the power is taken once for each of those and
- * looked up: a rounding away from the per-pixel exponent, and a level away
- * in the output for a handful of pixels in a million. */
+/** Rows ``smooth_along`` interleaves; see there. Defined for an experiment to
+ * set another.
+ */
+#ifndef WM_TOGETHER
+#define WM_TOGETHER 4
+#endif
 
-/* Rows smoothed there and back along themselves, WM_TOGETHER at a time.
+/** Rows smoothed there and back along themselves, WM_TOGETHER at a time.
  * `weight[x]` joins pixel x to pixel x - 1.
  *
  * Each step of the recurrence waits for the one before it, twelve cycles of
@@ -1091,11 +1160,8 @@ static void WM_FN(wet_reflection)(
  * the chains are independent and run side by side. The running pixels are
  * held in local variables, so the chains run through registers and not
  * through memory. Four rows together took the tabled filter from 30 ms to
- * 21 on a 1024-pixel frame; two gave nothing, and eight no more than four. */
-#ifndef WM_TOGETHER
-#define WM_TOGETHER 4
-#endif
-
+ * 21 on a 1024-pixel frame; two gave nothing, and eight no more than four.
+ */
 static inline void smooth_along(
     float *restrict image, const float *restrict weights, ptrdiff_t width, ptrdiff_t n,
     ptrdiff_t rows) {
@@ -1139,9 +1205,10 @@ static inline void smooth_along(
     }
 }
 
-/* One row drawn towards the row before it in the sweep. `weight3` is the
+/** One row drawn towards the row before it in the sweep. `weight3` is the
  * pixel's weight written out for each of its three values, so this is one
- * loop over a row's values with nothing shared between them. */
+ * loop over a row's values with nothing shared between them.
+ */
 static inline void smooth_towards(
     float *restrict row, const float *restrict other, const float *restrict weight3, ptrdiff_t n) {
     WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
@@ -1149,14 +1216,16 @@ static inline void smooth_towards(
     }
 }
 
+/** Each of a row's values written three times, once for each channel of its pixel. */
 static inline void thrice(float *restrict out, const float *restrict in, ptrdiff_t width) {
     for (ptrdiff_t x = 0; x < width; x++, out += 3) {
         out[0] = out[1] = out[2] = in[x];
     }
 }
 
-/* A row of weights, each written out for its pixel's three values: from
- * the table by the row's byte sums, or as they were worked out before. */
+/** A row of weights, each written out for its pixel's three values: from
+ * the table by the row's byte sums, or as they were worked out before.
+ */
 static inline void thrice_tabled(
     float *restrict out, const uint16_t *restrict sums, const float *restrict table,
     ptrdiff_t width) {
@@ -1165,6 +1234,7 @@ static inline void thrice_tabled(
     }
 }
 
+/** A row of weights from the table, by the row's byte sums. */
 static inline void lookup_row(
     float *restrict out, const uint16_t *restrict sums, const float *restrict table,
     ptrdiff_t width) {
@@ -1173,6 +1243,7 @@ static inline void lookup_row(
     }
 }
 
+/** A row of weights as ``base`` to each exponent, by ``powf`` as OpenCV takes them. */
 static inline void power_row(
     float *restrict out, const float *restrict exponents, float base, ptrdiff_t width) {
     for (ptrdiff_t x = 0; x < width; x++) {
@@ -1180,10 +1251,11 @@ static inline void power_row(
     }
 }
 
-/* The byte sums a row's weights are looked up by: how unlike each pixel is
+/** The byte sums a row's weights are looked up by: how unlike each pixel is
  * from the one before it (`along`) and from the one above it (`down`). The
  * first pixel is its own neighbour and is taken apart from the loop, which
- * is then the same three differences for every pixel, with no test in it. */
+ * is then the same three differences for every pixel, with no test in it.
+ */
 static inline void unlikeness_bytes(
     uint16_t *restrict along, uint16_t *restrict down, const uint8_t *restrict row,
     const uint8_t *restrict above, ptrdiff_t n) {
@@ -1197,7 +1269,7 @@ static inline void unlikeness_bytes(
     }
 }
 
-/* The same as exponents, in OpenCV's arithmetic and its order of summing. */
+/** The same as exponents, in OpenCV's arithmetic and its order of summing. */
 static inline void unlikeness_exponents(
     float *restrict along, float *restrict down, const float *restrict row,
     const float *restrict above, ptrdiff_t n, float ratio) {
@@ -1217,6 +1289,20 @@ static inline void unlikeness_exponents(
     }
 }
 
+/** OpenCV's edgePreservingFilter with RECURS_FILTER (Gastal and Oliveira's
+ * domain transform, recursive form), which TemporalDenoiseArtifacts runs one
+ * to three times a frame. The arithmetic and its order are OpenCV's
+ * (modules/photo/src/npr.hpp), so that with `tabled` off the output is
+ * OpenCV's to the byte wherever the two share a powf and neither fuses a
+ * multiply-add; the caller checks that before relying on it.
+ *
+ * OpenCV takes a power for every pixel, twice, in each of three iterations,
+ * and that is most of its time. The exponent is one plus a multiple of the
+ * summed byte differences between a pixel and its neighbour, which is one of
+ * 766 values. With `tabled` the power is taken once for each of those and
+ * looked up: a rounding away from the per-pixel exponent, and a level away
+ * in the output for a handful of pixels in a million.
+ */
 static int WM_FN(edge_preserving)(
     const uint8_t *src, uint8_t *dst, ptrdiff_t height, ptrdiff_t width,
     float sigma_s, float sigma_r, int tabled) {
@@ -1321,14 +1407,16 @@ static int WM_FN(edge_preserving)(
 
 /* ----------------------------------------------------------- lens dirt */
 
-/* One value a pixel written out for each of its three channels, so that
- * what follows is one loop over a block's values. */
+/** One value a pixel written out for each of its three channels, so that
+ * what follows is one loop over a block's values.
+ */
 static inline void thrice_block(float *restrict out, const float *restrict in, ptrdiff_t count) {
     for (ptrdiff_t i = 0; i < count; i++, out += 3) {
         out[0] = out[1] = out[2] = in[i];
     }
 }
 
+/** Each pixel's highlight gain: ``1 + boost * clip((luma - 0.35) / 0.65, 0, 1)``. */
 static inline void emphasis_gains(
     float *restrict gain, const float *restrict luma, ptrdiff_t count, float boost) {
     WM_VECTORISED for (ptrdiff_t i = 0; i < count; i++) {
@@ -1340,6 +1428,7 @@ static inline void emphasis_gains(
     }
 }
 
+/** ``out = in * gain``, value by value. */
 static inline void scale_block(
     float *restrict out, const float *restrict in, const float *restrict gain, ptrdiff_t n) {
     WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
@@ -1347,8 +1436,9 @@ static inline void scale_block(
     }
 }
 
-/* linear * (1 + boost * clip((luma - 0.35) / 0.65, 0, 1)): the scene with
- * its highlights weighted up, which is what a deposit scatters most of. */
+/** linear * (1 + boost * clip((luma - 0.35) / 0.65, 0, 1)): the scene with
+ * its highlights weighted up, which is what a deposit scatters most of.
+ */
 static void WM_FN(dirt_emphasise)(
     float *out, const float *linear, const float *luma, ptrdiff_t pixels, float boost) {
     float gain[WM_BLOCK], gain3[3 * WM_BLOCK];
@@ -1360,6 +1450,7 @@ static void WM_FN(dirt_emphasise)(
     }
 }
 
+/** Each pixel's veil, ``clip(strength * mask, 0, 0.95)``, and the share its crust blocks. */
 static inline void dirt_weights(
     float *restrict veil, float *restrict blocked, const float *restrict mask, ptrdiff_t count,
     float veil_strength, float absorption) {
@@ -1371,6 +1462,8 @@ static inline void dirt_weights(
     }
 }
 
+/** A block of the deposit over the frame: lerp towards the scattered light, then towards the crust.
+ */
 static WM_NOINLINE void dirt_block(
     float *restrict out, const float *restrict linear, const float *restrict spread,
     const float *restrict albedo, const float *restrict veil, const float *restrict blocked,
@@ -1383,9 +1476,10 @@ static WM_NOINLINE void dirt_block(
     }
 }
 
-/* What the deposit does to the frame: a lerp towards the light it scatters
+/** What the deposit does to the frame: a lerp towards the light it scatters
  * in, then towards its own dark body where it is caked. The numpy code is
- * eleven expressions over the frame, each with a frame-sized result. */
+ * eleven expressions over the frame, each with a frame-sized result.
+ */
 static void WM_FN(dirt_composite)(
     float *out, const float *linear, const float *spread, const float *mask,
     const float *albedo, const float *surroundings, ptrdiff_t pixels,
@@ -1411,13 +1505,14 @@ static void WM_FN(dirt_composite)(
 
 /* ------------------------------------------------ veils and relighting */
 
-/* Three values repeated down a block, in the order its values come in. */
+/** Three values repeated down a block, in the order its values come in. */
 static inline void pattern_block(float *restrict out, const float *restrict three) {
     for (ptrdiff_t i = 0; i < 3 * WM_BLOCK; i += 3) {
         out[i] = three[0], out[i + 1] = three[1], out[i + 2] = three[2];
     }
 }
 
+/** A block of ``linear * t + air * (1 - t)``: the frame seen through the veil. */
 static WM_NOINLINE void veil_block(
     float *restrict out, const float *restrict linear, const float *restrict through,
     const float *restrict air, ptrdiff_t n) {
@@ -1426,6 +1521,7 @@ static WM_NOINLINE void veil_block(
     }
 }
 
+/** The veil, then the particles over it: ``veiled * (1 - alpha) + light * alpha``. */
 static WM_NOINLINE void veil_and_layer_block(
     float *restrict out, const float *restrict linear, const float *restrict through,
     const float *restrict air, const float *restrict alpha, const float *restrict light,
@@ -1436,8 +1532,9 @@ static WM_NOINLINE void veil_and_layer_block(
     }
 }
 
-/* The numpy code this replaces is two expressions over the frame and ten
- * frame-sized results; the arithmetic and its order are that code's. */
+/** The numpy code this replaces is two expressions over the frame and ten
+ * frame-sized results; the arithmetic and its order are that code's.
+ */
 static void WM_FN(veil_blend)(
     float *out, const float *linear, const float *transmission, const float *airlight,
     const float *alpha, const float *light, const float *light_map, ptrdiff_t pixels) {
@@ -1462,6 +1559,7 @@ static void WM_FN(veil_blend)(
     }
 }
 
+/** Each pixel's cloud cover and the cloud's shading by the scene's grey around it. */
 static inline void cloud_weights(
     float *restrict cover, float *restrict shade, const float *restrict sky,
     const float *restrict grey, ptrdiff_t count, float cover_scale, float mean_grey) {
@@ -1471,6 +1569,7 @@ static inline void cloud_weights(
     }
 }
 
+/** A block scaled by its gain and drawn towards its grey: the overcast's flatter light. */
 static WM_NOINLINE void relight_block(
     float *restrict out, const float *restrict linear, const float *restrict gain,
     const float *restrict grey, ptrdiff_t n, float desaturate) {
@@ -1480,6 +1579,7 @@ static WM_NOINLINE void relight_block(
     }
 }
 
+/** A block covered by cloud where the sky is: ``out * (1 - cover) + tint * shade * cover``. */
 static WM_NOINLINE void cloud_block(
     float *restrict out, const float *restrict cover, const float *restrict shade,
     const float *restrict tint, ptrdiff_t n) {
@@ -1488,6 +1588,7 @@ static WM_NOINLINE void cloud_block(
     }
 }
 
+/** A block clipped to ``[0, 1]`` as ``np.clip`` clips it. */
 static WM_NOINLINE void clip_block(float *restrict out, ptrdiff_t n) {
     WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
         /* np.clip: a NaN passes through both comparisons, as it does there. */
@@ -1497,8 +1598,9 @@ static WM_NOINLINE void clip_block(float *restrict out, ptrdiff_t n) {
     }
 }
 
-/* The numpy code is eight expressions over the frame; a block of it stays
- * in the cache from the first to the last. */
+/** The numpy code is eight expressions over the frame; a block of it stays
+ * in the cache from the first to the last.
+ */
 static void WM_FN(overcast_blend)(
     float *out, const float *linear, const float *gain, const float *grey,
     const float *sky, const float *cloud, ptrdiff_t pixels,
@@ -1527,8 +1629,8 @@ static void WM_FN(overcast_blend)(
 
 /* ------------------------------------------- masks grown by colour */
 
-/* The arithmetic of sky.sky_to_depth_edge and ground.fill_to_edges after
- * their blurs, in their order:
+/** The arithmetic of sky.sky_to_depth_edge and ground.fill_to_edges after
+ * their blurs, in their order::
  *
  *   plainly_not = clip(2 - |depth - level| / depth_tolerance, 0, 1)   (1 without depth)
  *   nearby      = nearby_sum / max(weight, least_weight)
@@ -1538,7 +1640,8 @@ static void WM_FN(overcast_blend)(
  *
  * Without depth the multiplications by plainly_not are by 1.0 and change
  * nothing, which is what fill_to_edges computes. The numpy code makes a
- * frame-sized result of each step, ten of them, three with three channels. */
+ * frame-sized result of each step, ten of them, three with three channels.
+ */
 static void WM_FN(grow_alike)(
     float *out, const float *linear, const float *nearby_sum, const float *weight,
     const float *mask, const float *grown, const float *depth, ptrdiff_t pixels,
@@ -1565,10 +1668,11 @@ static void WM_FN(grow_alike)(
 
 /* ------------------------------------------------------- water droplets */
 
-/* Greedy placement: the numpy loop this replaces checked each candidate
+/** Greedy placement: the numpy loop this replaces checked each candidate
  * against every drop kept so far with five array operations, a Python
  * iteration and an `any` per candidate. The arithmetic is the same, in
- * double and in the same order, so the drops kept are the same. */
+ * double and in the same order, so the drops kept are the same.
+ */
 static ptrdiff_t WM_FN(place_apart)(
     const double *x, const double *y, const double *footprint, const int64_t *order,
     ptrdiff_t candidates, ptrdiff_t count, double gap, int64_t *kept) {
@@ -1594,10 +1698,12 @@ static ptrdiff_t WM_FN(place_apart)(
     return n;
 }
 
+/** The most outline harmonics a drop may have. */
 #define WM_MAX_HARMONICS 8
 
-/* A lobe's contribution from its normalised squared distance q:
- * 1 - (1 - cut) q inside its rim, a parabola landing at zero outside. */
+/** A lobe's contribution from its normalised squared distance q:
+ * 1 - (1 - cut) q inside its rim, a parabola landing at zero outside.
+ */
 static inline float lobe_value(float q, float falloff, float reach, float skirt_scale) {
     if (q <= 1.0f) {
         return 1.0f - falloff * q;
@@ -1608,6 +1714,15 @@ static inline float lobe_value(float q, float falloff, float reach, float skirt_
     return skirt_scale * (gap * gap);
 }
 
+/** Add each drop's lobe into the water's ``level`` and ``weighted`` thickness.
+ *
+ * For each drop, over its patch: its normalised distance, through an
+ * outline that egg, sag and harmonics deform, gives its lobe; the lobe
+ * adds to the level, and the lobe times the drop's thickness, pooled
+ * towards its low side, to the weighted field. The harmonics' sines come
+ * from a recurrence on the angle's sine and cosine, not from atan2 and sin,
+ * which is why this is used in fast mode only.
+ */
 static void WM_FN(water_lobes)(
     float *level, float *weighted, ptrdiff_t height, ptrdiff_t width, const double *lobes,
     const double *harmonics, ptrdiff_t count, int n_harmonics, const int32_t *orders,
@@ -1692,10 +1807,11 @@ static void WM_FN(water_lobes)(
     }
 }
 
-/* out + (scattered - out) * fraction, then out * (1 - coverage) + colour:
+/** out + (scattered - out) * fraction, then out * (1 - coverage) + colour:
  * the condensation film and the drops over it. numpy makes five frame-sized
  * results of these two lines, and reads the drops' colour and coverage as
- * strided slices of one four-channel array. */
+ * strided slices of one four-channel array.
+ */
 static void WM_FN(droplet_composite)(
     float *out, const float *base, const float *scattered, const float *fraction,
     const float *layers, ptrdiff_t pixels) {
@@ -1724,11 +1840,12 @@ static void WM_FN(droplet_composite)(
 }
 
 #ifdef WM_NATIVE
-/* The native tier is compiled with -march=native, for whatever the build
+/** The native tier is compiled with -march=native, for whatever the build
  * machine had. Run on a CPU without one of those instruction sets it would
  * fault, so the dispatcher asks first. The list is the sets a compiler uses
  * for the loops in this file; a build copied to a different CPU is not
- * supported beyond that, and says so in docs/native_kernels.md. */
+ * supported beyond that, and says so in docs/native_kernels.md.
+ */
 int wm_native_usable(void) {
 #if defined(__x86_64__) && defined(__GNUC__)
     __builtin_cpu_init();
@@ -1767,6 +1884,7 @@ int wm_native_usable(void) {
 }
 #endif
 
+/** This tier's kernels, exported to ``wm_dispatch.c`` as ``wm_table_<tier>``. */
 const wm_kernel_table WM_FN(wm_table) = {
     WM_STR(WM_TIER),
     WM_FN(encode_u8),

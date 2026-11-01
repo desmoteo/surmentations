@@ -1,3 +1,5 @@
+"""Lens dirt, sun flare and their kin: the output contract and each effect's physical signature."""
+
 import math
 
 import cv2
@@ -16,6 +18,7 @@ from weathermentations.utils.spectral import ghost_tint
 
 @pytest.fixture
 def image() -> np.ndarray:
+    """A frame of uniform noise, as a fixture."""
     rng = np.random.default_rng(0)
     return rng.integers(0, 256, size=(128, 128, 3), dtype=np.uint8)
 

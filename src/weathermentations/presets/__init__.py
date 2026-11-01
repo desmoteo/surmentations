@@ -1,3 +1,11 @@
+"""Severity ladders and ready-made pipelines.
+
+:data:`SEVERITY` and :data:`GROUND_SEVERITY` give each transform's arguments
+at five levels; :func:`surveillance` and :func:`surveillance_lite` assemble
+whole pipelines in physical order, and :func:`weather_state` draws the
+weather they share.
+"""
+
 from weathermentations.presets.pipeline import physical_order, stage_of
 from weathermentations.presets.pipelines import (
     surveillance,

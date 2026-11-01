@@ -236,6 +236,7 @@ def _pipeline(scene: Scene, provider: SharedDepthProvider) -> tuple[str, Any]:
 
 
 def _load(path: Path) -> np.ndarray:
+    """A sample scene as RGB, :data:`WIDTH_PX` across."""
     image = cv2.imread(str(path))
     if image is None:
         raise FileNotFoundError(f"Could not read {path}")
@@ -245,6 +246,7 @@ def _load(path: Path) -> np.ndarray:
 
 
 def _save(path: Path, image: np.ndarray) -> None:
+    """Write an RGB image as a JPEG, making its directory."""
     path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(
         str(path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
@@ -288,6 +290,12 @@ def _scene_readme(
     skipped: dict[str, list[str]],
     pipeline_name: str,
 ) -> str:
+    """The page for one scene: its source, how it was described to the transforms, and its images.
+
+    The distances, the fog and veil limits, and which effects were left out
+    and why, are stated with the images, since they decide how the effects
+    look.
+    """
     near, far = scene.depth_range_m
     fog_m, rain_m, snow_m = (
         factor * far for factor in (FOG_VISIBILITY, RAIN_VISIBILITY_FLOOR, SNOW_VISIBILITY_FLOOR)
@@ -342,6 +350,7 @@ def _scene_readme(
 
 
 def _index_readme(sources: dict[str, dict[str, str]]) -> str:
+    """The index of the scene pages, with each scene's source and licence."""
     lines = [
         "# Effects on other scenes",
         "",
@@ -407,6 +416,12 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
 
 
 def main() -> None:
+    """Render every effect and the fitting pipeline over each sample scene, with their pages.
+
+    Raises ``SystemExit`` if a scene has no entry in
+    ``sample_scenes/SOURCES.md``: an image is not published without its
+    author and licence.
+    """
     sources = _sources()
     missing = sorted(set(SCENES) - set(sources))
     if missing:

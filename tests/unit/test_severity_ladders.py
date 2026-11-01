@@ -59,6 +59,11 @@ class _GroundPlaneDepth(DepthEstimator):
     """Level camera above a horizontal plane, sky above the horizon."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of level ground seen from 1.5 m up, horizon at mid-frame, 50 m above it.
+
+        Each row's distance follows from the camera height and the focal
+        length of a 60-degree field of view, as a real road's would.
+        """
         height, width = image.shape[:2]
         focal = width / (2.0 * np.tan(np.deg2rad(60.0) / 2.0))
         cy = height / 2.0
@@ -93,6 +98,7 @@ def _scene() -> np.ndarray:
 
 
 def _provider() -> SharedDepthProvider:
+    """A depth provider over the ground plane."""
     return SharedDepthProvider(_GroundPlaneDepth())
 
 

@@ -1,3 +1,5 @@
+"""The severity presets: every transform accepts its preset at every level, and levels order."""
+
 import warnings
 
 import numpy as np
@@ -61,13 +63,16 @@ _EXTERNAL_TOOL = {
 
 
 class _LinearDepthEstimator(DepthEstimator):
+    """Depth rising linearly down the frame."""
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth rising linearly from 0 at the top row to 1 at the bottom."""
         height, width = image.shape[:2]
         return np.tile(np.linspace(0.0, 1.0, height)[:, None], (1, width)).astype(np.float32)
 
 
 @pytest.fixture
 def scene() -> np.ndarray:
+    """A flat blue-grey frame, as a fixture."""
     img = np.zeros((64, 64, 3), dtype=np.uint8)
     img[:, :] = (60, 90, 120)
     return img

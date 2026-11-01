@@ -1,4 +1,4 @@
-/* Entry points of the native library, and the choice of tier.
+/** Entry points of the native library, and the choice of tier.
  *
  * wm_kernels.c is compiled once per tier; each compilation exports one
  * table. On x86-64 there are two, the psABI baseline (SSE2) and AVX2, and
@@ -7,17 +7,20 @@
  * tier, compiled for the machine it was built on. Every tier gives the same
  * floats, so which one runs is a matter of speed only.
  */
+/**/
+
 #include <string.h>
 
 #include "wm_kernels.h"
 
+/** Makes a function visible outside the library; everything else is hidden. */
 #define WM_EXPORT __attribute__((visibility("default")))
-#define WM_CAT_(a, b) a##_##b
-#define WM_CAT(a, b) WM_CAT_(a, b)
 
 #ifndef WM_BASE
+/** The baseline tier, which every CPU of the architecture runs; set by the build. */
 #define WM_BASE portable
 #endif
+/** The baseline tier's table. */
 #define WM_BASE_TABLE WM_CAT(wm_table, WM_BASE)
 
 extern const wm_kernel_table WM_BASE_TABLE;
@@ -26,20 +29,22 @@ extern const wm_kernel_table wm_table_avx2;
 #endif
 #ifdef WM_HAVE_NATIVE
 extern const wm_kernel_table wm_table_native;
-/* Defined with the native tier: whether this CPU has what it was built for. */
+/** Defined with the native tier: whether this CPU has what it was built for. */
 extern int wm_native_usable(void);
 #endif
 
+/** A tier every CPU of the architecture can run. */
 static int always(void) { return 1; }
 
 #ifdef WM_HAVE_AVX2
+/** Whether this CPU and its operating system support AVX2. */
 static int cpu_has_avx2(void) {
     __builtin_cpu_init();
     return __builtin_cpu_supports("avx2");
 }
 #endif
 
-/* The tiers of this build, slowest first. */
+/** The tiers of this build, slowest first. */
 static const struct {
     const wm_kernel_table *table;
     int (*usable)(void);
@@ -54,11 +59,13 @@ static const struct {
 };
 enum { N_TIERS = sizeof(tiers) / sizeof(tiers[0]) };
 
+/** The table of the tier in use; the best the CPU supports until one is chosen. */
 static const wm_kernel_table *active = &WM_BASE_TABLE;
 
+/** The library's ``WM_ABI_VERSION``, which the Python loader checks against its own. */
 WM_EXPORT int wm_abi_version(void) { return WM_ABI_VERSION; }
 
-/* The tiers this build holds, best last, separated by commas. */
+/** The tiers this build holds, best last, separated by commas. */
 WM_EXPORT const char *wm_tiers(void) {
     static char names[96];
     if (!names[0]) {
@@ -72,10 +79,12 @@ WM_EXPORT const char *wm_tiers(void) {
     return names;
 }
 
+/** The name of the tier in use. */
 WM_EXPORT const char *wm_tier(void) { return active->name; }
 
-/* Choose a tier by name, or the best the CPU has with "auto". Returns 0 when
- * the tier is now active, 1 when this build or this CPU does not have it. */
+/** Choose a tier by name, or the best the CPU has with "auto". Returns 0 when
+ * the tier is now active, 1 when this build or this CPU does not have it.
+ */
 WM_EXPORT int wm_select(const char *name) {
     const int best = strcmp(name, "auto") == 0;
     for (int i = N_TIERS - 1; i >= 0; i--) {
@@ -87,18 +96,22 @@ WM_EXPORT int wm_select(const char *name) {
     return 1;
 }
 
+/** The active tier's ``encode_u8``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_encode_u8(const float *in, uint8_t *out, size_t n, const uint8_t *table) {
     return active->encode_u8(in, out, n, table);
 }
 
+/** The active tier's ``encode_f32``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_encode_f32(const float *in, float *out, size_t n, const float *table) {
     return active->encode_f32(in, out, n, table);
 }
 
+/** The active tier's ``decode_u8``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_decode_u8(const uint8_t *in, float *out, size_t n, const float *table) {
     active->decode_u8(in, out, n, table);
 }
 
+/** The active tier's ``render_flakes``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_render_flakes(
     float *canvas, int height, int width, ptrdiff_t count,
     const float *x, const float *y, const float *radius, const float *blur_radius,
@@ -110,6 +123,7 @@ WM_EXPORT int wm_render_flakes(
         blades, blade_rotation, rim_gain, cats_eye, centre_x, centre_y, fast);
 }
 
+/** The active tier's ``render_streaks``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_render_streaks(
     float *layer, int height, int width,
     const int32_t *select, ptrdiff_t n_select,
@@ -124,6 +138,7 @@ WM_EXPORT int wm_render_streaks(
         beading_size);
 }
 
+/** The active tier's ``wet_composite``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_wet_composite(
     float *out, const float *dry, const float *sharp, const float *rough,
     const float *wetness, const float *puddles, const float *fresnel,
@@ -134,12 +149,14 @@ WM_EXPORT int wm_wet_composite(
         spare, film, gloss);
 }
 
+/** The active tier's ``mirror_rows``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_mirror_rows(
     const uint8_t *solid, ptrdiff_t height, ptrdiff_t width, double limit,
     float *about_foot, float *in_reach) {
     return active->mirror_rows(solid, height, width, limit, about_foot, in_reach);
 }
 
+/** The active tier's ``wet_reflection``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_wet_reflection(
     float *out, const float *source, ptrdiff_t height, ptrdiff_t width, ptrdiff_t rows,
     const float *about_horizon, const float *off_frame, const float *about_foot,
@@ -148,17 +165,20 @@ WM_EXPORT void wm_wet_reflection(
         out, source, height, width, rows, about_horizon, off_frame, about_foot, under, sky);
 }
 
+/** The active tier's ``edge_preserving``; see ``wm_kernel_table``. */
 WM_EXPORT int wm_edge_preserving(
     const uint8_t *src, uint8_t *dst, ptrdiff_t height, ptrdiff_t width,
     float sigma_s, float sigma_r, int tabled) {
     return active->edge_preserving(src, dst, height, width, sigma_s, sigma_r, tabled);
 }
 
+/** The active tier's ``dirt_emphasise``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_dirt_emphasise(
     float *out, const float *linear, const float *luma, ptrdiff_t pixels, float boost) {
     active->dirt_emphasise(out, linear, luma, pixels, boost);
 }
 
+/** The active tier's ``dirt_composite``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_dirt_composite(
     float *out, const float *linear, const float *spread, const float *mask,
     const float *albedo, const float *surroundings, ptrdiff_t pixels,
@@ -168,12 +188,14 @@ WM_EXPORT void wm_dirt_composite(
         absorption, body);
 }
 
+/** The active tier's ``veil_blend``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_veil_blend(
     float *out, const float *linear, const float *transmission, const float *airlight,
     const float *alpha, const float *light, const float *light_map, ptrdiff_t pixels) {
     active->veil_blend(out, linear, transmission, airlight, alpha, light, light_map, pixels);
 }
 
+/** The active tier's ``overcast_blend``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_overcast_blend(
     float *out, const float *linear, const float *gain, const float *grey,
     const float *sky, const float *cloud, ptrdiff_t pixels,
@@ -182,6 +204,7 @@ WM_EXPORT void wm_overcast_blend(
         out, linear, gain, grey, sky, cloud, pixels, desaturate, cover_scale, mean_grey);
 }
 
+/** The active tier's ``grow_alike``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_grow_alike(
     float *out, const float *linear, const float *nearby_sum, const float *weight,
     const float *mask, const float *grown, const float *depth, ptrdiff_t pixels,
@@ -192,12 +215,14 @@ WM_EXPORT void wm_grow_alike(
         colour_tolerance, least_weight, some_weight);
 }
 
+/** The active tier's ``place_apart``; see ``wm_kernel_table``. */
 WM_EXPORT ptrdiff_t wm_place_apart(
     const double *x, const double *y, const double *footprint, const int64_t *order,
     ptrdiff_t candidates, ptrdiff_t count, double gap, int64_t *kept) {
     return active->place_apart(x, y, footprint, order, candidates, count, gap, kept);
 }
 
+/** The active tier's ``water_lobes``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_water_lobes(
     float *level, float *weighted, ptrdiff_t height, ptrdiff_t width, const double *lobes,
     const double *harmonics, ptrdiff_t count, int n_harmonics, const int32_t *orders,
@@ -207,6 +232,7 @@ WM_EXPORT void wm_water_lobes(
         wobble_radius, outline_level);
 }
 
+/** The active tier's ``droplet_composite``; see ``wm_kernel_table``. */
 WM_EXPORT void wm_droplet_composite(
     float *out, const float *base, const float *scattered, const float *fraction,
     const float *layers, ptrdiff_t pixels) {

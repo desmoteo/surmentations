@@ -102,6 +102,9 @@ class WdrToneMapping(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``WdrToneMapping`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         compression_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -131,6 +134,7 @@ class WdrToneMapping(WeatherTransform):
         filter_radius_range: tuple[float, float] = (0.02, 0.07),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.compression_range = compression_range
         self.detail_gain_range = detail_gain_range
@@ -140,6 +144,12 @@ class WdrToneMapping(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw how hard the image processor compresses, and how good its filter is.
+
+        Returns the base layer's ``compression``, the ``detail_gain``, the
+        ``halo_strength`` between an edge-preserving and a plain blur, and the
+        filter's radius as a share of the diagonal.
+        """
         del data
         return {
             "compression": self.py_random.uniform(*self.compression_range),
@@ -157,6 +167,12 @@ class WdrToneMapping(WeatherTransform):
         filter_radius: float,
         **params: Any,
     ) -> np.ndarray:
+        """Split log luminance into base and detail, compress the base, and recombine.
+
+        The base layer is a mix of a bilateral filter and a Gaussian, on a
+        reduced copy; the result is applied as a gain on the original colour,
+        so hue and saturation carry through.
+        """
         linear, scale, is_integer = to_linear_unit(img)
         height, width = linear.shape[:2]
         radius_px = max(2.0, filter_radius * float(np.hypot(width, height)))

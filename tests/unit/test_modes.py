@@ -42,6 +42,7 @@ from weathermentations.utils.ground import ground_noise
 
 @pytest.fixture(autouse=True)
 def _restore_mode():
+    """Restore the fast or exact mode a test changed."""
     before = mode.fast()
     yield
     mode.set_fast(before)
@@ -99,6 +100,7 @@ def test_a_scalar_keeps_a_field_float32_only_in_fast_mode() -> None:
 
 
 def _frame(seed: int = 0) -> np.ndarray:
+    """A linear-light frame of noise with a darker top third."""
     rng = np.random.default_rng(seed)
     image = rng.uniform(size=(240, 320, 3)).astype(np.float32)
     image[:80] *= 0.3
@@ -255,6 +257,7 @@ def test_the_ground_pattern_is_folded_to_the_same_place_either_way() -> None:
 
 
 def _beam_as_first_written(height: int, width: int, falloff: float) -> np.ndarray:
+    """The night illuminator's beam as it was written before it took two lines: the reference."""
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
     radius = np.hypot(
         (xx - width / 2.0) / max(width / 2.0, 1.0),
@@ -290,6 +293,7 @@ def test_fast_mode_keeps_aperture_fields_float32_and_within_rounding() -> None:
 
 
 def _flakes(count: int, size: tuple[int, int], seed: int) -> dict[str, np.ndarray]:
+    """A field of ``count`` flakes, some off the frame, as the flake renderer takes them."""
     rng = np.random.default_rng(seed)
     angle = rng.uniform(0.0, 2.0 * np.pi, count)
     columns = {
@@ -330,6 +334,7 @@ def test_fast_sprites_are_the_exact_ones_to_a_few_parts_in_a_million(
 
 
 def _scene() -> np.ndarray:
+    """A dark noisy frame with a bright top band and one saturated square."""
     rng = np.random.default_rng(0)
     image = rng.integers(20, 90, (240, 320, 3), dtype=np.uint8)
     image[:90] += 120
@@ -658,6 +663,10 @@ def _photo_like(height: int = 360, width: int = 480, seed: int = 0) -> np.ndarra
 
 
 def _both_modes(transform, image: np.ndarray, seeds: int = 3) -> list[np.ndarray]:
+    """The difference between fast and exact mode's frames, for each of ``seeds`` seeds.
+
+    Fails if the transform leaves the frame unchanged in exact mode.
+    """
     differences = []
     for seed in range(seeds):
         frames = {}
@@ -690,6 +699,7 @@ def test_a_shadow_s_penumbra_blurred_small_is_within_a_level_or_two() -> None:
     from weathermentations.scene import CastShadows
 
     class GroundPlane(DepthEstimator):
+        """A level road under the lower half of the frame."""
         def estimate(self, image: np.ndarray) -> np.ndarray:
             height, width = image.shape[:2]
             rows = np.arange(height, dtype=np.float32).reshape(height, 1)
@@ -711,6 +721,7 @@ def test_the_night_illuminator_by_the_short_way_is_within_a_few_levels() -> None
     from weathermentations.depth.estimator import DepthEstimator
 
     class Receding(DepthEstimator):
+        """Depth rising from 0.05 at the top row to 1 at the bottom."""
         def estimate(self, image: np.ndarray) -> np.ndarray:
             height, width = image.shape[:2]
             return np.broadcast_to(

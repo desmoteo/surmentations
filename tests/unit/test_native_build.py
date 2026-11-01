@@ -24,6 +24,7 @@ SOURCE = ROOT / "native" / "wm_kernels.c"
 
 
 def _hatch_build():
+    """The build hook module, imported from the repository root."""
     spec = importlib.util.spec_from_file_location("hatch_build", ROOT / "hatch_build.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -32,6 +33,8 @@ def _hatch_build():
 
 
 def _gcc(build) -> list[str] | None:
+    """The compiler command if it is GCC, whose vectorisation report the tests read; else ``None``.
+    """
     try:
         compiler = build.find_compiler().split()
         version = subprocess.run([*compiler, "--version"], capture_output=True, text=True)

@@ -107,6 +107,9 @@ class RandomFog(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``RandomFog`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         depth_provider: SharedDepthProvider
         beta_range: Annotated[
             tuple[float, float],
@@ -138,6 +141,12 @@ class RandomFog(WeatherTransform):
         sky_optical_depth_cap: float = 1.6,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` without a ``depth_provider``: the one
+        :class:`~weathermentations.depth.provider.SharedDepthProvider` of the
+        pipeline must be passed in, so that depth is estimated once per frame.
+        """
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.beta_range = beta_range
@@ -150,6 +159,15 @@ class RandomFog(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the fog for one frame from its depth.
+
+        The sky is found and put at the far plane, where the network's depth
+        for it is meaningless. Returns the per-pixel ``transmission``
+        ``exp(-beta z)`` for each channel, with ``beta`` drawn through the
+        visibility it implies (Koschmieder), the ``airlight`` colour read off
+        the sky or inferred where there is none, and the forward-scatter
+        blur's ``scatter_sigma``.
+        """
         scene = scene_of(data)
         image = first_frame(scene)
         height, width = params["shape"][:2]
@@ -214,6 +232,11 @@ class RandomFog(WeatherTransform):
         scatter_sigma: float,
         **params: Any,
     ) -> np.ndarray:
+        """Soften distant detail by forward scatter, then veil the frame with airlight.
+
+        In linear light: ``linear * t + airlight * (1 - t)``, after a blur
+        whose strength follows the optical depth.
+        """
         linear, scale, is_integer = to_linear_unit(img)
         airlight_linear = _srgb_scalar_to_linear(airlight)
 
@@ -231,6 +254,7 @@ class RandomFog(WeatherTransform):
 
 
 def _srgb_scalar_to_linear(color: np.ndarray) -> np.ndarray:
+    """One sRGB colour, ``(C,)`` in ``[0, 1]``, in linear light."""
     from weathermentations.utils.photometry import srgb_to_linear
 
     return srgb_to_linear(color.reshape(1, 1, -1)).reshape(-1)

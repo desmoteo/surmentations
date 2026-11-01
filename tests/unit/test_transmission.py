@@ -42,12 +42,14 @@ def _scene() -> np.ndarray:
 def _stream(
     frames: int = 1, slices: int = 4, shift: tuple[float, float] = (0.0, 0.0), crf: int = 24
 ) -> bytes:
+    """A raw H.264 stream of the test scene sliding into place over ``frames`` frames."""
     stream = _encode_clip(_sliding_clip(_scene(), frames, shift), crf=crf, slices=slices)
     assert stream is not None
     return stream
 
 
 def _join(units: list[bytes]) -> bytes:
+    """NAL units joined back into an Annex B stream."""
     return b"".join(_START_CODE + unit for unit in units)
 
 

@@ -98,6 +98,7 @@ DEPTH_CONDITIONED = ("fog", "rain", "snow", "night_ir", "cast_shadows")
 
 @dataclass
 class Result:
+    """One transform at one size: the median time to draw its parameters and to render."""
     name: str
     size: int
     params_ms: float
@@ -105,14 +106,22 @@ class Result:
 
     @property
     def total_ms(self) -> float:
+        """Drawing and rendering together, in milliseconds."""
         return self.params_ms + self.apply_ms
 
     @property
     def images_per_second(self) -> float:
+        """How many frames one worker gets through a second at this cost."""
         return 1000.0 / self.total_ms if self.total_ms > 0 else float("inf")
 
 
 def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, object]:
+    """Every transform of the library at its defaults, keyed by a short name.
+
+    The two codec transforms only where there is an ffmpeg binary; the
+    depth-conditioned ones only with a ``depth_provider``. This is also what
+    ``benchmark_single_core.py`` times, in whichever checkout it is given.
+    """
     transforms: dict[str, object] = {
         "water_droplets": WaterDroplets(p=1.0),
         "dirt_soil": DirtSoil(p=1.0),
@@ -187,6 +196,12 @@ def benchmark(
     repeats: int,
     reuse_scene: bool,
 ) -> Result:
+    """Time one transform at one size: drawing its parameters, and rendering.
+
+    Each half is the median of ``repeats`` calls after a warm-up. Drawing is
+    timed on a fresh array each call unless ``reuse_scene``, so that the
+    depth estimate is paid as a new frame pays it.
+    """
     transform.set_random_seed(0)  # type: ignore[attr-defined]
     source = scene_source(scenes, reuse_scene)
     shape_params = {"shape": scenes[0].shape}
@@ -212,6 +227,7 @@ def benchmark(
 
 
 def print_table(results: list[Result], title: str) -> None:
+    """Print results as a table: transform, size, the two halves, the total and frames a second."""
     print(f"\n{title}")
     header = (
         f"{'transform':<16}{'size':>7}{'params ms':>12}"
@@ -227,6 +243,7 @@ def print_table(results: list[Result], title: str) -> None:
 
 
 def main() -> int:
+    """Parse the command line, time every transform asked for, and print or save the results."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
         "--sizes", type=int, nargs="+", default=[512, 1024], help="square image sizes to test"

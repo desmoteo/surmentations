@@ -69,7 +69,7 @@ def estimate_airlight(image: np.ndarray, top_percent: float = 0.1) -> np.ndarray
     Not a full dark-channel-prior implementation (He, Sun & Tang 2009,
     "Single Image Haze Removal Using Dark Channel Prior") — a lightweight
     proxy that's good enough for a training-time augmentation: averages the
-    color of the brightest ``top_percent``% of pixels by per-pixel intensity
+    color of the brightest ``top_percent`` percent of pixels by per-pixel intensity
     sum, which in most outdoor scenes is sky or existing haze.
 
     Returns an ``(C,)`` float32 color.
@@ -191,6 +191,7 @@ def veil_radiance_linear(linear_rgb: np.ndarray, sky: np.ndarray | None = None) 
 
 
 def _gaussian(image: np.ndarray, kernel: int, sigma: float) -> np.ndarray:
+    """``cv2.GaussianBlur`` with a square kernel, imported where it is used."""
     import cv2
 
     return np.asarray(cv2.GaussianBlur(image, (kernel, kernel), sigmaX=sigma))

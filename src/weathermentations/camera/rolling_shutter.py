@@ -81,6 +81,9 @@ class RollingShutter(WeatherTransform):
     requires_rgb = False
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``RollingShutter`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         pan_shift_range_px: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -110,6 +113,7 @@ class RollingShutter(WeatherTransform):
         vertical_fraction_range: tuple[float, float] = (0.0, 0.35),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.pan_shift_range_px = pan_shift_range_px
         self.wobble_amplitude_range_px = wobble_amplitude_range_px
@@ -119,6 +123,12 @@ class RollingShutter(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the camera's motion during the readout.
+
+        Returns the ``pan_shift`` across the frame, the vibration's
+        ``wobble_amplitude``, ``wobble_cycles`` and ``wobble_phase``, and the
+        ``vertical_fraction`` of the motion that is vertical.
+        """
         del data
         return {
             "pan_shift": self.py_random.uniform(*self.pan_shift_range_px),
@@ -130,6 +140,7 @@ class RollingShutter(WeatherTransform):
 
     @property
     def targets(self) -> dict[str, Callable[..., Any]]:
+        """Image, mask and masks are resampled; boxes and keypoints are moved with the rows."""
         return {
             **super().targets,
             "mask": self.apply_to_mask,
@@ -148,6 +159,7 @@ class RollingShutter(WeatherTransform):
         vertical_fraction: float,
         **params: Any,
     ) -> np.ndarray:
+        """Resample each row from where the camera pointed when that row was read out."""
         if _is_negligible(pan_shift, wobble_amplitude):
             return img
         horizontal, vertical = _row_displacement(
@@ -166,6 +178,7 @@ class RollingShutter(WeatherTransform):
         vertical_fraction: float,
         **params: Any,
     ) -> np.ndarray:
+        """Resample a mask with the image's row displacement, by nearest neighbour."""
         if _is_negligible(pan_shift, wobble_amplitude):
             return mask
         horizontal, vertical = _row_displacement(
@@ -177,6 +190,7 @@ class RollingShutter(WeatherTransform):
         return _resample(mask, horizontal, vertical, cv2.INTER_NEAREST)
 
     def apply_to_masks(self, masks: np.ndarray, *args: Any, **params: Any) -> np.ndarray:
+        """Resample each mask of a stack as :meth:`apply_to_mask` does."""
         return np.stack([self.apply_to_mask(mask, **params) for mask in masks])
 
     def apply_to_keypoints(
@@ -189,6 +203,7 @@ class RollingShutter(WeatherTransform):
         vertical_fraction: float,
         **params: Any,
     ) -> np.ndarray:
+        """Move each keypoint by the displacement of the row it is on."""
         if _is_negligible(pan_shift, wobble_amplitude) or len(keypoints) == 0:
             return keypoints
         horizontal, vertical = _row_displacement(
@@ -247,6 +262,7 @@ _BOX_SIDE_SAMPLES = 17
 
 
 def _is_negligible(pan_shift: float, wobble_amplitude: float) -> bool:
+    """Whether the motion is under a twentieth of a pixel, too small to resample for."""
     return abs(pan_shift) < 0.05 and wobble_amplitude < 0.05
 
 

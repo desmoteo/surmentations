@@ -134,6 +134,15 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
 
 
 def _load() -> ctypes.CDLL | None:
+    """Find, load and check the compiled library; ``None`` if there is none to use.
+
+    A library whose ABI version is not this module's is not used, nor one that
+    lacks an entry point; with ``WEATHERMENTATIONS_NATIVE=require`` either, or no
+    library at all, is an ``ImportError``. The tier is the one
+    ``WEATHERMENTATIONS_ISA`` names, or the library's own choice if it names
+    none or one this CPU lacks. Whether the kernels are then used is decided
+    separately, by ``WEATHERMENTATIONS_NATIVE=0`` and :func:`set_enabled`.
+    """
     mode = os.environ.get("WEATHERMENTATIONS_NATIVE", "").lower()
     found = sorted(Path(__file__).parent.glob("_wmkernels.*"))
     found = [path for path in found if path.suffix in (".so", ".dylib")]
@@ -217,10 +226,12 @@ def set_tier(name: str) -> None:
 
 
 def _float32(array: np.ndarray) -> np.ndarray:
+    """A C-contiguous float32 view or copy of ``array``, for a kernel to read."""
     return np.ascontiguousarray(array, dtype=np.float32)
 
 
 def _int32(array: np.ndarray) -> np.ndarray:
+    """A C-contiguous int32 view or copy of ``array``, for a kernel to read."""
     return np.ascontiguousarray(array, dtype=np.int32)
 
 
@@ -543,6 +554,7 @@ def edge_preserving(
 
 
 def _is_rgb_float32(image: np.ndarray) -> bool:
+    """Whether ``image`` is ``(H, W, 3)`` float32, the layout the colour kernels take."""
     return image.dtype == np.float32 and image.ndim == 3 and image.shape[2] == 3
 
 
@@ -622,6 +634,7 @@ def dirt_composite(
 
 
 def _is_plane_of(plane: np.ndarray, image: np.ndarray) -> bool:
+    """Whether ``plane`` is float32 with one value for each pixel of ``image``."""
     return plane.dtype == np.float32 and plane.shape == image.shape[:2]
 
 

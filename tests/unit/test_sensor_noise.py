@@ -19,6 +19,7 @@ from weathermentations.camera.sensor_noise import (
 
 
 def _noise(level: float, gain_db: float, read_noise: float = 2.0, size: int = 256) -> np.ndarray:
+    """Noise drawn for a flat frame at ``level``, with the given gain in dB and read noise."""
     image = np.full((size, size, 3), level, dtype=np.float32)
     rng = np.random.default_rng(0)
     return photon_transfer_noise(image, rng, 10.0 ** (gain_db / 20.0), 8000.0, read_noise)

@@ -1,4 +1,4 @@
-/* Hashes of what each kernel computes on fixed inputs.
+/** Hashes of what each kernel computes on fixed inputs.
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
@@ -7,6 +7,8 @@
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
  */
+/**/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,15 +17,20 @@
 
 extern const wm_kernel_table WM_TABLE;
 
+/** The generator's state: fixed, so every machine draws the same inputs. */
 static uint32_t state = 12345u;
 
+/** A uniform value in ``[0, 1)`` from a linear congruential generator: the same on every machine.
+ */
 static float uniform(void) {
     state = state * 1664525u + 1013904223u;
     return (float)(state >> 8) / 16777216.0f;
 }
 
+/** ``v`` clamped to ``[0, 1]``. */
 static float clamp_unit(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
+/** The 64-bit FNV-1a hash of ``bytes`` bytes: a kernel's output, as one number to compare. */
 static uint64_t fnv(const void *data, size_t bytes) {
     const unsigned char *p = data;
     uint64_t hash = 1469598103934665603ull;
@@ -33,6 +40,10 @@ static uint64_t fnv(const void *data, size_t bytes) {
     return hash;
 }
 
+/** Run every kernel of this tier on fixed inputs and print one hash per kernel.
+ *
+ * Returns nonzero if a kernel declines its input or cannot allocate.
+ */
 int main(void) {
     enum { W = 320, H = 240, N = W * H * 3, FLAKES = 600, STREAKS = 3000, VERTICES = 7 };
 

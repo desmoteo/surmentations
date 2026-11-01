@@ -44,7 +44,7 @@ Everything composites in linear light, and the frame's mean level is
 renormalised afterwards to stand in for the camera's auto-exposure.
 
 The camera's exposure decides what rain looks like
--------------------------------------------------
+--------------------------------------------------
 The same shower is three different pictures depending on how the camera is
 exposing, and none of the three is the weather's doing:
 
@@ -369,6 +369,9 @@ class RandomRain(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``RandomRain`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         depth_provider: SharedDepthProvider
         rain_rate_range_mm_h: Annotated[
             tuple[float, float],
@@ -500,6 +503,12 @@ class RandomRain(WeatherTransform):
         puddle_coverage_range: tuple[float, float] = (0.0, 0.45),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` without a ``depth_provider``: the one
+        :class:`~weathermentations.depth.provider.SharedDepthProvider` of the
+        pipeline must be passed in, so that depth is estimated once per frame.
+        """
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.rain_rate_range_mm_h = rain_rate_range_mm_h
@@ -543,6 +552,11 @@ class RandomRain(WeatherTransform):
         """
 
         def log_uniform(low: float, high: float) -> float:
+            """A value drawn log-uniformly between ``low`` and ``high``.
+
+            For quantities that a photographer counts in stops: exposure time,
+            f-number, illuminance.
+            """
             return float(np.exp(self.py_random.uniform(np.log(low), np.log(high))))
 
         light = log_uniform(*(self.scene_illuminance_range_lux or self.exposure_time_range))
@@ -561,6 +575,16 @@ class RandomRain(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the rain for one frame: the weather, the camera, every drop, and the road.
+
+        Every physical quantity is drawn per call. The number of drops follows
+        from the rain rate and the volume of air in view; only those that
+        project wider than ``min_streak_width_px`` are drawn as streaks, each
+        with its length from its fall speed and the exposure, and the rest are
+        the veil, whose ``veil_transmission`` comes from depth. Whether the
+        road is wet is drawn too, and when it is, its ``wetness`` and
+        ``puddles`` are laid on the ground the depth map shows.
+        """
         scene = scene_of(data)
         height, width = params["shape"][:2]
         rng = self.random_generator
@@ -789,6 +813,13 @@ class RandomRain(WeatherTransform):
         puddles: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
+        """Relight the frame for overcast, veil it, draw the streaks, and wet the road.
+
+        In linear light. The streaks image the sky, so they take the
+        illuminant's radiance; the veil is scattered skylight and saturates at
+        the sky's own. The frame's mean is restored afterwards, as the
+        camera's auto-exposure would, before the wet road is drawn.
+        """
         height, width = img.shape[:2]
         linear, scale, is_integer = to_linear_unit(img)
         original_mean = float(linear.mean())
@@ -911,6 +942,12 @@ _BEADING_SCALE = _BEADING_LUT_SIZE / _BEADING_ARGUMENT_MAX
 
 
 def _build_beading_lut() -> np.ndarray:
+    """The brightness of a streak along its length, tabled.
+
+    A falling drop oscillates, so its streak is brighter and dimmer in turn
+    along the exposure: two sines a harmonic apart, sampled over
+    ``[0, _BEADING_ARGUMENT_MAX]``.
+    """
     t = np.linspace(0.0, _BEADING_ARGUMENT_MAX, _BEADING_LUT_SIZE, dtype=np.float32)
     return ((0.55 + 0.45 * np.sin(t)) * (0.75 + 0.25 * np.sin(2.0 * t))).astype(np.float32)
 
@@ -1517,6 +1554,7 @@ def _apply_ground_wetness(
         map_x = np.ascontiguousarray(np.broadcast_to(columns, band_shape))
 
         def mirror(source_rows: np.ndarray) -> np.ndarray:
+            """The frame's rows ``source_rows`` sampled into the wet band, clamped to the frame."""
             map_y = np.clip(np.broadcast_to(source_rows, band_shape), 0.0, height - 1.0)
             return cv2.remap(
                 source,

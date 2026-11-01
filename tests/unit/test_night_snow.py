@@ -24,6 +24,7 @@ class _SkyOverGround(DepthEstimator):
     """Far sky in the upper half, a receding ground plane below."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of a level road under the lower half of the frame, and a far wall above it."""
         height, width = image.shape[:2]
         rows = np.arange(height, dtype=np.float32).reshape(height, 1)
         depth = np.clip(1.5 * 300.0 / np.maximum(rows - height / 2.0, 1e-3), 0.0, 50.0)
@@ -31,6 +32,7 @@ class _SkyOverGround(DepthEstimator):
 
 
 def _daylit_scene() -> np.ndarray:
+    """A sky over grey ground, by day, with a little noise."""
     rng = np.random.default_rng(0)
     image = np.zeros((320, 320, 3), dtype=np.uint8)
     image[:160] = (150, 170, 200)
@@ -40,11 +42,13 @@ def _daylit_scene() -> np.ndarray:
 
 
 def _night_frame() -> np.ndarray:
+    """A dark noisy frame."""
     rng = np.random.default_rng(1)
     return rng.integers(8, 40, (320, 320, 3), dtype=np.uint8)
 
 
 def _snow(**overrides: object) -> NightSnow:
+    """``NightSnow`` with a fixed snowfall, density and field of view, and ``overrides``."""
     settings: dict[str, object] = {
         "snowfall_rate_range_mm_h": (6.0, 6.0),
         "snow_density_range_g_cm3": (0.05, 0.05),

@@ -1,4 +1,4 @@
-/* Would hand-written SIMD beat the compiler on these kernels?
+/** Would hand-written SIMD beat the compiler on these kernels?
  *
  * Three loops of wm_kernels.c, each written twice: in plain C, as the
  * library has it, and with intrinsics (AVX2 on x86-64, NEON on arm64). The
@@ -9,6 +9,9 @@
  * The results on the machines tried, and what was concluded from them, are
  * in docs/native_kernels.md.
  */
+/**/
+
+/** Asks <time.h> for clock_gettime under -std=c11. */
 #define _POSIX_C_SOURCE 199309L
 #include <math.h>
 #include <stddef.h>
@@ -20,19 +23,25 @@
 
 #if defined(__AVX2__)
 #include <immintrin.h>
+/** Whether this target has intrinsics to compare the plain C with. */
 #define HAVE_EXPLICIT 1
+/** What the intrinsic versions are written in, for the report. */
 #define EXPLICIT "avx2 intrinsics"
 #elif defined(__ARM_NEON)
 #include <arm_neon.h>
+/** Whether this target has intrinsics to compare the plain C with. */
 #define HAVE_EXPLICIT 1
+/** What the intrinsic versions are written in, for the report. */
 #define EXPLICIT "neon intrinsics"
 #else
-/* No intrinsics for this target: the plain C alone is timed. */
+/** No intrinsics for this target: the plain C alone is timed. */
 #define EXPLICIT "none"
 #endif
 
+/** Keeps each timed loop a function of its own, as the library's are. */
 #define NOINLINE __attribute__((noinline))
 
+/** ``v`` clamped to ``[0, 1]``; a NaN comes out as 0. */
 static inline float clamp01(float v) {
     v = v > 0.0f ? v : 0.0f;
     return v < 1.0f ? v : 1.0f;
@@ -40,8 +49,11 @@ static inline float clamp01(float v) {
 
 /* ------------------------------------------------------------ plain C */
 
+/** Values the colour loop converts at a time, as the library's does. */
 #define BLOCK 512
 
+/** The colour kernel's table lookup as the library writes it: plain C, vectorised by the compiler.
+ */
 static NOINLINE void encode_plain(
     const float *restrict in, uint8_t *restrict out, size_t n, const uint8_t *restrict table) {
     int32_t index[BLOCK];
@@ -58,6 +70,7 @@ static NOINLINE void encode_plain(
     }
 }
 
+/** A row of a round sprite's distance to its smear segment, as the library writes it. */
 static NOINLINE void capsule_plain(
     float *restrict row, const float *restrict dx, ptrdiff_t size,
     float dy, float ux, float uy, float hs) {
@@ -71,6 +84,7 @@ static NOINLINE void capsule_plain(
     }
 }
 
+/** A row of distance to brightness, as the library writes it. */
 static NOINLINE void shade_plain(float *restrict row, ptrdiff_t size, float rim, float level) {
     for (ptrdiff_t c = 0; c < size; c++) {
         /* `inside` is in [0, 1], so the edge can only pass 1 and the fall
@@ -89,6 +103,7 @@ static NOINLINE void shade_plain(float *restrict row, ptrdiff_t size, float rim,
 
 #if defined(__AVX2__)
 
+/** Eight values clamped to ``[0, 1]``. */
 static inline __m256 clamp01_v(__m256 v) {
     /* max(v, 0) then min(v, 1) with the scalar code's operand order, so a
      * NaN comes out as 0 here too. */
@@ -96,6 +111,8 @@ static inline __m256 clamp01_v(__m256 v) {
     return _mm256_min_ps(v, _mm256_set1_ps(1.0f));
 }
 
+/** ``encode_plain`` with AVX2 intrinsics: eight indices and eight lookups, by a gather, at a time.
+ */
 static NOINLINE void encode_explicit(
     const float *in, uint8_t *out, size_t n, const uint8_t *table) {
     const __m256 scale = _mm256_set1_ps(65535.0f);
@@ -117,6 +134,7 @@ static NOINLINE void encode_explicit(
     }
 }
 
+/** ``capsule_plain`` with AVX2 intrinsics, eight pixels at a time. */
 static NOINLINE void capsule_explicit(
     float *row, const float *dx, ptrdiff_t size, float dy, float ux, float uy, float hs) {
     const __m256 vux = _mm256_set1_ps(ux), vuy = _mm256_set1_ps(uy), vdy = _mm256_set1_ps(dy);
@@ -138,6 +156,7 @@ static NOINLINE void capsule_explicit(
     }
 }
 
+/** ``shade_plain`` with AVX2 intrinsics, eight pixels at a time. */
 static NOINLINE void shade_explicit(float *row, ptrdiff_t size, float rim, float level) {
     const __m256 one = _mm256_set1_ps(1.0f), vrim = _mm256_set1_ps(rim);
     const __m256 vlevel = _mm256_set1_ps(level);
@@ -157,6 +176,7 @@ static NOINLINE void shade_explicit(float *row, ptrdiff_t size, float rim, float
 
 #elif defined(__ARM_NEON)
 
+/** Four values clamped to ``[0, 1]``. */
 static inline float32x4_t clamp01_v(float32x4_t v) {
     /* Selects, not vmaxq/vminq: those return NaN for a NaN operand, and the
      * scalar code returns 0. */
@@ -164,6 +184,7 @@ static inline float32x4_t clamp01_v(float32x4_t v) {
     return vbslq_f32(vcltq_f32(v, vdupq_n_f32(1.0f)), v, vdupq_n_f32(1.0f));
 }
 
+/** ``encode_plain`` with NEON intrinsics: four indices at a time, the lookups scalar. */
 static NOINLINE void encode_explicit(
     const float *in, uint8_t *out, size_t n, const uint8_t *table) {
     const float32x4_t scale = vdupq_n_f32(65535.0f);
@@ -180,6 +201,7 @@ static NOINLINE void encode_explicit(
     }
 }
 
+/** ``capsule_plain`` with NEON intrinsics, four pixels at a time. */
 static NOINLINE void capsule_explicit(
     float *row, const float *dx, ptrdiff_t size, float dy, float ux, float uy, float hs) {
     const float32x4_t vux = vdupq_n_f32(ux), vuy = vdupq_n_f32(uy), vdy = vdupq_n_f32(dy);
@@ -201,6 +223,7 @@ static NOINLINE void capsule_explicit(
     }
 }
 
+/** ``shade_plain`` with NEON intrinsics, four pixels at a time. */
 static NOINLINE void shade_explicit(float *row, ptrdiff_t size, float rim, float level) {
     const float32x4_t one = vdupq_n_f32(1.0f), vrim = vdupq_n_f32(rim);
     const float32x4_t vlevel = vdupq_n_f32(level);
@@ -222,18 +245,22 @@ static NOINLINE void shade_explicit(float *row, ptrdiff_t size, float rim, float
 
 /* ------------------------------------------------------------ harness */
 
+/** A monotonic clock, in milliseconds. */
 static double now_ms(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec * 1e3 + t.tv_nsec * 1e-6;
 }
 
+/** A uniform value in ``[0, 1)`` from a linear congruential generator. */
 static float uniform(uint32_t *state) {
     *state = *state * 1664525u + 1013904223u;
     return (float)(*state >> 8) / 16777216.0f;
 }
 
+/** Times each loop is run; the fastest is kept. */
 #define ROUNDS 15
+/** Run ``statement`` ROUNDS times and set ``best`` to the fastest, in milliseconds. */
 #define TIME(best, statement)              \
     do {                                   \
         best = 1e30;                       \
@@ -245,6 +272,11 @@ static float uniform(uint32_t *state) {
         }                                  \
     } while (0)
 
+/** Time each loop in plain C and with intrinsics on the same inputs, and check they agree.
+ *
+ * Prints nanoseconds a value for both and their ratio; the first argument
+ * labels the build.
+ */
 int main(int argc, char **argv) {
     const char *label = argc > 1 ? argv[1] : "this build";
     /* Not constants: the library's come from the data, and a compiler that

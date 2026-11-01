@@ -113,6 +113,9 @@ class NightFog(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``NightFog`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         depth_provider: SharedDepthProvider
         visibility_range_m: Annotated[
             tuple[float, float],
@@ -144,6 +147,12 @@ class NightFog(WeatherTransform):
         beam_falloff_range: tuple[float, float] = (0.6, 2.2),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` without a ``depth_provider``: the one
+        :class:`~weathermentations.depth.provider.SharedDepthProvider` of the
+        pipeline must be passed in, so that depth is estimated once per frame.
+        """
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.visibility_range_m = visibility_range_m
@@ -154,6 +163,13 @@ class NightFog(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the night fog for one frame from its depth.
+
+        Returns the ``optical_depth`` ``beta * z`` with ``beta`` from a
+        visibility drawn log-uniformly, the ``sky`` mask redrawn to the depth
+        map's skyline, the lamps' ``glow_radius``, the illuminator's
+        ``backscatter`` and its ``beam`` across the frame.
+        """
         scene = scene_of(data)
         height, width = params["shape"][:2]
         relative_depth = self.depth_provider.get_depth(scene)
@@ -193,6 +209,14 @@ class NightFog(WeatherTransform):
         beam: np.ndarray,
         **params: Any,
     ) -> np.ndarray:
+        """Attenuate the scene, then add what the fog returns of each light.
+
+        Each lamp's lost light comes back as a halo around it, wider in
+        thicker fog. Lit by the lamps, the fog glows as brightly as the
+        surfaces around it; lit by the camera's illuminator (``backscatter``
+        above 0), the scene's light crosses the fog twice and the fog is a
+        wall of light in the beam instead.
+        """
         linear, scale, is_integer = to_linear_unit(img)
         illuminated = backscatter > 0.0
 

@@ -35,6 +35,12 @@ from weathermentations.diagnostics import recording, write_jsonl
 
 
 def main() -> None:
+    """Render every effect at every severity with a few seeds, and record what each drew.
+
+    Each frame is saved beside its record, what the transform drew and how
+    far the frame moved, in ``draws.jsonl``, so that the chain of derived
+    quantities behind each image can be audited.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="diagnostics", type=Path)
     parser.add_argument("--seeds", default=3, type=int, help="seeds per severity")

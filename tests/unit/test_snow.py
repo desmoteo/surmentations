@@ -1,3 +1,5 @@
+"""``RandomSnow``: fall speeds, the flake size distribution, motion smear and settled snow."""
+
 import numpy as np
 import pytest
 
@@ -20,6 +22,11 @@ class _GroundPlaneDepthEstimator(DepthEstimator):
     """
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of level ground seen from 1.5 m up, horizon at mid-frame, 50 m above it.
+
+        Each row's distance follows from the camera height and the focal
+        length of a 60-degree field of view, as a real road's would.
+        """
         height, width = image.shape[:2]
         focal = width / (2.0 * np.tan(np.deg2rad(_FOV_DEG) / 2.0))
         cy = height / 2.0
@@ -34,17 +41,20 @@ class _WallDepthEstimator(DepthEstimator):
     """A flat wall square-on to the camera: vertical everywhere."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """A wall at one depth across the whole frame."""
         height, width = image.shape[:2]
         return np.full((height, width), 0.2, dtype=np.float32)
 
 
 @pytest.fixture
 def provider() -> SharedDepthProvider:
+    """A depth provider over the ground plane, as a fixture."""
     return SharedDepthProvider(_GroundPlaneDepthEstimator())
 
 
 @pytest.fixture
 def scene() -> np.ndarray:
+    """A flat dark green frame, as a fixture."""
     img = np.zeros((160, 220, 3), dtype=np.uint8)
     img[:, :] = (40, 70, 60)
     return img

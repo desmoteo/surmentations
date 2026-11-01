@@ -90,6 +90,12 @@ class WeatherTransform(ImageOnlyTransform):
     requires_rgb: ClassVar[bool] = True
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Instrument each subclass's own ``get_params_dependent_on_data`` for diagnostics.
+
+        Done once per class, when it is defined, so that every transform's
+        draws can be recorded (:mod:`weathermentations.diagnostics`) without
+        each one calling the recorder itself.
+        """
         super().__init_subclass__(**kwargs)
         method = cls.__dict__.get("get_params_dependent_on_data")
         if method is not None and not getattr(
@@ -102,6 +108,12 @@ class WeatherTransform(ImageOnlyTransform):
     ) -> dict[str, Any]:
         # The first hook Albumentations calls once a transform has decided to
         # fire, and the last one before any parameter is sampled.
+        """Check the input frame before anything is drawn from it.
+
+        The first hook Albumentations calls once a transform fires: a
+        transform that needs RGB refuses anything else here, with its own
+        name in the message, rather than failing somewhere inside.
+        """
         if self.requires_rgb:
             if "image" in data:
                 check_image(data["image"], cls_name=type(self).__name__)
@@ -112,6 +124,12 @@ class WeatherTransform(ImageOnlyTransform):
     def apply_with_params(
         self, params: dict[str, Any], *args: Any, **kwargs: Any
     ) -> dict[str, Any]:
+        """Apply, then tell the depth providers that the output shows the input's scene.
+
+        Only for transforms that keep the scene's geometry, so that a
+        depth-conditioned transform later in the pipeline reuses the depth
+        estimated for the frame this one was given.
+        """
         result = super().apply_with_params(params, *args, **kwargs)
         # Compared here rather than inside `apply`, because these are the two
         # arrays the pipeline itself holds: the one the depth provider was

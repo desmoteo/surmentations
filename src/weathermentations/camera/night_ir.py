@@ -119,6 +119,9 @@ class NightIrMode(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``NightIrMode`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         depth_provider: SharedDepthProvider
         illuminator_range_m: Annotated[
             tuple[float, float],
@@ -170,6 +173,12 @@ class NightIrMode(WeatherTransform):
         residual_tint: float = 0.04,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` without a ``depth_provider``: the one
+        :class:`~weathermentations.depth.provider.SharedDepthProvider` of the
+        pipeline must be passed in, so that depth is estimated once per frame.
+        """
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.illuminator_range_m = illuminator_range_m
@@ -184,6 +193,13 @@ class NightIrMode(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the illuminator and the camera, and how much light reaches each pixel.
+
+        Returns the ``exposure``: the inverse square of the distance from the
+        illuminator at the lens, times its beam profile. With it, the ambient
+        light, the auto-exposure target, the vegetation gain, the sensor gain
+        and read noise, and a seed for the noise.
+        """
         scene = scene_of(data)
         height, width = params["shape"][:2]
 
@@ -201,6 +217,11 @@ class NightIrMode(WeatherTransform):
         cx, cy = width / 2.0, height / 2.0
 
         def beam_at(yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
+            """The illuminator's beam at the given coordinates: ``cos(field angle) ** falloff``.
+
+            The field angle is taken from the normalised distance from the
+            frame's centre, at most 60 degrees at its edge.
+            """
             radius = np.sqrt(((xx - cx) / max(cx, 1)) ** 2 + ((yy - cy) / max(cy, 1)) ** 2)
             profile: np.ndarray = (
                 np.clip(np.cos(np.clip(radius, 0.0, 1.0) * (np.pi / 3.0)), 0.0, 1.0) ** falloff
@@ -244,6 +265,12 @@ class NightIrMode(WeatherTransform):
         noise_seed: int,
         **params: Any,
     ) -> np.ndarray:
+        """Render the frame as the near-infrared camera sees it at night.
+
+        Near-infrared reflectance times the light that arrived, scaled by the
+        auto-exposure to put the 80th percentile at the target, plus shot and
+        read noise, in a grey with the residual tint of the colour filters.
+        """
         linear, scale, is_integer = to_linear_unit(img)
 
         reflectance = near_infrared_reflectance(linear, vegetation_gain)

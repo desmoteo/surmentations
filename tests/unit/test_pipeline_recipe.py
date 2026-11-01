@@ -39,7 +39,9 @@ SAMPLES = 900
 
 
 class _GroundPlane(DepthEstimator):
+    """A level road under the lower half of the frame."""
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of a level road under the lower half of the frame, and a far wall above it."""
         height, width = image.shape[:2]
         rows = np.arange(height, dtype=np.float32).reshape(height, 1)
         depth = np.clip(1.5 * 300.0 / np.maximum(rows - height / 2.0, 1e-3), 0.0, 50.0)

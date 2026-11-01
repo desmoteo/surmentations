@@ -76,3 +76,29 @@ jobs:
           pip install -e ".[codec]"
           pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py tests/unit/test_camera.py -q
           WEATHERMENTATIONS_FAST=0 pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py -q
+
+  docs:
+    # The code reference, generated from the source. Warnings are errors: a
+    # docstring autodoc cannot read, or a C comment Hawkmoth cannot attach,
+    # fails the build rather than vanishing from the site.
+    runs-on: ubuntu-latest
+    env:
+      # autodoc imports the package; the kernels are not needed for that.
+      WEATHERMENTATIONS_BUILD_NATIVE: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with the docs extra
+        run: pip install -e ".[docs]"
+
+      - name: Build the code reference
+        run: sphinx-build -W --keep-going -b html docs/site docs/site/_build/html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-reference
+          path: docs/site/_build/html

@@ -30,6 +30,7 @@ class _GroundPlane(DepthEstimator):
     """A level road under the lower half of the frame, a far wall above it."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of a level road under the lower half of the frame, and a far wall above it."""
         height, width = image.shape[:2]
         rows = np.arange(height, dtype=np.float32).reshape(height, 1)
         depth = np.clip(1.5 * 300.0 / np.maximum(rows - height / 2.0, 1e-3), 0.0, 50.0)
@@ -37,15 +38,18 @@ class _GroundPlane(DepthEstimator):
 
 
 def _provider() -> SharedDepthProvider:
+    """A depth provider over the ground plane."""
     return SharedDepthProvider(_GroundPlane())
 
 
 def _scene() -> np.ndarray:
+    """A noisy mid-grey frame."""
     rng = np.random.default_rng(0)
     return rng.integers(70, 130, size=(SIZE, SIZE, 3), dtype=np.uint8)
 
 
 def _road(image: np.ndarray) -> float:
+    """The mean level of the bottom quarter of the frame: the road nearest the camera."""
     return float(image[SIZE * 3 // 4 :].astype(np.float32).mean())
 
 
@@ -118,6 +122,7 @@ def test_the_ground_ladder_is_monotonic_under_fixed_weather() -> None:
 
 
 def _wet_share(transform: A.BasicTransform, samples: int = 60) -> tuple[float, list[float]]:
+    """How often a transform drew the wet road over ``samples`` calls, and how dark each was."""
     transform.set_random_seed(3)
     image = np.full((96, 96, 3), 120, dtype=np.uint8)
     wet, darkening = [], []
@@ -289,6 +294,7 @@ def test_reflections_do_not_rule_the_road_with_stripes() -> None:
 
 
 def _settled(scene: np.ndarray, **kwargs: object) -> np.ndarray:
+    """``scene`` with only settled snow on it: no flakes, no veil, no overcast, full cover."""
     snow = RandomSnow(
         depth_provider=_provider(), p=1.0, max_flakes=0, veil_beta_range=(0.0, 0.0),
         overcast_range=(0.0, 0.0), accumulation_probability=1.0,

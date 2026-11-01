@@ -136,9 +136,11 @@ def _stored_estimator(path: Path, precision: str) -> Any:
     }
 
     class StoredDepth(DepthEstimator):
+        """The estimator interface over the stored maps."""
         current = ""
 
         def estimate(self, image: np.ndarray) -> np.ndarray:
+            """The map stored for the scene and size in ``current``, checked against the frame."""
             if self.current not in maps:
                 raise KeyError(f"no stored depth for {self.current!r}: saved at this size?")
             depth = maps[self.current]
@@ -168,6 +170,13 @@ def save_depth(path: Path, sizes: list[int]) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
+    """Time every transform of one checkout on every scene, size and seed, and write the JSON.
+
+    ``args.tree`` is the checkout, imported in place of this one; with
+    ``args.load_depth`` its depth comes from stored maps, in the precision its
+    own mode would have used, and otherwise from the network, whose own time
+    is then a row of the results.
+    """
     tree = Path(args.tree).resolve()
     sys.path.insert(0, str(tree / "scripts"))
     sys.path.insert(0, str(tree / "src"))
@@ -218,6 +227,7 @@ def run(args: argparse.Namespace) -> None:
                     def call(
                         transform: Any = transform, seed: int = seed, image: np.ndarray = image
                     ) -> None:
+                        """One call of the transform on this scene with this seed."""
                         transform.set_random_seed(seed)
                         transform(image=image)
 
@@ -234,6 +244,7 @@ def run(args: argparse.Namespace) -> None:
 
 
 def _estimate_synchronised(estimator: Any, image: np.ndarray) -> None:
+    """Estimate depth for ``image``, with the GPU synchronised before and after."""
     import torch
 
     torch.cuda.synchronize()
@@ -252,6 +263,7 @@ def _least(call: Any, repeats: int) -> float:
 
 
 def _least_over_runs(paths: list[str]) -> dict[str, float]:
+    """Each figure's least over several result files, for the figures they all hold."""
     runs = [json.loads(Path(path).read_text())["ms"] for path in paths]
     keys = set(runs[0]).intersection(*runs[1:])
     return {key: min(run[key] for run in runs) for key in keys}
@@ -268,6 +280,7 @@ def compare(args: argparse.Namespace) -> None:
     small, large = sizes[0], sizes[-1]
 
     def ratio(name: str, size: int) -> float:
+        """How many times faster ``after`` is than ``before`` for a transform at a size."""
         return before[f"{name}/{size}"] / after[f"{name}/{size}"]
 
     print(f"| Transform | {small}: before | after | | {large}: before | after | |")
@@ -305,6 +318,7 @@ def compare(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse the command line and run ``run``, ``save-depth`` or ``compare``."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
 

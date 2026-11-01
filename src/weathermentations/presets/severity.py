@@ -45,6 +45,7 @@ from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H
 
 
 def _lerp(a: float, b: float, t: float) -> float:
+    """``a`` at ``t = 0``, ``b`` at ``t = 1``, in a straight line between."""
     return a + (b - a) * t
 
 

@@ -69,10 +69,12 @@ COMMON_FLAGS = [
 
 
 class NativeBuildError(RuntimeError):
+    """The kernels could not be built: no compiler, or a compile or link failed."""
     pass
 
 
 def library_name() -> str:
+    """The library's file name on this platform: ``_wmkernels.so``, or ``.dylib`` on macOS."""
     return LIBRARY_STEM + (".dylib" if sys.platform == "darwin" else ".so")
 
 
@@ -95,6 +97,10 @@ def tiers() -> list[tuple[str, list[str]]]:
 
 
 def find_compiler() -> str:
+    """The C compiler to build with: ``$CC``, else the first of ``cc``, ``gcc`` and ``clang``.
+
+    Raises :class:`NativeBuildError` if there is none.
+    """
     for candidate in (os.environ.get("CC"), "cc", "gcc", "clang"):
         if candidate and shutil.which(candidate.split()[0]):
             return candidate
@@ -102,6 +108,7 @@ def find_compiler() -> str:
 
 
 def _run(command: list[str]) -> None:
+    """Run a compiler command; a failure is a :class:`NativeBuildError` with its error output."""
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise NativeBuildError(f"{' '.join(command)}\n{result.stderr.strip()}")
@@ -140,6 +147,12 @@ def build_native(
 
 
 def platform_tag() -> str:
+    """This platform's wheel tag, from ``sysconfig``: ``linux_x86_64`` and the like.
+
+    A wheel holding the library is specific to the platform it was built on,
+    and is tagged ``py3-none-<platform>``: no Python ABI, since the library
+    is loaded through ``ctypes`` and includes no Python header.
+    """
     return sysconfig.get_platform().replace("-", "_").replace(".", "_")
 
 
@@ -150,9 +163,20 @@ except ImportError:  # run directly, without hatchling installed
 
 
 class NativeKernelsHook(BuildHookInterface):  # type: ignore[type-arg]
+    """The Hatch build hook that compiles the kernels into a wheel.
+
+    Registered in ``pyproject.toml`` as the ``custom`` hook. Building is
+    optional unless ``WEATHERMENTATIONS_BUILD_NATIVE=require``.
+    """
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
+        """Build the library into the wheel being made, if a wheel is being made.
+
+        ``WEATHERMENTATIONS_BUILD_NATIVE=0`` skips it. A failure is a warning,
+        and the wheel is pure Python, unless the variable is ``require``. A
+        wheel that holds the library is tagged for this platform.
+        """
         mode = os.environ.get("WEATHERMENTATIONS_BUILD_NATIVE", "auto").lower()
         if self.target_name != "wheel" or mode in ("0", "off", "false", "no"):
             return

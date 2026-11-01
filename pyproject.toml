@@ -48,6 +48,9 @@ dependencies = [
 # TransmissionFaults, in place of two ffmpeg processes a frame. Its wheels
 # carry their own FFmpeg, built with GPL components (libx264, libx265).
 codec = ["av>=12"]
+# The code reference site in docs/site, generated from the source: autodoc for
+# Python, Hawkmoth through libclang for C.
+docs = ["sphinx>=8", "myst-parser>=4", "furo", "hawkmoth>=0.19", "libclang>=18"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",

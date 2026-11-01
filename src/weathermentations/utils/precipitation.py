@@ -292,6 +292,11 @@ def rain_number_density(
     speeds = raindrop_terminal_velocity(diameters)
 
     def _density_above(slope: float, mu: float) -> tuple[float, float]:
+        """The rain rate the distribution's shape gives, and its share above ``min_diameter_mm``.
+
+        Both per unit of the distribution's intercept, so that their ratio
+        fixes the intercept for the rain rate asked for.
+        """
         shape = _gamma_dsd_weights(diameters, slope, mu)
         rate = 1.885e-3 * float((shape * diameters**3 * speeds).sum() * step)
         return rate, float(shape[diameters >= min_diameter_mm].sum() * step)
@@ -347,6 +352,11 @@ def width_cut_for_budget(
         return floor_width_px
 
     def count_at(width: float) -> float:
+        """How many drops would be drawn with the width threshold at ``width``.
+
+        The population scaled by the share that resolves at ``width`` over the
+        share that resolves at the floor.
+        """
         fraction = resolvable_fraction(
             slope, d_min, d_max, near_m, far_m, focal_px, width, size_scale, shape_mu=shape_mu
         )
