@@ -42,9 +42,63 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
-from weathermentations import mode
+from weathermentations import _native, mode
 from weathermentations.base import WeatherTransform
 from weathermentations.utils.filters import wide_blur
+
+# Whether the compiled filter has been seen to give OpenCV's bytes on this
+# installation: None until it has been tried.
+_kernel_is_opencv: bool | None = None
+
+
+def _kernel_matches_opencv() -> bool:
+    """Whether the compiled edge-preserving filter gives OpenCV's bytes here.
+
+    It is OpenCV's arithmetic in OpenCV's order, and on x86-64 with glibc it
+    gives the same bytes. That rests on the two calling the same ``powf`` and
+    on neither fusing a multiply into an add, which another C library or
+    another build of OpenCV could undo, so it is tried once on two small
+    frames and not assumed.
+    """
+    global _kernel_is_opencv
+    if _kernel_is_opencv is None:
+        probe = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+        same = True
+        for sigma_s, sigma_r in ((3.0, 0.07), (40.0, 0.3)):
+            ours = _native.edge_preserving(probe, sigma_s, sigma_r, tabled=False)
+            if ours is None:
+                return False  # the kernels are off: nothing learnt, ask again later
+            theirs = cv2.edgePreservingFilter(
+                probe, flags=cv2.RECURS_FILTER, sigma_s=sigma_s, sigma_r=sigma_r
+            )
+            same = same and bool(np.array_equal(ours, theirs))
+        _kernel_is_opencv = same
+    return _kernel_is_opencv
+
+
+def _edge_preserving(image: np.ndarray, sigma_s: float, sigma_r: float) -> np.ndarray:
+    """``cv2.edgePreservingFilter`` with ``RECURS_FILTER``, as fast as it can be had.
+
+    OpenCV's own takes a power for every pixel six times a call and walks the
+    frame through checked accessors: 160 ms on a 1024-pixel frame. The
+    compiled kernel is the same arithmetic in 49 ms, and is used in exact
+    mode where it has been seen to give the same bytes. In fast mode it
+    takes the power from a table of its 766 possible values, 21 ms, and a
+    few values in a million come out one level away. That makes this the one
+    place where a fast-mode frame depends, by that much, on whether the
+    kernels are installed.
+    """
+    done = None
+    if mode.fast():
+        done = _native.edge_preserving(image, sigma_s, sigma_r, tabled=True)
+    elif _kernel_matches_opencv():
+        done = _native.edge_preserving(image, sigma_s, sigma_r, tabled=False)
+    if done is not None:
+        return done
+    filtered: np.ndarray = cv2.edgePreservingFilter(
+        image, flags=cv2.RECURS_FILTER, sigma_s=sigma_s, sigma_r=sigma_r
+    )
+    return filtered
 
 
 def _blur_plane(plane: np.ndarray, sigma: float) -> np.ndarray:
@@ -176,9 +230,8 @@ class TemporalDenoiseArtifacts(WeatherTransform):
         # way: with recursive separable passes, not one enormous kernel.
         denoised = work
         for _ in range(max(1, iterations)):
-            denoised = cv2.edgePreservingFilter(
+            denoised = _edge_preserving(
                 denoised,
-                flags=cv2.RECURS_FILTER,
                 sigma_s=float(np.clip(radius_px, 1.0, 200.0)),
                 sigma_r=float(np.clip(edge_threshold / 255.0, 0.01, 1.0)),
             )

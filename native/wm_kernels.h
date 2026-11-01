@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WM_ABI_VERSION 4
+#define WM_ABI_VERSION 6
 
 typedef struct {
     const char *name;
@@ -82,6 +82,25 @@ typedef struct {
         float *out, const float *source, ptrdiff_t height, ptrdiff_t width, ptrdiff_t rows,
         const float *about_horizon, const float *off_frame, const float *about_foot,
         const float *under, const float *sky);
+
+    /* cv2.edgePreservingFilter(src, flags=RECURS_FILTER, sigma_s, sigma_r)
+     * for an (height, width, 3) uint8 image. With `tabled`, the filter's
+     * power function is taken from a table: faster, and a level off in a few
+     * pixels. Nonzero if it could not allocate. */
+    int (*edge_preserving)(
+        const uint8_t *src, uint8_t *dst, ptrdiff_t height, ptrdiff_t width,
+        float sigma_s, float sigma_r, int tabled);
+
+    /* DirtSoil, the two expressions over the frame either side of its
+     * scatter blur, each in one pass with numpy's arithmetic and order.
+     * `linear`, `out`, `spread` and `albedo` are (pixels, 3); `luma` and
+     * `mask` hold one value a pixel; `surroundings` three. */
+    void (*dirt_emphasise)(
+        float *out, const float *linear, const float *luma, ptrdiff_t pixels, float boost);
+    void (*dirt_composite)(
+        float *out, const float *linear, const float *spread, const float *mask,
+        const float *albedo, const float *surroundings, ptrdiff_t pixels,
+        float forward, float veil_strength, float absorption, float body);
 } wm_kernel_table;
 
 #endif

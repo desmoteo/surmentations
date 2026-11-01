@@ -2,9 +2,10 @@
 
 The library is optional, so the numpy path is the definition and the kernels
 are held to it: bit for bit where the arithmetic allows (the colour tables,
-unblurred sprites and streaks), to float rounding where a blur's sums are
-taken in another order. Every instruction-set tier of the build must give the
-same bytes as every other, so that a picture does not depend on the CPU.
+unblurred sprites and streaks, the wet road, the denoise filter against
+OpenCV's), to float rounding where a blur's sums are taken in another order.
+Every instruction-set tier of the build must give the same bytes as every
+other, so that a picture does not depend on the CPU.
 
 Without the library, or with it switched off, these tests skip, and the last
 section checks the numpy path alone, which is what such an install runs.
@@ -16,6 +17,7 @@ import os
 import subprocess
 import sys
 
+import cv2
 import numpy as np
 import pytest
 
@@ -23,6 +25,9 @@ from weathermentations import _native, mode
 from weathermentations.atmosphere import NightRain, NightSnow
 from weathermentations.atmosphere import rain as rain_module
 from weathermentations.atmosphere.snow import render_flake_field
+from weathermentations.camera import TemporalDenoiseArtifacts
+from weathermentations.camera import denoise as denoise_module
+from weathermentations.lens import DirtSoil
 from weathermentations.utils import photometry
 
 # Built and switched on: with WEATHERMENTATIONS_NATIVE=0 the library is there
@@ -428,6 +433,192 @@ def test_the_whole_wet_road_does_not_depend_on_the_kernels(tier: str, with_puddl
         assert np.array_equal(native, reference), f"seed {seed}"
 
 
+# ------------------------------------------------------- denoise filter
+
+
+def _noisy_blocks(height: int, width: int, seed: int) -> np.ndarray:
+    """Flat blocks with edges between them, a gradient and noise: what an
+    edge-preserving filter has something to do with."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:height, 0:width]
+    blocks = ((xx // 23) * 53 + (yy // 17) * 97) % 200
+    image = blocks[..., None] + 0.2 * xx[..., None] + rng.integers(-12, 13, (height, width, 3))
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
+def _opencv_filter(image: np.ndarray, sigma_s: float, sigma_r: float) -> np.ndarray:
+    return cv2.edgePreservingFilter(
+        image, flags=cv2.RECURS_FILTER, sigma_s=sigma_s, sigma_r=sigma_r
+    )
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+def test_the_denoise_filter_is_opencv_s_to_the_byte(tier: str) -> None:
+    """The kernel is OpenCV's arithmetic in OpenCV's order. Whether that
+    comes to the same bytes rests on the C library's ``powf``, which the
+    transform tries before relying on it: where it has found that it does
+    not, there is nothing to hold the kernel to here."""
+    if not denoise_module._kernel_matches_opencv():
+        pytest.skip("this C library's powf is not the one OpenCV was built against")
+    _native.set_tier(tier)
+    rng = np.random.default_rng(3)
+    shapes = [(1, 1), (1, 40), (40, 1), (2, 3), (37, 53), (96, 128), (5, 201)]
+    for height, width in shapes:
+        image = _noisy_blocks(height, width, seed=height * width)
+        sigma_s, sigma_r = float(rng.uniform(1.0, 200.0)), float(rng.uniform(0.01, 1.0))
+        ours = _native.edge_preserving(image, sigma_s, sigma_r, tabled=False)
+        assert ours is not None
+        assert np.array_equal(ours, _opencv_filter(image, sigma_s, sigma_r)), (height, width)
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+def test_the_tabled_denoise_filter_is_within_a_level_of_the_exact_one(tier: str) -> None:
+    """Fast mode's form: the power from a table of its 766 possible values."""
+    _native.set_tier(tier)
+    image = _noisy_blocks(240, 320, seed=1)
+    for sigma_s, sigma_r in ((4.0, 0.05), (25.0, 0.2), (120.0, 0.6)):
+        exact = _native.edge_preserving(image, sigma_s, sigma_r, tabled=False)
+        tabled = _native.edge_preserving(image, sigma_s, sigma_r, tabled=True)
+        assert exact is not None and tabled is not None
+        assert not np.array_equal(exact, image), "the filter did nothing"
+        difference = np.abs(exact.astype(np.int16) - tabled.astype(np.int16))
+        assert difference.max() <= 1
+        assert (difference > 0).mean() < 1e-3
+
+
+@requires_native
+def test_the_denoise_filter_declines_what_it_was_not_written_for() -> None:
+    grey = np.zeros((16, 16), dtype=np.uint8)
+    four = np.zeros((16, 16, 4), dtype=np.uint8)
+    floats = np.zeros((16, 16, 3), dtype=np.float32)
+    for image in (grey, four, floats):
+        assert _native.edge_preserving(image, 10.0, 0.2, tabled=False) is None
+
+
+@requires_native
+def test_the_denoise_filter_takes_a_view_that_is_not_contiguous() -> None:
+    image = _noisy_blocks(64, 96, seed=2)
+    mirrored = image[:, ::-1]
+    whole = _native.edge_preserving(np.ascontiguousarray(mirrored), 12.0, 0.2, tabled=True)
+    assert np.array_equal(_native.edge_preserving(mirrored, 12.0, 0.2, tabled=True), whole)
+
+
+def test_a_filter_seen_to_differ_from_opencv_is_not_used_in_exact_mode(monkeypatch) -> None:
+    """On a C library whose powf rounds another way, exact mode is OpenCV."""
+    image = _noisy_blocks(48, 64, seed=5)
+    monkeypatch.setattr(denoise_module, "_kernel_is_opencv", False)
+    monkeypatch.setattr(
+        _native, "edge_preserving", lambda *a, **k: pytest.fail("the kernel was called")
+    )
+    assert np.array_equal(
+        denoise_module._edge_preserving(image, 9.0, 0.15), _opencv_filter(image, 9.0, 0.15)
+    )
+
+
+@requires_native
+def test_fast_mode_denoising_depends_on_the_kernels_by_a_level_or_two() -> None:
+    """The one transform whose fast-mode frame is not the same with and
+    without the kernels: with them the filter's power comes from a table,
+    without them it is OpenCV's. Up to three passes of a level each."""
+    transform = TemporalDenoiseArtifacts(p=1.0)
+    image = _noisy_blocks(240, 320, seed=7)
+    mode.set_fast(True)
+    for seed in range(3):
+        transform.set_random_seed(seed)
+        native = transform(image=image)["image"]
+        transform.set_random_seed(seed)
+        with _native.disabled():
+            reference = transform(image=image)["image"]
+        difference = np.abs(native.astype(np.int16) - reference.astype(np.int16))
+        assert difference.max() <= 3
+        assert (difference > 0).mean() < 5e-3
+
+
+# ------------------------------------------------------------ lens dirt
+
+
+def _dirt_inputs(seed: int, pixels: tuple[int, int] = (97, 131)) -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    f32 = np.float32
+    return {
+        "linear": rng.uniform(-0.05, 1.3, (*pixels, 3)).astype(f32),
+        "spread": rng.uniform(0.0, 2.0, (*pixels, 3)).astype(f32),
+        "albedo": rng.uniform(0.2, 0.95, (*pixels, 3)).astype(f32),
+        # Past both ends of what the clips let through.
+        "mask": rng.uniform(-0.2, 1.6, pixels).astype(f32),
+        "luma": rng.uniform(-0.1, 1.2, pixels).astype(f32),
+        "around": rng.uniform(0.0, 0.5, 3).astype(f32),
+    }
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+def test_the_dirt_kernels_are_the_numpy_expressions_to_the_bit(tier: str) -> None:
+    """`DirtSoil.apply` either side of its scatter blur, as numpy writes it."""
+    _native.set_tier(tier)
+    for seed in range(3):
+        v = _dirt_inputs(seed)
+        boost, strength, absorption = 1.5 + seed, 0.35 + 0.2 * seed, 0.03 * (seed + 1)
+        highlight = np.clip((v["luma"] - 0.35) / 0.65, 0.0, 1.0)[..., None]
+        emphasised = v["linear"] * (1.0 + boost * highlight)
+        assert np.array_equal(_native.dirt_emphasise(v["linear"], v["luma"], boost), emphasised)
+
+        mask = v["mask"][..., None]
+        arriving = v["spread"] * (1.0 - 0.4)
+        arriving += v["around"]
+        scattered = arriving * v["albedo"]
+        veil = np.clip(strength * mask, 0.0, 0.95)
+        out = v["linear"] * (1.0 - veil) + scattered * veil
+        body = v["albedo"] * 0.35
+        out = out * (1.0 - absorption * mask) + body * (absorption * mask)
+        ours = _native.dirt_composite(
+            v["linear"], v["spread"], v["mask"], v["albedo"], v["around"],
+            1.0 - 0.4, strength, absorption, 0.35,
+        )
+        assert out.dtype == np.float32
+        assert np.array_equal(ours, out)
+
+
+@requires_native
+def test_the_dirt_kernels_decline_what_they_were_not_written_for() -> None:
+    v = _dirt_inputs(0, (16, 16))
+    grey = v["linear"][..., 0]
+    wide = v["linear"].astype(np.float64)
+    assert _native.dirt_emphasise(grey, v["luma"], 2.0) is None
+    assert _native.dirt_emphasise(wide, v["luma"], 2.0) is None
+    assert _native.dirt_emphasise(v["linear"], v["luma"][:8], 2.0) is None
+    arguments = (v["mask"], v["albedo"], v["around"], 0.6, 0.5, 0.05, 0.35)
+    assert _native.dirt_composite(wide, v["spread"], *arguments) is None
+    assert _native.dirt_composite(v["linear"], v["spread"][:8], *arguments) is None
+    assert (
+        _native.dirt_composite(
+            v["linear"], v["spread"], v["mask"][:8], v["albedo"], v["around"], 0.6, 0.5, 0.05, 0.35
+        )
+        is None
+    )
+
+
+@requires_native
+@pytest.mark.parametrize("fast", [True, False], ids=["fast", "exact"])
+@pytest.mark.parametrize("dtype", [np.uint8, np.float32], ids=["uint8", "float32"])
+def test_dirt_does_not_depend_on_the_kernels_in_either_mode(fast: bool, dtype) -> None:
+    transform = DirtSoil(p=1.0)
+    image = _noisy_blocks(240, 320, seed=11)
+    if dtype is np.float32:
+        image = (image / np.float32(255.0)).astype(np.float32)
+    mode.set_fast(fast)
+    for seed in range(3):
+        transform.set_random_seed(seed)
+        native = transform(image=image)["image"]
+        transform.set_random_seed(seed)
+        with _native.disabled():
+            reference = transform(image=image)["image"]
+        assert not np.array_equal(native, image)
+        assert np.array_equal(native, reference)
+
+
 # ------------------------------------------------------------------ tiers
 
 
@@ -438,6 +629,8 @@ def test_every_tier_gives_the_same_bytes() -> None:
     linear = _linear((200, 300, 3), seed=4)
     flakes = _flakes(300, (200, 300), 60.0, seed=6)
     streaks = _streaks(2000, 200, 8, (1, 8), blur=2.0)
+    frame = _noisy_blocks(200, 300, seed=9)
+    dirt = _dirt_inputs(5)
     results = []
     for tier in _native.tiers():
         _native.set_tier(tier)
@@ -449,6 +642,13 @@ def test_every_tier_gives_the_same_bytes() -> None:
                 photometry.from_linear_unit(linear, 255.0, True, np.uint8),
                 canvas,
                 rain_module.render_streak_layer(200, 200, streaks),
+                _native.edge_preserving(frame, 20.0, 0.2, tabled=False),
+                _native.edge_preserving(frame, 20.0, 0.2, tabled=True),
+                _native.dirt_emphasise(dirt["linear"], dirt["luma"], 3.0),
+                _native.dirt_composite(
+                    dirt["linear"], dirt["spread"], dirt["mask"], dirt["albedo"], dirt["around"],
+                    0.6, 0.6, 0.08, 0.35,
+                ),
             )
         )
     for other in results[1:]:
@@ -474,7 +674,11 @@ def _night_street() -> np.ndarray:
 
 
 @requires_native
-@pytest.mark.parametrize("transform", [NightSnow(p=1.0), NightRain(p=1.0)], ids=["snow", "rain"])
+@pytest.mark.parametrize(
+    "transform",
+    [NightSnow(p=1.0), NightRain(p=1.0), TemporalDenoiseArtifacts(p=1.0)],
+    ids=["snow", "rain", "denoise"],
+)
 def test_a_transform_s_output_does_not_depend_on_the_kernels(transform) -> None:
     """What a user sees: the same uint8 frame either way."""
     image = _night_street()
@@ -510,6 +714,8 @@ def test_without_the_kernels_every_entry_point_declines() -> None:
         assert _native.encode_f32(linear, photometry._LINEAR_TO_SRGB_LUT) is None
         codes = np.zeros((96, 96, 3), dtype=np.uint8)
         assert _native.decode_u8(codes, photometry._U8_TO_LINEAR_LUT) is None
+        assert _native.edge_preserving(codes, 10.0, 0.2, tabled=False) is None
+        assert _native.dirt_emphasise(linear, linear[..., 0], 2.0) is None
         assert np.array_equal(
             photometry.from_linear_unit(linear, 255.0, True, np.uint8),
             _textbook_encode_u8(linear),

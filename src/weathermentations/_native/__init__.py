@@ -42,7 +42,10 @@ import numpy as np
 __all__ = [
     "available",
     "decode_u8",
+    "dirt_composite",
+    "dirt_emphasise",
     "disabled",
+    "edge_preserving",
     "enabled",
     "encode_f32",
     "encode_u8",
@@ -59,7 +62,7 @@ __all__ = [
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 4
+_ABI_VERSION = 6
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -77,6 +80,16 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
         + [ctypes.c_int]
         + [ctypes.c_double] * 5
         + [ctypes.c_int],
+    ),
+    "wm_edge_preserving": (
+        ctypes.c_int,
+        [_pointer, _pointer, ctypes.c_ssize_t, ctypes.c_ssize_t]
+        + [ctypes.c_float, ctypes.c_float, ctypes.c_int],
+    ),
+    "wm_dirt_emphasise": (None, [_pointer] * 3 + [ctypes.c_ssize_t, ctypes.c_float]),
+    "wm_dirt_composite": (
+        None,
+        [_pointer] * 6 + [ctypes.c_ssize_t] + [ctypes.c_float] * 4,
     ),
     "wm_mirror_rows": (
         ctypes.c_int,
@@ -476,5 +489,111 @@ def wet_reflection(
         foot.ctypes.data,
         None if under is None else under.ctypes.data,
         np.ascontiguousarray(sky).reshape(-1).ctypes.data,
+    )
+    return out
+
+
+def edge_preserving(
+    image: np.ndarray, sigma_s: float, sigma_r: float, tabled: bool
+) -> np.ndarray | None:
+    """``cv2.edgePreservingFilter(image, flags=RECURS_FILTER, ...)``; ``None`` if not done.
+
+    For an ``(H, W, 3)`` uint8 image. With ``tabled`` off it is OpenCV's
+    arithmetic in OpenCV's order; ``tabled`` takes the filter's power
+    function from a table of its 766 possible values, which is faster and
+    moves a few pixels in a million by one level.
+    """
+    if not _enabled or image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+        return None
+    assert _library is not None
+    source = np.ascontiguousarray(image)
+    out = np.empty(source.shape, dtype=np.uint8)
+    failed = _library.wm_edge_preserving(
+        source.ctypes.data,
+        out.ctypes.data,
+        source.shape[0],
+        source.shape[1],
+        float(sigma_s),
+        float(sigma_r),
+        int(bool(tabled)),
+    )
+    return None if failed else out
+
+
+def _is_rgb_float32(image: np.ndarray) -> bool:
+    return image.dtype == np.float32 and image.ndim == 3 and image.shape[2] == 3
+
+
+def dirt_emphasise(linear: np.ndarray, luma: np.ndarray, boost: float) -> np.ndarray | None:
+    """``linear * (1 + boost * clip((luma - 0.35) / 0.65, 0, 1))[..., None]``.
+
+    ``DirtSoil``'s highlight-weighted scene, in one pass and with numpy's
+    float32 arithmetic, so the result is the expression's to the bit.
+    ``None`` if not done.
+    """
+    if (
+        not _enabled
+        or not _is_rgb_float32(linear)
+        or luma.dtype != np.float32
+        or luma.shape != linear.shape[:2]
+    ):
+        return None
+    assert _library is not None
+    scene, weights = np.ascontiguousarray(linear), np.ascontiguousarray(luma)
+    out = np.empty(scene.shape, dtype=np.float32)
+    _library.wm_dirt_emphasise(
+        out.ctypes.data, scene.ctypes.data, weights.ctypes.data, weights.size, float(boost)
+    )
+    return out
+
+
+def dirt_composite(
+    linear: np.ndarray,
+    spread: np.ndarray,
+    mask: np.ndarray,
+    albedo: np.ndarray,
+    surroundings: np.ndarray,
+    forward: float,
+    veil_strength: float,
+    absorption: float,
+    body: float,
+) -> np.ndarray | None:
+    """``DirtSoil``'s deposit over the frame, in one pass; ``None`` if not done.
+
+    ``spread`` is the scene through the scatter blur, ``surroundings`` the
+    three values of light arriving from outside the frame, already weighted.
+    The arithmetic and its order are those of ``DirtSoil.apply``.
+    """
+    usable = (
+        _enabled
+        and _is_rgb_float32(linear)
+        and _is_rgb_float32(spread)
+        and _is_rgb_float32(albedo)
+        and spread.shape == linear.shape
+        and albedo.shape == linear.shape
+        and mask.dtype == np.float32
+        and mask.shape == linear.shape[:2]
+        and surroundings.dtype == np.float32
+        and surroundings.size == 3
+    )
+    if not usable:
+        return None
+    assert _library is not None
+    images = [np.ascontiguousarray(v) for v in (linear, spread)]
+    cover, colours = np.ascontiguousarray(mask), np.ascontiguousarray(albedo)
+    around = np.ascontiguousarray(surroundings).reshape(-1)
+    out = np.empty(linear.shape, dtype=np.float32)
+    _library.wm_dirt_composite(
+        out.ctypes.data,
+        images[0].ctypes.data,
+        images[1].ctypes.data,
+        cover.ctypes.data,
+        colours.ctypes.data,
+        around.ctypes.data,
+        cover.size,
+        float(forward),
+        float(veil_strength),
+        float(absorption),
+        float(body),
     )
     return out

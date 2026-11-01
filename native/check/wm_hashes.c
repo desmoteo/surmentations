@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same seven lines. It needs only a
+ * architecture, the program must print the same ten lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -180,5 +180,40 @@ int main(void) {
     WM_TABLE.wet_reflection(road, dry, H, W, H, about_horizon, off_frame, about_foot, reach, sky);
     printf("%-9s mirror   %016llx\n", WM_TABLE.name,
            (unsigned long long)(fnv(road, N * sizeof(float)) ^ fnv(about_foot, W * H * sizeof(float))));
+
+    /* The denoise filter, on a frame with flat areas, a gradient and noise,
+     * with the power taken per pixel and from the table. Both call the
+     * machine's powf, so these two lines also hold one C library to
+     * another. */
+    uint8_t *frame = malloc(N), *filtered = malloc(N);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const float block = (float)(((x / 40) * 53 + (y / 30) * 97) % 200);
+            for (int c = 0; c < 3; c++) {
+                frame[(y * W + x) * 3 + c] =
+                    (uint8_t)(clamp_unit((block + 0.1f * (float)x + 30.0f * uniform()) / 255.0f) * 255.0f);
+            }
+        }
+    }
+    if (WM_TABLE.edge_preserving(frame, filtered, H, W, 25.0f, 0.2f, 0)) {
+        return 1;
+    }
+    printf("%-9s denoise  %016llx\n", WM_TABLE.name, (unsigned long long)fnv(filtered, N));
+    if (WM_TABLE.edge_preserving(frame, filtered, H, W, 25.0f, 0.2f, 1)) {
+        return 1;
+    }
+    printf("%-9s denoise-tabled %010llx\n", WM_TABLE.name, (unsigned long long)fnv(filtered, N));
+
+    /* Lens dirt: the highlight-weighted scene, then the deposit over it. */
+    float *luma = malloc(W * H * sizeof(float)), *cover = malloc(W * H * sizeof(float));
+    for (int i = 0; i < W * H; i++) {
+        luma[i] = uniform() * 1.2f - 0.1f;
+        cover[i] = uniform() * 1.5f - 0.2f;
+    }
+    WM_TABLE.dirt_emphasise(road, linear, luma, W * H, 3.7f);
+    const uint64_t emphasised = fnv(road, N * sizeof(float));
+    WM_TABLE.dirt_composite(road, linear, dry, cover, sharp, sky, W * H, 0.6f, 0.7f, 0.09f, 0.35f);
+    printf("%-9s dirt     %016llx\n", WM_TABLE.name,
+           (unsigned long long)(emphasised ^ fnv(road, N * sizeof(float))));
     return 0;
 }
