@@ -21,6 +21,13 @@ jobs:
           python-version: "3.12"
 
       - name: Build sdist and wheel
+        # A pure-Python wheel, without the native kernels: a wheel holding
+        # them is tagged for this runner's platform (linux_x86_64), which
+        # PyPI does not accept. Publishing binary wheels needs a cibuildwheel
+        # job (docs/native_kernels.md, "Not done"); until then a user gets
+        # the kernels by installing from the sdist with a C compiler present.
+        env:
+          WEATHERMENTATIONS_BUILD_NATIVE: "0"
         run: |
           pip install build
           python -m build

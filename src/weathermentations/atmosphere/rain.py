@@ -88,6 +88,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import _native
 from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
 from weathermentations.depth.normals import horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
@@ -999,6 +1000,60 @@ def streak_geometry(streaks: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     }
 
 
+def _render_streaks_natively(
+    layer: np.ndarray, geometry: dict[str, np.ndarray], streaks: dict[str, np.ndarray]
+) -> np.ndarray:
+    """Draw the streaks the compiled kernel can; return the indices left.
+
+    The kernel sets the pixels OpenCV sets and reads the beading table at the
+    same float32 argument as the loop in :func:`render_streak_layer`, so the
+    quantities below are that loop's scalars, computed for every streak at
+    once in the same order and precision. A streak is left to the loop when a
+    vertex is too near the edge of its patch for the line's width, where
+    OpenCV clips the segment and sets other pixels; with the patches
+    :func:`streak_geometry` makes that is none of them.
+    """
+    everything = np.arange(len(streaks["alpha"]))
+    floats = ("x", "y", "phase")
+    if not _native.enabled() or any(streaks[key].dtype != np.float32 for key in floats):
+        return everything
+    vertices = geometry["vertices"]
+    patch_w, patch_h = geometry["patch_w"], geometry["patch_h"]
+    thickness = streaks["thickness"]
+    # A wide line is a rectangle whose corners lie half the width from its
+    # ends, rounded up for an odd width; they have to be inside the patch.
+    room = np.where(thickness > 1, (thickness + 1) // 2, 0)[:, None]
+    drawable = (
+        (thickness >= 1)
+        & (vertices >= room[..., None]).all(axis=(1, 2))
+        & (vertices[..., 0] < patch_w[:, None] - room).all(axis=1)
+        & (vertices[..., 1] < patch_h[:, None] - room).all(axis=1)
+    )
+
+    scale = np.float32(_BEADING_SCALE)
+    rate = 6.0 * np.pi / np.maximum(streaks["length"].astype(np.float64), 1e-3)
+    rate = rate.astype(np.float32)
+    drawn = _native.render_streaks(
+        layer,
+        np.flatnonzero(drawable),
+        geometry["x0"],
+        geometry["y0"],
+        patch_w,
+        patch_h,
+        vertices,
+        thickness,
+        streaks["alpha"],
+        col_offset=geometry["x0"].astype(np.float32) - streaks["x"],
+        col_rate=rate * geometry["dir_x"] * scale,
+        row_offset=geometry["y0"].astype(np.float32) - streaks["y"],
+        row_rate=rate * geometry["dir_y"] * scale,
+        phase=streaks["phase"] * scale,
+        blur_sigma=streaks["blur_sigma"],
+        beading=_BEADING_LUT,
+    )
+    return np.flatnonzero(~drawable) if drawn else everything
+
+
 def render_streak_layer(
     height: int, width: int, streaks: dict[str, np.ndarray]
 ) -> np.ndarray:
@@ -1015,9 +1070,15 @@ def render_streak_layer(
     Streaks accumulate additively (see the module docstring); they are not
     composited one over the next, so the result does not depend on drawing
     order.
+
+    A streak is a dozen pixels, and drawing one here costs a dozen numpy and
+    OpenCV calls. Where the compiled kernels are installed the whole field is
+    drawn in one call (:func:`_render_streaks_natively`); the loop below is
+    the same picture without them.
     """
     layer = np.zeros((height, width), dtype=np.float32)
     geometry = streak_geometry(streaks)
+    remaining = _render_streaks_natively(layer, geometry, streaks)
     x0s, y0s = geometry["x0"], geometry["y0"]
     patch_ws, patch_hs = geometry["patch_w"], geometry["patch_h"]
     vertices = geometry["vertices"]
@@ -1029,7 +1090,7 @@ def render_streak_layer(
     phases = streaks["phase"]
     xs, ys = streaks["x"], streaks["y"]
 
-    for i in range(len(alphas)):
+    for i in remaining:
         patch_w = int(patch_ws[i])
         patch_h = int(patch_hs[i])
         if patch_w <= 0 or patch_h <= 0:

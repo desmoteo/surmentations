@@ -49,7 +49,7 @@ from weathermentations.atmosphere.night_rain import (
     _beam_profile,
     _frustum_volume,
 )
-from weathermentations.atmosphere.snow import _paste_flake_sprite, snow_fall_speed
+from weathermentations.atmosphere.snow import render_flake_field, snow_fall_speed
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -355,26 +355,20 @@ class NightSnow(WeatherTransform):
         frame_centre = (width / 2.0, height / 2.0)
 
         lit = np.zeros((height, width), dtype=np.float32)
-        for i in range(len(flakes["x"])):
-            _paste_flake_sprite(
-                lit,
-                float(flakes["x"][i]),
-                float(flakes["y"][i]),
-                float(flakes["radius"][i]),
-                float(flakes["blur_radius"][i]),
-                float(flakes["smear"][i]),
-                (float(flakes["dir_x"][i]), float(flakes["dir_y"][i])),
-                # A round aperture. RandomSnow draws polygonal bokeh because a
-                # photographic lens has an iris; a surveillance board lens has
-                # a fixed circular stop, and a flake swept across it is a
-                # capsule, not a parallelogram.
-                blades=0,
-                blade_rotation=0.0,
-                rim_gain=1.0,
-                cats_eye=0.0,
-                frame_centre=frame_centre,
-                gain=float(flakes["brightness"][i]),
-            )
+        render_flake_field(
+            lit,
+            flakes,
+            # A round aperture. RandomSnow draws polygonal bokeh because a
+            # photographic lens has an iris; a surveillance board lens has
+            # a fixed circular stop, and a flake swept across it is a
+            # capsule, not a parallelogram.
+            blades=0,
+            blade_rotation=0.0,
+            rim_gain=1.0,
+            cats_eye=0.0,
+            frame_centre=frame_centre,
+            gain=flakes["brightness"],
+        )
 
         if glare > 0.0 and len(flakes["x"]):
             # Veiling glare, on the unclipped light: what spills is a share of

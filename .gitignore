@@ -22,3 +22,6 @@ diagnostics/
 
 # Output of scripts/benchmark_pipelines.py
 pipeline_samples/
+
+# The compiled kernels, built by hatch_build.py from native/*.c
+src/weathermentations/_native/_wmkernels.*
