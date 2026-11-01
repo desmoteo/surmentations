@@ -55,7 +55,9 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import mode
 from weathermentations.base import WeatherTransform
+from weathermentations.camera import _inprocess
 from weathermentations.camera import codec as _codec
 from weathermentations.diagnostics import record_draw
 
@@ -188,6 +190,14 @@ def _encode_clip(frames: np.ndarray, crf: int, slices: int) -> bytes | None:
     previous group of pictures": something the decoder has, that the stream
     at risk does not depend on until a packet is lost.
     """
+    if _encode_inprocess():
+        stream = _inprocess.encode_clip(frames, crf, slices)
+        if stream is not None:
+            return stream
+    return _binary_encode_clip(frames, crf, slices)
+
+
+def _binary_encode_clip(frames: np.ndarray, crf: int, slices: int) -> bytes | None:
     binary = _codec.ffmpeg_path()
     if binary is None:
         return None
@@ -214,6 +224,16 @@ def _decode_last_frame(
     stream: bytes, height: int, width: int, conceal: bool = True
 ) -> np.ndarray | None:
     """Decode a possibly damaged stream and return its final frame."""
+    if _decode_inprocess():
+        frame = _inprocess.decode_last_frame(stream, height, width, conceal)
+        if frame is not None:
+            return frame
+    return _binary_decode_last_frame(stream, height, width, conceal)
+
+
+def _binary_decode_last_frame(
+    stream: bytes, height: int, width: int, conceal: bool = True
+) -> np.ndarray | None:
     binary = _codec.ffmpeg_path()
     if binary is None:
         return None
@@ -236,6 +256,56 @@ def _decode_last_frame(
         return None
     last = decoded[(count - 1) * frame_bytes : count * frame_bytes]
     return np.frombuffer(last, dtype=np.uint8).reshape(height, width, 3).copy()
+
+
+# Whether PyAV's encoder has been seen to write the binary's slices here: None
+# until it has been tried.
+_inprocess_is_binary: bool | None = None
+
+
+def _pictures(stream: bytes | None) -> list[bytes] | None:
+    """A stream's NAL units without its messages, which name who wrote it."""
+    if stream is None:
+        return None
+    return [unit for unit in split_nal_units(stream) if unit and (unit[0] & 0x1F) != 6]
+
+
+def _reproduces_binary() -> bool:
+    """Whether a clip encoded in this process is the binary's, slice for slice.
+
+    As ``codec.reproduces_binary``, for this transform's encoder settings: a
+    small clip is encoded both ways and the parameter sets and slices
+    compared. The streams differ in one message, which names the libx264
+    release that wrote them and is never put at risk of loss.
+    """
+    global _inprocess_is_binary
+    if _inprocess_is_binary is None:
+        probe = np.random.default_rng(0).integers(0, 256, (12, 16, 3), dtype=np.uint8)
+        probe = np.ascontiguousarray(np.kron(probe, np.ones((8, 8, 1), dtype=np.uint8)))
+        clip = _sliding_clip(probe, 3, (5.0, -2.0))
+        ours = _pictures(_inprocess.encode_clip(clip, 28, 3))
+        theirs = _pictures(_binary_encode_clip(clip, 28, 3))
+        _inprocess_is_binary = ours is not None and ours == theirs
+    return _inprocess_is_binary
+
+
+def _encode_inprocess() -> bool:
+    """As ``codec.use_inprocess``, for this transform's stream."""
+    if not _inprocess.has_encoder("libx264"):
+        return False
+    return _codec.ffmpeg_path() is None or mode.fast() or _reproduces_binary()
+
+
+def _decode_inprocess() -> bool:
+    """Whether a damaged stream is decoded in this process.
+
+    In fast mode, and where there is no binary. Not in exact mode: what an
+    unconcealed loss shows is the decoder's own frame buffer, which is not
+    the same in the two. See :mod:`weathermentations.camera._inprocess`.
+    """
+    if not _inprocess.available():
+        return False
+    return _codec.ffmpeg_path() is None or mode.fast()
 
 
 def _sliding_clip(rgb: np.ndarray, frames: int, shift_px: tuple[float, float]) -> np.ndarray:
@@ -356,11 +426,12 @@ class TransmissionFaults(WeatherTransform):
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        if _codec.ffmpeg_path() is None:
+        if not _codec.codec_available("libx264"):
             raise RuntimeError(
-                "TransmissionFaults needs the `ffmpeg` binary on PATH: it damages a real "
-                "H.264 bitstream and decodes it, and does not approximate the result. "
-                "Install it (apt install ffmpeg / brew install ffmpeg)."
+                "TransmissionFaults needs the `ffmpeg` binary on PATH or PyAV: it damages a "
+                "real H.264 bitstream and decodes it, and does not approximate the result. "
+                "Install one (apt install ffmpeg / brew install ffmpeg, or "
+                "pip install weathermentations[codec])."
             )
         self.packet_loss_range = packet_loss_range
         self.burst_length_range = burst_length_range

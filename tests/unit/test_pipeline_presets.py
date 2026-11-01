@@ -188,9 +188,12 @@ def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
     and it has to work on a machine with no ffmpeg — `surveillance_lite` is
     sold as running anywhere. It used to construct the codec transform anyway,
     at probability zero, and the constructor is what demands the binary."""
+    from weathermentations.camera import _inprocess
     from weathermentations.camera import codec as codec_module
 
     monkeypatch.setattr(codec_module, "ffmpeg_path", lambda: None)
+    # Nor PyAV, which would do in the binary's place.
+    monkeypatch.setattr(_inprocess, "has_encoder", lambda encoder: False)
 
     lite = surveillance_lite(codec=0.0)
     lite.set_random_seed(0)

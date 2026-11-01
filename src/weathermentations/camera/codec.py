@@ -44,9 +44,12 @@ over.
 
 Cost
 ----
-Two ffmpeg subprocesses per call, tens of milliseconds. That is expensive next
-to the array operations elsewhere in this library, so keep ``p`` low rather
-than paying it on every sample.
+Two ffmpeg subprocesses per call, 150 ms or so, nearly all of it starting
+them. That is expensive next to the array operations elsewhere in this
+library, so keep ``p`` low rather than paying it on every sample, or install
+PyAV (``pip install weathermentations[codec]``): the frame is then encoded in
+this process, in 10 ms for H.264 at 512 pixels, and for H.264 it is the same
+frame to the byte. See :mod:`weathermentations.camera._inprocess`.
 """
 
 from __future__ import annotations
@@ -61,7 +64,9 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import mode
 from weathermentations.base import WeatherTransform
+from weathermentations.camera import _inprocess
 
 # H.264 and H.265 both code in 16x16 macroblocks (H.265 calls them coding
 # tree units and allows larger, but 16 is the common denominator and is what
@@ -77,17 +82,71 @@ def ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _run_roundtrip(rgb: np.ndarray, encoder: str, crf: int) -> np.ndarray | None:
-    """Encode one frame with ffmpeg and decode it back. ``None`` on failure."""
-    binary = ffmpeg_path()
-    if binary is None:
-        return None
+def codec_available(encoder: str = "libx264") -> bool:
+    """Whether there is any way here to encode with ``encoder``.
 
+    The ``ffmpeg`` binary, or PyAV in this process.
+    """
+    return ffmpeg_path() is not None or _inprocess.has_encoder(encoder)
+
+
+# Whether PyAV has been seen to give the binary's frame on this installation,
+# by encoder: absent until it has been tried.
+_inprocess_is_binary: dict[str, bool] = {}
+
+
+def reproduces_binary(encoder: str) -> bool:
+    """Whether encoding in this process gives the ``ffmpeg`` binary's frame.
+
+    Tried once per encoder on a small frame at two qualities and not assumed:
+    it rests on two builds of FFmpeg agreeing. See
+    :mod:`weathermentations.camera._inprocess`.
+    """
+    if encoder not in _inprocess_is_binary:
+        probe = np.random.default_rng(0).integers(0, 256, (12, 16, 3), dtype=np.uint8)
+        probe = np.ascontiguousarray(np.kron(probe, np.ones((4, 4, 1), dtype=np.uint8)))
+        same = True
+        for crf in (24, 38):
+            ours = _inprocess.roundtrip(probe, encoder, crf)
+            theirs = _binary_roundtrip(probe, encoder, crf)
+            if ours is None or theirs is None or not np.array_equal(ours, theirs):
+                same = False
+        _inprocess_is_binary[encoder] = same
+    return _inprocess_is_binary[encoder]
+
+
+def use_inprocess(encoder: str) -> bool:
+    """Whether a frame is to be encoded in this process and not by the binary.
+
+    Where PyAV has ``encoder`` and one of: there is no binary; the mode is
+    fast (:mod:`weathermentations.mode`); or PyAV gives the binary's frame
+    here, so that it is the reference by another route.
+    """
+    if not _inprocess.has_encoder(encoder):
+        return False
+    return ffmpeg_path() is None or mode.fast() or reproduces_binary(encoder)
+
+
+def _run_roundtrip(rgb: np.ndarray, encoder: str, crf: int) -> np.ndarray | None:
+    """Encode one frame and decode it back. ``None`` on failure."""
     height, width = rgb.shape[:2]
     # Codecs need even dimensions for 4:2:0 chroma; pad and crop back.
     pad_h, pad_w = height % 2, width % 2
     if pad_h or pad_w:
         rgb = np.pad(rgb, ((0, pad_h), (0, pad_w), (0, 0)), mode="edge")
+    out = None
+    if use_inprocess(encoder):
+        out = _inprocess.roundtrip(np.ascontiguousarray(rgb), encoder, crf)
+    if out is None:
+        out = _binary_roundtrip(rgb, encoder, crf)
+    return None if out is None else np.ascontiguousarray(out[:height, :width])
+
+
+def _binary_roundtrip(rgb: np.ndarray, encoder: str, crf: int) -> np.ndarray | None:
+    """Encode one frame of even size with the ffmpeg binary and decode it back."""
+    binary = ffmpeg_path()
+    if binary is None:
+        return None
     padded_h, padded_w = rgb.shape[:2]
 
     encode = [
@@ -115,8 +174,7 @@ def _run_roundtrip(rgb: np.ndarray, encoder: str, crf: int) -> np.ndarray | None
     expected = padded_h * padded_w * 3
     if len(decoded) < expected:
         return None
-    out = np.frombuffer(decoded[:expected], dtype=np.uint8).reshape(padded_h, padded_w, 3)
-    return out[:height, :width].copy()
+    return np.frombuffer(decoded[:expected], dtype=np.uint8).reshape(padded_h, padded_w, 3)
 
 
 class VideoCodecArtifacts(WeatherTransform):
@@ -172,11 +230,12 @@ class VideoCodecArtifacts(WeatherTransform):
         super().__init__(p=p)
         if codec not in _CODECS:
             raise ValueError(f"codec must be one of {sorted(_CODECS)}, got {codec!r}")
-        if ffmpeg_path() is None:
+        if not codec_available(_CODECS[codec]):
             raise RuntimeError(
-                "VideoCodecArtifacts needs the `ffmpeg` binary on PATH, which is how it "
-                "produces real H.264/H.265 artefacts instead of approximating them. "
-                "Install it (apt install ffmpeg / brew install ffmpeg), or use "
+                "VideoCodecArtifacts needs the `ffmpeg` binary on PATH or PyAV, which is "
+                "how it produces real H.264/H.265 artefacts instead of approximating them. "
+                "Install one (apt install ffmpeg / brew install ffmpeg, or "
+                "pip install weathermentations[codec]), or use "
                 "albumentations' ImageCompression if JPEG artefacts are acceptable — "
                 "note they are a different artefact, not a weaker version of this one."
             )
