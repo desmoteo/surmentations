@@ -9,6 +9,13 @@ to draw from, and running depth estimation at reduced resolution.
 implementation so that the proposals can be judged against numbers rather than
 intuition.
 
+> **Partly overtaken.** This was written before the `native-kernels` branch,
+> and none of its figures have been re-measured. That branch draws rain
+> streaks and snowflakes in C, which supersedes D1, and brings the colour
+> round trip from 31 ms to about 2 ms at 1024 px, which removes most of the
+> case for D2. A2 was done earlier. C2, C3, A1 and D3 stand as written. See
+> [`docs/native_kernels.md`](docs/native_kernels.md).
+
 ## Headline
 
 > **The sampling of physical quantities is 8.5–11.6% of the cost of rain and
