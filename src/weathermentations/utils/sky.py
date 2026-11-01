@@ -33,6 +33,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from weathermentations import _native
 from weathermentations.utils.channels import channel_max
 from weathermentations.utils.filters import wide_blur, wide_dilate
 from weathermentations.utils.photometry import luminance
@@ -169,32 +170,51 @@ def sky_to_depth_edge(
     # says of it. Below the lowest row the grown mask reaches both are zero
     # and so is the result, so it is done on the rows in between: the same
     # values there, and in a street scene half the frame not gone over.
-    reached = np.flatnonzero(
-        (cv2.reduce(grown, 1, cv2.REDUCE_MAX) > 0) | (cv2.reduce(sky, 1, cv2.REDUCE_MAX) > 0)
-    )
+    # (numpy's maximum along a row, not OpenCV's: `cv2.reduce` with
+    # REDUCE_MAX across rows took 8 ms on a 1024-pixel frame, this 0.4.)
+    reached = np.flatnonzero((grown.max(axis=1) > 0) | (sky.max(axis=1) > 0))
     band = slice(int(reached[0]), int(reached[-1]) + 1)
     sky_band, grown_band, depth_band = sky[band], grown[band], relative_depth[band]
     redrawn = np.zeros(sky.shape, dtype=np.float32)
 
     # What the mask already holds is kept unless the depth map plainly says
-    # otherwise. Depth is blurred across every skyline, and holding the
-    # mask's own pixels to the tolerance used for new ones cut a band of sky
-    # out along it: left as photographed while the rest was relit, a pale
-    # outline round every building.
-    plainly_not = np.clip(
-        2.0 - np.abs(depth_band - level) / (_SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE),
-        0.0,
-        1.0,
-    )
-    kept = sky_band * plainly_not
+    # otherwise (`plainly_not`, below). Depth is blurred across every
+    # skyline, and holding the mask's own pixels to the tolerance used for
+    # new ones cut a band of sky out along it: left as photographed while the
+    # rest was relit, a pale outline round every building.
     if linear_rgb is not None:
         # The sky's colour near each pixel, since a sky is not one colour.
         sigma = float(reach)
         weight = wide_blur(sky, sigma)[band]
         of_sky = np.zeros_like(linear_rgb)
         of_sky[band] = linear_rgb[band] * sky_band[..., None]
-        nearby = wide_blur(of_sky, sigma)[band]
-        nearby = nearby / np.maximum(weight, 1e-4)[..., None]
+        nearby_sum = wide_blur(of_sky, sigma)[band]
+        # What follows, the comparison of each pixel with the sky's colour
+        # near it and the redrawn mask, is one compiled pass where there is
+        # one, with this arithmetic in this order: the same mask.
+        done = _native.grow_alike(
+            linear_rgb[band],
+            nearby_sum,
+            weight,
+            sky_band,
+            grown_band,
+            depth_band,
+            level,
+            _SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE,
+            _SKY_COLOUR_TOLERANCE,
+            1e-4,
+            0.02,
+        )
+        if done is not None:
+            redrawn[band] = done
+            return redrawn
+        plainly_not = np.clip(
+            2.0 - np.abs(depth_band - level) / (_SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE),
+            0.0,
+            1.0,
+        )
+        kept = sky_band * plainly_not
+        nearby = nearby_sum / np.maximum(weight, 1e-4)[..., None]
         unlike = channel_max(np.abs(linear_rgb[band] - nearby))
         alike = np.clip(2.0 - unlike / _SKY_COLOUR_TOLERANCE, 0.0, 1.0) * (weight > 0.02)
         # With colour to go by, depth only has to not contradict it: the
@@ -202,6 +222,12 @@ def sky_to_depth_edge(
         # depth map blurred across that roofline, already half building.
         redrawn[band] = np.maximum(kept, grown_band * alike * plainly_not)
         return redrawn
+    plainly_not = np.clip(
+        2.0 - np.abs(depth_band - level) / (_SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE),
+        0.0,
+        1.0,
+    )
+    kept = sky_band * plainly_not
     near_level = np.clip(2.0 - np.abs(depth_band - level) / _SKY_DEPTH_TOLERANCE, 0.0, 1.0)
     redrawn[band] = np.maximum(kept, grown_band * near_level)
     return redrawn

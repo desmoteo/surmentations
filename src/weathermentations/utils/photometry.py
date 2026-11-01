@@ -86,10 +86,19 @@ def _lut_index(image: np.ndarray) -> np.ndarray:
     """Table index of each value: ``int(clip(image, 0, 1) * (size - 1))``.
 
     Scaled first and clipped in place, which is the same number and one
-    full-size temporary fewer. A NaN stays one and is refused by the lookup.
+    full-size temporary fewer.
+
+    A NaN is refused with a ``ValueError``: it is a renderer's bug, and a
+    frame with one must not come out with a black pixel where it was. That
+    used to be left to the conversion to an integer, which on x86-64 makes
+    a NaN an index far out of range that the lookup rejects. On arm64 it
+    makes it 0, a valid index, and the NaN went through as black. So it is
+    looked for, at the cost of one maximum over the frame.
     """
     scaled = np.multiply(image, _LUT_SIZE - 1)
     np.clip(scaled, 0.0, _LUT_SIZE - 1, out=scaled)
+    if scaled.size and np.isnan(scaled.max()):
+        raise ValueError("a NaN reached the conversion out of linear light: a renderer's bug")
     return scaled.astype(np.int32)
 
 

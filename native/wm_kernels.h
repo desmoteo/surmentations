@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WM_ABI_VERSION 7
+#define WM_ABI_VERSION 11
 
 typedef struct {
     const char *name;
@@ -119,6 +119,47 @@ typedef struct {
         float *out, const float *linear, const float *gain, const float *grey,
         const float *sky, const float *cloud, ptrdiff_t pixels,
         float desaturate, float cover_scale, float mean_grey);
+
+    /* A mask grown over the pixels that look like it: for each pixel,
+     * whether it is the mask's colour where the mask's own colour near it is
+     * `nearby_sum` over `weight`, and the mask redrawn from that and the mask
+     * `grown`. With `depth`, a pixel far from the mask's depth `level` is
+     * also let go (sky.sky_to_depth_edge); without it, it is not
+     * (ground.fill_to_edges). `linear` and `nearby_sum` are (pixels, 3),
+     * the rest one value a pixel. */
+    void (*grow_alike)(
+        float *out, const float *linear, const float *nearby_sum, const float *weight,
+        const float *mask, const float *grown, const float *depth, ptrdiff_t pixels,
+        float level, float depth_tolerance, float colour_tolerance, float least_weight,
+        float some_weight);
+
+    /* water_droplets._sample_positions' acceptance: candidates in `order`
+     * are kept while there are fewer than `count`, if no kept one is nearer
+     * than (r_kept + r) * (1 + gap). Writes the kept candidates' indices to
+     * `kept` and returns how many; the arithmetic is the numpy code's, in
+     * double. */
+    ptrdiff_t (*place_apart)(
+        const double *x, const double *y, const double *footprint, const int64_t *order,
+        ptrdiff_t candidates, ptrdiff_t count, double gap, int64_t *kept);
+
+    /* water_droplets._water_surface's lobes, in fast mode: each drop's level
+     * and thickness added into the two (height, width) fields. `lobes` is
+     * (count, 7) and `harmonics` (count, n_harmonics, 2) or NULL, as there;
+     * `orders` holds each harmonic's order. The angle's sines come from a
+     * recurrence, not from atan2 and sin, so the fields agree with numpy's
+     * to float rounding. */
+    void (*water_lobes)(
+        float *level, float *weighted, ptrdiff_t height, ptrdiff_t width, const double *lobes,
+        const double *harmonics, ptrdiff_t count, int n_harmonics, const int32_t *orders,
+        double wobble_radius, double outline_level);
+
+    /* The end of WaterDroplets.apply: `base` blended towards `scattered` by
+     * `fraction` (both may be NULL), then the drops' `layers`, (pixels, 4)
+     * premultiplied colour and coverage, laid over it (may be NULL). The
+     * numpy code's arithmetic in its order. */
+    void (*droplet_composite)(
+        float *out, const float *base, const float *scattered, const float *fraction,
+        const float *layers, ptrdiff_t pixels);
 } wm_kernel_table;
 
 #endif

@@ -45,11 +45,14 @@ __all__ = [
     "dirt_composite",
     "dirt_emphasise",
     "disabled",
+    "droplet_composite",
     "edge_preserving",
     "enabled",
     "encode_f32",
     "encode_u8",
+    "grow_alike",
     "overcast_blend",
+    "place_apart",
     "render_flakes",
     "render_streaks",
     "set_enabled",
@@ -58,13 +61,14 @@ __all__ = [
     "tier",
     "tiers",
     "veil_blend",
+    "water_lobes",
     "wet_composite",
     "wet_reflection",
 ]
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 7
+_ABI_VERSION = 11
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -95,6 +99,20 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
     ),
     "wm_veil_blend": (None, [_pointer] * 7 + [ctypes.c_ssize_t]),
     "wm_overcast_blend": (None, [_pointer] * 6 + [ctypes.c_ssize_t] + [ctypes.c_float] * 3),
+    "wm_grow_alike": (None, [_pointer] * 7 + [ctypes.c_ssize_t] + [ctypes.c_float] * 5),
+    "wm_place_apart": (
+        ctypes.c_ssize_t,
+        [_pointer] * 4 + [ctypes.c_ssize_t] * 2 + [ctypes.c_double, _pointer],
+    ),
+    "wm_water_lobes": (
+        None,
+        [_pointer] * 2
+        + [ctypes.c_ssize_t] * 2
+        + [_pointer] * 2
+        + [ctypes.c_ssize_t, ctypes.c_int, _pointer]
+        + [ctypes.c_double] * 2,
+    ),
+    "wm_droplet_composite": (None, [_pointer] * 5 + [ctypes.c_ssize_t]),
     "wm_mirror_rows": (
         ctypes.c_int,
         [_pointer, ctypes.c_ssize_t, ctypes.c_ssize_t, ctypes.c_double, _pointer, _pointer],
@@ -702,5 +720,193 @@ def overcast_blend(
         float(desaturate),
         float(cover_scale),
         float(mean_grey),
+    )
+    return out
+
+
+def grow_alike(
+    linear: np.ndarray,
+    nearby_sum: np.ndarray,
+    weight: np.ndarray,
+    mask: np.ndarray,
+    grown: np.ndarray,
+    depth: np.ndarray | None,
+    level: float,
+    depth_tolerance: float,
+    colour_tolerance: float,
+    least_weight: float,
+    some_weight: float,
+) -> np.ndarray | None:
+    """A mask grown over the pixels that look like it; ``None`` if not done.
+
+    The end of ``sky.sky_to_depth_edge`` (with ``depth``) and of
+    ``ground.fill_to_edges`` (without): each pixel compared with the mask's
+    colour near it, ``nearby_sum / max(weight, least_weight)``, and the mask
+    kept, or taken from ``grown`` where the pixel is alike and, with
+    ``depth``, near the mask's depth ``level``. ``linear`` and
+    ``nearby_sum`` are ``(H, W, 3)``, the rest ``(H, W)``, all float32. One
+    pass with the numpy code's arithmetic in its order: the same mask.
+    """
+    planes = [weight, mask, grown] + ([] if depth is None else [depth])
+    usable = (
+        _enabled
+        and _is_rgb_float32(linear)
+        and _is_rgb_float32(nearby_sum)
+        and nearby_sum.shape == linear.shape
+        and all(_is_plane_of(plane, linear) for plane in planes)
+    )
+    if not usable:
+        return None
+    assert _library is not None
+    colour, around = np.ascontiguousarray(linear), np.ascontiguousarray(nearby_sum)
+    fields = [np.ascontiguousarray(plane) for plane in planes]
+    out = np.empty(linear.shape[:2], dtype=np.float32)
+    _library.wm_grow_alike(
+        out.ctypes.data,
+        colour.ctypes.data,
+        around.ctypes.data,
+        *(field.ctypes.data for field in fields[:3]),
+        None if depth is None else fields[3].ctypes.data,
+        out.size,
+        float(level),
+        float(depth_tolerance),
+        float(colour_tolerance),
+        float(least_weight),
+        float(some_weight),
+    )
+    return out
+
+
+def place_apart(
+    x: np.ndarray,
+    y: np.ndarray,
+    footprint: np.ndarray,
+    order: np.ndarray,
+    count: int,
+    gap: float,
+) -> np.ndarray | None:
+    """Indices of the candidates kept by greedy placement; ``None`` if not done.
+
+    Candidates are taken in ``order`` and kept, while fewer than ``count``
+    are, if every one already kept is at least ``(r_kept + r) * (1 + gap)``
+    away, ``r`` being the ``footprint``. The arithmetic of
+    ``water_droplets._sample_positions`` in double, so the same candidates.
+    """
+    if not _enabled:
+        return None
+    assert _library is not None
+    columns = [np.ascontiguousarray(v, dtype=np.float64) for v in (x, y, footprint)]
+    taken = np.ascontiguousarray(order, dtype=np.int64)
+    if any(column.shape != columns[0].shape for column in columns) or taken.ndim != 1:
+        return None
+    kept = np.empty(max(0, min(int(count), len(taken))), dtype=np.int64)
+    if kept.size == 0:
+        return kept
+    found = _library.wm_place_apart(
+        *(column.ctypes.data for column in columns),
+        taken.ctypes.data,
+        len(taken),
+        kept.size,
+        float(gap),
+        kept.ctypes.data,
+    )
+    return kept[:found]
+
+
+def water_lobes(
+    level: np.ndarray,
+    weighted: np.ndarray,
+    lobes: np.ndarray,
+    harmonics: np.ndarray | None,
+    orders: tuple[int, ...],
+    wobble_radius: float,
+    outline_level: float,
+) -> bool:
+    """Add every drop's lobe into ``level`` and ``weighted``; ``False`` if not done.
+
+    The lobe loop of ``water_droplets._water_surface``, for its fast mode:
+    the outline's harmonics are taken from the angle's sine and cosine by a
+    recurrence, not from ``arctan2`` and ``sin``, so the fields agree with
+    numpy's to float rounding and not to the bit.
+    """
+    usable = (
+        _enabled
+        and level.dtype == weighted.dtype == np.float32
+        and level.ndim == 2
+        and level.shape == weighted.shape
+        and level.flags.c_contiguous
+        and weighted.flags.c_contiguous
+        and lobes.ndim == 2
+        and lobes.shape[1] == 7
+        and len(orders) <= 8
+    )
+    if not usable:
+        return False
+    assert _library is not None
+    drops = np.ascontiguousarray(lobes, dtype=np.float64)
+    shapes = None
+    if harmonics is not None:
+        shapes = np.ascontiguousarray(harmonics, dtype=np.float64)
+        if shapes.shape != (len(drops), len(orders), 2):
+            return False
+    order_values = np.ascontiguousarray(orders, dtype=np.int32)
+    _library.wm_water_lobes(
+        level.ctypes.data,
+        weighted.ctypes.data,
+        level.shape[0],
+        level.shape[1],
+        drops.ctypes.data,
+        None if shapes is None else shapes.ctypes.data,
+        len(drops),
+        len(orders),
+        order_values.ctypes.data,
+        float(wobble_radius),
+        float(outline_level),
+    )
+    return True
+
+
+def droplet_composite(
+    base: np.ndarray,
+    scattered: np.ndarray | None,
+    fraction: np.ndarray | None,
+    layers: np.ndarray | None,
+) -> np.ndarray | None:
+    """The end of ``WaterDroplets.apply`` in one pass; ``None`` if not done.
+
+    ``base + (scattered - base) * fraction``, then ``out * (1 - layers[..., 3])
+    + layers[..., :3]``: the condensation film and the drops over it, with
+    numpy's arithmetic in its order. ``base`` and ``scattered`` are
+    ``(H, W, 3)``, ``fraction`` ``(H, W)`` or ``(H, W, 1)`` and ``layers``
+    ``(H, W, 4)``, all float32; either step can be left out with ``None``.
+    """
+    if not _enabled or not _is_rgb_float32(base):
+        return None
+    pixels = base.shape[0] * base.shape[1]
+    film = scattered is not None and fraction is not None
+    if film:
+        assert scattered is not None and fraction is not None
+        if not (
+            _is_rgb_float32(scattered)
+            and scattered.shape == base.shape
+            and fraction.dtype == np.float32
+            and fraction.size == pixels
+        ):
+            return None
+    if layers is not None and (layers.dtype != np.float32 or layers.shape != (*base.shape[:2], 4)):
+        return None
+    assert _library is not None
+    source = np.ascontiguousarray(base)
+    light = np.ascontiguousarray(scattered) if film else None
+    share = np.ascontiguousarray(fraction) if film else None
+    drops = None if layers is None else np.ascontiguousarray(layers)
+    out = np.empty(base.shape, dtype=np.float32)
+    _library.wm_droplet_composite(
+        out.ctypes.data,
+        source.ctypes.data,
+        None if light is None else light.ctypes.data,
+        None if share is None else share.ctypes.data,
+        None if drops is None else drops.ctypes.data,
+        pixels,
     )
     return out

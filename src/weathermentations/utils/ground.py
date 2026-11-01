@@ -11,7 +11,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from weathermentations import mode
+from weathermentations import _native, mode
 from weathermentations.utils.channels import channel_max, channel_min
 from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.noise import value_noise
@@ -89,6 +89,13 @@ def fill_to_edges(ground: np.ndarray, linear_rgb: np.ndarray) -> np.ndarray:
     sigma = 0.6 * reach
     weight = wide_blur(ground, sigma, work_sigma=_EDGE_FILL_WORK_SIGMA)
     colour = wide_blur(linear_rgb * ground[..., None], sigma, work_sigma=_EDGE_FILL_WORK_SIGMA)
+    # The comparison and the grown mask are one compiled pass where there is
+    # one, with this arithmetic in this order: the same mask.
+    done = _native.grow_alike(
+        linear_rgb, colour, weight, ground, grown, None, 0.0, 1.0, _EDGE_FILL_TOLERANCE, 1e-4, 0.02
+    )
+    if done is not None:
+        return done
     colour = colour / np.maximum(weight, 1e-4)[..., None]
     distance = channel_max(np.abs(linear_rgb - colour))
     alike = np.clip(2.0 - distance / _EDGE_FILL_TOLERANCE, 0.0, 1.0)

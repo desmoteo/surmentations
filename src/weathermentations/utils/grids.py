@@ -15,6 +15,9 @@ coordinate itself, only of the result.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+import cv2
 import numpy as np
 
 
@@ -41,3 +44,45 @@ def radial_distance(height: int, width: int, cx: float, cy: float) -> np.ndarray
     """``(height, width)`` float32 Euclidean distance from ``(cx, cy)``."""
     yy, xx = pixel_grid(height, width)
     return np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+
+
+# Samples a coarse grid extends past the frame on every side, so that the
+# enlargement interpolates at the frame's edge as it does inside it.
+_COARSE_MARGIN = 2
+
+
+def on_coarse_grid(
+    height: int,
+    width: int,
+    field: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    reduction: int = 4,
+) -> np.ndarray:
+    """``field(yy, xx)`` for every pixel of the frame, worked out on a coarse grid.
+
+    For a field that changes over tens of pixels: a lamp's beam, a veiling
+    glare. ``field`` is given a column of row coordinates and a row of
+    column coordinates, as :func:`pixel_grid` gives them, and is evaluated
+    at the centre of each block of ``reduction`` by ``reduction`` pixels;
+    the result is enlarged bilinearly to ``(height, width)`` float32. That
+    is ``reduction`` squared times fewer evaluations, and as close to the
+    field at every pixel as bilinear interpolation over a block allows: for
+    the night illuminator's beam, within 0.3% of its peak, and that only
+    where the beam's profile is clipped at the corners of the frame. Each
+    field it is used for has its bound tested in ``tests/unit/test_modes.py``.
+    """
+    if reduction <= 1:
+        yy, xx = pixel_grid(height, width)
+        return np.asarray(field(yy, xx), dtype=np.float32) * np.ones((height, width), np.float32)
+    margin = _COARSE_MARGIN
+    work_h = -(-height // reduction) + 2 * margin
+    work_w = -(-width // reduction) + 2 * margin
+    # Where each coarse sample sits on the frame, by the convention the
+    # enlargement below reads them back with.
+    ys = ((np.arange(work_h, dtype=np.float32) - margin + 0.5) * reduction - 0.5).reshape(-1, 1)
+    xs = ((np.arange(work_w, dtype=np.float32) - margin + 0.5) * reduction - 0.5).reshape(1, -1)
+    small = np.ascontiguousarray(np.broadcast_to(field(ys, xs), (work_h, work_w)), np.float32)
+    large = cv2.resize(
+        small, (work_w * reduction, work_h * reduction), interpolation=cv2.INTER_LINEAR
+    )
+    edge = margin * reduction
+    return np.ascontiguousarray(large[edge : edge + height, edge : edge + width])

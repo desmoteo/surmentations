@@ -575,13 +575,22 @@ def test_wdr_base_filter_radius_never_exceeds_its_cap() -> None:
     fell in the gap, so the transform was ten times slower than documented
     for no change in what it rendered.
     """
+    from weathermentations import mode
     from weathermentations.camera.tone_mapping import (
         _BASE_FILTER_MAX_RADIUS_PX,
+        _FAST_BASE_FILTER_MAX_RADIUS_PX,
         _base_filter_scale,
     )
 
-    for radius in np.linspace(2.0, 400.0, 800):
-        factor, at_scale = _base_filter_scale(float(radius))
-        assert at_scale <= _BASE_FILTER_MAX_RADIUS_PX + 1e-6, (radius, factor, at_scale)
-        # ...without downsampling further than the cap requires.
-        assert factor == 1 or radius / (factor - 1) > _BASE_FILTER_MAX_RADIUS_PX
+    before = mode.fast()
+    try:
+        caps = ((False, _BASE_FILTER_MAX_RADIUS_PX), (True, _FAST_BASE_FILTER_MAX_RADIUS_PX))
+        for fast, cap in caps:
+            mode.set_fast(fast)
+            for radius in np.linspace(2.0, 400.0, 800):
+                factor, at_scale = _base_filter_scale(float(radius))
+                assert at_scale <= cap + 1e-6, (fast, radius, factor, at_scale)
+                # ...without downsampling further than the cap requires.
+                assert factor == 1 or radius / (factor - 1) > cap
+    finally:
+        mode.set_fast(before)
