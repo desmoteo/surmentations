@@ -18,7 +18,7 @@ import pytest
 
 import weathermentations
 from weathermentations import _native, mode
-from weathermentations.atmosphere import NightSnow
+from weathermentations.atmosphere import NightSnow, rain
 from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import SensorNoise, TemporalDenoiseArtifacts
 from weathermentations.depth.normals import upward_facing
@@ -182,6 +182,49 @@ def test_normals_read_at_the_depth_map_s_size_find_the_same_ground() -> None:
     in_fast = upward_facing(small)
     mode.set_fast(False)
     assert np.array_equal(in_fast, upward_facing(small))
+
+
+def _street(height: int = 900, width: int = 1200) -> tuple[np.ndarray, np.ndarray]:
+    """A grey road receding under a camera with a box on it, and its depth."""
+    rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+    depth = np.broadcast_to(1.5 * 800.0 / np.maximum(rows - 250.0, 1.0), (height, width)).copy()
+    depth = np.minimum(depth, 60.0)
+    depth[500:700, 400:650] = depth[700, 0]
+    rng = np.random.default_rng(4)
+    scene = np.full((height, width, 3), 0.18, dtype=np.float32)
+    scene[:250] = (0.5, 0.6, 0.75)
+    scene[500:700, 400:650] = (0.4, 0.05, 0.05)
+    scene += rng.normal(0.0, 0.004, scene.shape).astype(np.float32)
+    return depth, np.clip(scene, 0.0, 1.0)
+
+
+def test_the_wet_ground_read_at_the_depth_map_s_size_is_the_same_ground() -> None:
+    """Fast mode reads where the road is wet on a 518-pixel copy and
+    enlarges the map. Same road, same horizon, edges a pixel or two off."""
+    depth, scene = _street()
+    read = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        read[flag] = rain._wet_ground(depth, scene, 60.0, 10.0, 6.0)
+    (fast_wet, fast_horizon), (exact_wet, exact_horizon) = read[True], read[False]
+    assert fast_wet.shape == exact_wet.shape == depth.shape and fast_wet.dtype == np.float32
+    assert 0.2 < (exact_wet > 0.5).mean() < 0.9
+    assert ((fast_wet > 0.5) == (exact_wet > 0.5)).mean() > 0.97
+    assert abs(fast_horizon - exact_horizon) < 0.01 * depth.shape[0]
+    # The box is dry in both, and so is the sky.
+    assert fast_wet[550:650, 450:600].max() < 0.2 and fast_wet[:200].max() < 0.05
+
+
+def test_puddles_laid_out_at_the_depth_map_s_size_cover_the_same_share() -> None:
+    depth, _ = _street()
+    cover = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        cover[flag] = rain._puddles(depth, 1040.0, 10.0, 0.3, np.random.default_rng(8))
+    assert cover[True].shape == cover[False].shape == depth.shape
+    assert cover[False].mean() == pytest.approx(0.3, abs=0.05)
+    assert cover[True].mean() == pytest.approx(cover[False].mean(), abs=0.03)
+    assert np.abs(cover[True] - cover[False]).mean() < 0.05
 
 
 def test_the_ground_pattern_is_folded_to_the_same_place_either_way() -> None:

@@ -922,6 +922,111 @@ static int WM_FN(wet_composite)(
     return 0;
 }
 
+/* Where a wet pixel's reflection comes from (rain._mirrored_rows): for
+ * each pixel, the lowest solid row at or above it, the "foot" of whatever
+ * stands there, and whether that thing is compact enough and the pixel near
+ * enough below it to mirror it about its foot. One sweep down the frame with
+ * a few integers of state per column, where numpy made six frame-sized
+ * arrays. `limit` is the tallest run of solid rows that counts as compact. */
+static int WM_FN(mirror_rows)(
+    const uint8_t *solid, ptrdiff_t height, ptrdiff_t width, double limit,
+    float *about_foot, float *in_reach) {
+    int32_t *state = malloc((size_t)(3 * width) * sizeof(int32_t));
+    uint8_t *was_solid = calloc((size_t)width, 1);
+    if (!state || !was_solid) {
+        free(state), free(was_solid);
+        return 1;
+    }
+    int32_t *restrict foot = state, *restrict run = state + width, *restrict top = state + 2 * width;
+    for (ptrdiff_t x = 0; x < 3 * width; x++) {
+        state[x] = -1;
+    }
+    for (ptrdiff_t y = 0; y < height; y++) {
+        const uint8_t *restrict row = solid + y * width;
+        float *restrict mirrored = about_foot + y * width;
+        float *restrict reach = in_reach + y * width;
+        for (ptrdiff_t x = 0; x < width; x++) {
+            if (row[x]) {
+                if (!was_solid[x]) {
+                    run[x] = (int32_t)y; /* a run of solid rows starts here */
+                }
+                foot[x] = (int32_t)y;
+                top[x] = run[x];
+            }
+            was_solid[x] = row[x];
+            const double about = 2.0 * (foot[x] + 0.5) - (double)y;
+            const int compact = foot[x] >= 0 && top[x] > 0 && (double)(foot[x] - top[x]) < limit;
+            mirrored[x] = (float)about;
+            reach[x] = compact && (double)(float)about >= (double)top[x] ? 1.0f : 0.0f;
+        }
+    }
+    free(state), free(was_solid);
+    return 0;
+}
+
+/* A row of an image at a fractional height: the two rows about it and
+ * their weights, the lower one's being the fraction. (OpenCV's warp does
+ * the same, with the fraction rounded to a 32nd before version 5 and not
+ * since, which is why this is defined here and not copied from it.) */
+typedef struct {
+    const float *upper, *lower;
+    float w_upper, w_lower;
+} wm_row_pair;
+
+static inline wm_row_pair row_pair(
+    const float *image, ptrdiff_t height, ptrdiff_t stride, float row) {
+    const float last = (float)(height - 1);
+    row = row > 0.0f ? row : 0.0f; /* a NaN lands on the first row */
+    row = row < last ? row : last;
+    const float below = floorf(row);
+    const ptrdiff_t whole = (ptrdiff_t)below;
+    const ptrdiff_t next = whole + 1 < height ? whole + 1 : height - 1;
+    wm_row_pair pair;
+    pair.w_lower = row - below;
+    pair.w_upper = 1.0f - pair.w_lower;
+    pair.upper = image + whole * stride;
+    pair.lower = image + next * stride;
+    return pair;
+}
+
+/* The mirror image a wet road shows (rain._apply_ground_wetness): each row
+ * mirrored about the horizon, fading to the sky's radiance where it would
+ * look above the frame, and under a compact object mirrored about the
+ * object's foot instead. Two warps of the frame and three blends, as one
+ * pass. `under` may be NULL. */
+static void WM_FN(wet_reflection)(
+    float *out, const float *source, ptrdiff_t height, ptrdiff_t width, ptrdiff_t rows,
+    const float *about_horizon, const float *off_frame, const float *about_foot,
+    const float *under, const float *sky) {
+    const ptrdiff_t stride = 3 * width;
+    for (ptrdiff_t r = 0; r < rows; r++) {
+        const wm_row_pair far = row_pair(source, height, stride, about_horizon[r]);
+        const float off = off_frame[r], on = 1.0f - off;
+        float *restrict row = out + r * stride;
+        for (ptrdiff_t i = 0; i < stride; i++) {
+            const float mirrored = far.upper[i] * far.w_upper + far.lower[i] * far.w_lower;
+            row[i] = mirrored * on + sky[i % 3] * off;
+        }
+        if (!under) {
+            continue;
+        }
+        const float *restrict weight = under + r * width;
+        const float *restrict foot = about_foot + r * width;
+        for (ptrdiff_t x = 0; x < width; x++) {
+            const float w = weight[x];
+            if (w == 0.0f) {
+                continue; /* numpy's blend with a weight of nothing changes nothing */
+            }
+            const wm_row_pair near = row_pair(source, height, stride, foot[x]);
+            for (int c = 0; c < 3; c++) {
+                const ptrdiff_t i = 3 * x + c;
+                const float mirrored = near.upper[i] * near.w_upper + near.lower[i] * near.w_lower;
+                row[i] = row[i] * (1.0f - w) + mirrored * w;
+            }
+        }
+    }
+}
+
 #ifdef WM_NATIVE
 /* The native tier is compiled with -march=native, for whatever the build
  * machine had. Run on a CPU without one of those instruction sets it would
@@ -974,4 +1079,6 @@ const wm_kernel_table WM_FN(wm_table) = {
     WM_FN(render_flakes),
     WM_FN(render_streaks),
     WM_FN(wet_composite),
+    WM_FN(mirror_rows),
+    WM_FN(wet_reflection),
 };

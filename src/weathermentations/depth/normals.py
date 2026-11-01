@@ -206,6 +206,22 @@ def surface_normals(
     return np.stack(normals, axis=-1).astype(np.float32)
 
 
+def depth_work_size(height: int, width: int) -> tuple[int, int] | None:
+    """``(width, height)`` to read a frame's depth at, or ``None`` for as it is.
+
+    The depth network works at about 518 pixels on the longer side and its
+    map is interpolated up to the frame. Anything read off the map alone,
+    the lie of the ground for one, is as well read at that size and enlarged,
+    at a fraction of the pixels. Fast mode does so for frames more than half
+    as large again; exact mode (:mod:`weathermentations.mode`) never does.
+    """
+    longest = max(height, width)
+    if not mode.fast() or longest <= _REDUCE_ABOVE * _DEPTH_WORK_PX:
+        return None
+    scale = _DEPTH_WORK_PX / longest
+    return max(2, round(width * scale)), max(2, round(height * scale))
+
+
 def upward_facing(
     depth_m: np.ndarray,
     horizontal_fov_deg: float = DEFAULT_HORIZONTAL_FOV_DEG,
@@ -229,10 +245,9 @@ def upward_facing(
     at 1024 pixels are differences of interpolated values.
     """
     height, width = depth_m.shape[:2]
-    longest = max(height, width)
-    if mode.fast() and longest > _REDUCE_ABOVE * _DEPTH_WORK_PX:
-        scale = _DEPTH_WORK_PX / longest
-        size = (max(2, round(width * scale)), max(2, round(height * scale)))
+    size = depth_work_size(height, width)
+    if size is not None:
+        scale = size[0] / width
         small = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
         # The smoothing is a distance in the scene, so it shrinks with the frame.
         sigma = smooth_sigma_px * scale

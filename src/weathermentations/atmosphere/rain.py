@@ -90,7 +90,7 @@ from pydantic import AfterValidator, Field
 
 from weathermentations import _native, mode
 from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
-from weathermentations.depth.normals import horizon_row, upward_facing
+from weathermentations.depth.normals import depth_work_size, horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
@@ -719,49 +719,14 @@ class RandomRain(WeatherTransform):
         wetness = np.zeros((height, width), dtype=np.float32)
         horizon = 0.0
         if draw_wetness:
-            cosine = upward_facing(
-                depth_pm,
-                horizontal_fov_deg=horizontal_fov,
-                camera_pitch_deg=camera_pitch,
+            wetness, horizon = _wet_ground(
+                depth_pm, linear_scene, horizontal_fov, camera_pitch, wetness_falloff
             )
-            # Water runs off a slope rather than lying on it, and does so more
-            # decisively than snow, which is why this exponent is higher than
-            # snow's accumulation falloff.
-            # Level ground is wet all over. The bare power left a real road,
-            # whose estimated normals wander a few degrees, at 40-70% of the
-            # effect, so a soaked road came out half dry.
-            wetness = level_ground_weight(cosine, wetness_falloff)
-            # Up to the foot of whatever stands on it. The depth map blurs
-            # the edge of every object, and the band of road inside that
-            # blur has no orientation to read, so it was left dry: a pale
-            # outline round each car on a dark road.
-            wetness = fill_to_edges(wetness, linear_scene)
-            # Water lies as a film on paving. On grass and crops it is held
-            # in the canopy and the soil, and there is no mirror.
-            wetness *= _paved_weight(linear_scene)
-            # And on ground near enough to be a road. Level ground hundreds of
-            # metres off is terrain, seen at so shallow an angle that a film
-            # on it would be a perfect mirror: a bright band of reflected sky
-            # along the horizon of every landscape.
-            wetness *= np.clip(
-                (_WET_GROUND_FAR_M - depth_pm) / (_WET_GROUND_FAR_M - _WET_GROUND_NEAR_M), 0.0, 1.0
-            )
-            # Fit the horizon on the surface actually being wet, not on the
-            # raw cosine. A distant flat plane's normal points at the camera,
-            # so `n . up` there is sin(pitch) and crosses a lenient threshold
-            # at about 18 degrees of downward pitch -- past which the raw mask
-            # swallows the sky and the fitted horizon jumped from row 120 to
-            # row 49 on the reference frame. The falloff exponent already
-            # excludes those pixels from the render (they carry 1-3% weight
-            # against the road's 41-73%), so fitting on the same mask the
-            # renderer uses keeps the two consistent and holds the estimate at
-            # 123 +- 4 rows across the whole pitch range.
-            horizon = horizon_row(depth_pm, wetness, min_weight=0.05)
 
         puddle_coverage = self.py_random.uniform(*self.puddle_coverage_range)
         puddles = np.zeros((height, width), dtype=np.float32)
         if draw_wetness and puddle_coverage > 0.0:
-            puddles = _puddle_map(depth_pm, focal, camera_pitch, puddle_coverage, rng)
+            puddles = _puddles(depth_pm, focal, camera_pitch, puddle_coverage, rng)
 
         record_draw(
             puddle_coverage=puddle_coverage,
@@ -1267,17 +1232,24 @@ def _mirrored_rows(
     height, width = wetness.shape
     solid = cv2.medianBlur(wetness, 5) < _GROUND_EDGE_WEIGHT
     rows = np.arange(height, dtype=np.int32).reshape(height, 1)
-    # Lowest solid row at or above each pixel, and the top of the unbroken
-    # run of solid pixels that row belongs to.
-    foot = np.maximum.accumulate(np.where(solid, rows, -1), axis=0)
-    above = np.vstack([np.zeros((1, width), dtype=bool), solid[:-1]])
-    run_top = np.maximum.accumulate(np.where(solid & ~above, rows, -1), axis=0)
-    top = np.take_along_axis(run_top, np.clip(foot, 0, None), axis=0)
-
     about_horizon = (2.0 * horizon_px - rows).astype(np.float32)
-    about_foot = (2.0 * (foot + 0.5) - rows).astype(np.float32)
-    compact = (foot >= 0) & (top > 0) & (foot - top < _MAX_REFLECTED_HEIGHT * height)
-    in_reach = (compact & (about_foot >= top)).astype(np.float32)
+
+    # One sweep down the frame in the compiled kernel, or the same thing as
+    # six arrays the size of the frame.
+    swept = _native.mirror_rows(solid, _MAX_REFLECTED_HEIGHT * height)
+    if swept is not None:
+        about_foot, in_reach = swept
+    else:
+        # Lowest solid row at or above each pixel, and the top of the
+        # unbroken run of solid pixels that row belongs to.
+        foot = np.maximum.accumulate(np.where(solid, rows, -1), axis=0)
+        above = np.vstack([np.zeros((1, width), dtype=bool), solid[:-1]])
+        run_top = np.maximum.accumulate(np.where(solid & ~above, rows, -1), axis=0)
+        top = np.take_along_axis(run_top, np.clip(foot, 0, None), axis=0)
+
+        about_foot = (2.0 * (foot + 0.5) - rows).astype(np.float32)
+        compact = (foot >= 0) & (top > 0) & (foot - top < _MAX_REFLECTED_HEIGHT * height)
+        in_reach = (compact & (about_foot >= top)).astype(np.float32)
     # Feathered across the road, so a reflection has a soft side and not a
     # ruled one.
     in_reach = cv2.GaussianBlur(in_reach, (0, 0), sigmaX=max(1.0, 0.004 * width), sigmaY=0.5)
@@ -1289,6 +1261,160 @@ def _mirrored_rows(
 # and one that is soaked, where measured albedos have about halved.
 _DAMP_ALBEDO_RATIO = 0.9
 _SOAKED_ALBEDO_RATIO = 0.5
+
+
+def _read_wet_ground(
+    depth_m: np.ndarray,
+    linear_scene: np.ndarray,
+    horizontal_fov_deg: float,
+    camera_pitch_deg: float,
+    falloff: float,
+) -> tuple[np.ndarray, float]:
+    """Where the ground is wet, ``(H, W)`` in ``[0, 1]``, and the horizon's row.
+
+    Wet ground is *ground*, not "the bottom of the frame". The screen-space
+    band this replaced covered only 49% of the reference frame's road
+    surface and left a seam where it ended; on a camera pitched further down
+    -- the normal CCTV mounting -- the ground fills the frame while a bottom
+    band stays pinned to the bottom third.
+    """
+    cosine = upward_facing(
+        depth_m, horizontal_fov_deg=horizontal_fov_deg, camera_pitch_deg=camera_pitch_deg
+    )
+    # Water runs off a slope rather than lying on it, and does so more
+    # decisively than snow, which is why this exponent is higher than snow's
+    # accumulation falloff. Level ground is wet all over. The bare power left
+    # a real road, whose estimated normals wander a few degrees, at 40-70% of
+    # the effect, so a soaked road came out half dry.
+    wetness = level_ground_weight(cosine, falloff)
+    # Up to the foot of whatever stands on it. The depth map blurs the edge
+    # of every object, and the band of road inside that blur has no
+    # orientation to read, so it was left dry: a pale outline round each car
+    # on a dark road.
+    wetness = fill_to_edges(wetness, linear_scene)
+    # Water lies as a film on paving. On grass and crops it is held in the
+    # canopy and the soil, and there is no mirror.
+    wetness *= _paved_weight(linear_scene)
+    # And on ground near enough to be a road. Level ground hundreds of metres
+    # off is terrain, seen at so shallow an angle that a film on it would be
+    # a perfect mirror: a bright band of reflected sky along the horizon of
+    # every landscape.
+    wetness *= np.clip(
+        (_WET_GROUND_FAR_M - depth_m) / (_WET_GROUND_FAR_M - _WET_GROUND_NEAR_M), 0.0, 1.0
+    )
+    # Fit the horizon on the surface actually being wet, not on the raw
+    # cosine. A distant flat plane's normal points at the camera, so `n . up`
+    # there is sin(pitch) and crosses a lenient threshold at about 18 degrees
+    # of downward pitch -- past which the raw mask swallows the sky and the
+    # fitted horizon jumped from row 120 to row 49 on the reference frame.
+    # The falloff exponent already excludes those pixels from the render
+    # (they carry 1-3% weight against the road's 41-73%), so fitting on the
+    # same mask the renderer uses keeps the two consistent and holds the
+    # estimate at 123 +- 4 rows across the whole pitch range.
+    return wetness, horizon_row(depth_m, wetness, min_weight=0.05)
+
+
+def _wet_ground(
+    depth_m: np.ndarray,
+    linear_scene: np.ndarray,
+    horizontal_fov_deg: float,
+    camera_pitch_deg: float,
+    falloff: float,
+) -> tuple[np.ndarray, float]:
+    """:func:`_read_wet_ground`, at the size the depth map was estimated at.
+
+    Where the ground lies is read off the depth map, and where it stops off
+    the picture next to it; on a large frame both are read on a copy the
+    size the depth network worked at (:func:`depth_work_size`, fast mode
+    only) and the map of wet ground is enlarged. Every step measures in
+    fractions of the frame, so it is the same reading of a smaller picture.
+    At 1024 pixels that is a quarter of the pixels for five passes that were
+    95 ms between them.
+    """
+    height, width = depth_m.shape[:2]
+    size = depth_work_size(height, width)
+    if size is None:
+        return _read_wet_ground(
+            depth_m, linear_scene, horizontal_fov_deg, camera_pitch_deg, falloff
+        )
+    small_depth = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
+    small_scene = cv2.resize(linear_scene, size, interpolation=cv2.INTER_AREA)
+    wetness, horizon = _read_wet_ground(
+        small_depth, small_scene, horizontal_fov_deg, camera_pitch_deg, falloff
+    )
+    wetness = cv2.resize(wetness, (width, height), interpolation=cv2.INTER_LINEAR)
+    # A row of the small frame is `height / size[1]` rows of the large one,
+    # centre to centre.
+    rows = height / size[1]
+    return np.clip(wetness, 0.0, 1.0).astype(np.float32), (horizon + 0.5) * rows - 0.5
+
+
+def _puddles(
+    depth_m: np.ndarray,
+    focal_px: float,
+    camera_pitch_deg: float,
+    coverage: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """:func:`_puddle_map`, laid out at the depth map's size and enlarged.
+
+    A puddle is metres across and its edge is soft; nothing in it needs the
+    frame's own pixels. The random draws are the same at either size.
+    """
+    height, width = depth_m.shape[:2]
+    size = depth_work_size(height, width)
+    if size is None:
+        return _puddle_map(depth_m, focal_px, camera_pitch_deg, coverage, rng)
+    small_depth = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
+    small = _puddle_map(small_depth, focal_px * size[0] / width, camera_pitch_deg, coverage, rng)
+    enlarged = cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
+    return np.clip(enlarged, 0.0, 1.0).astype(np.float32)
+
+
+def _rows_at(source: np.ndarray, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The two whole rows about each fractional row, and the lower one's weight."""
+    height = source.shape[0]
+    clipped = np.clip(rows, 0.0, height - 1.0).astype(np.float32)
+    below = np.floor(clipped)
+    upper = below.astype(np.intp)
+    return upper, np.minimum(upper + 1, height - 1), clipped - below
+
+
+def _mirror_image(
+    source: np.ndarray,
+    about_horizon: np.ndarray,
+    off_frame: np.ndarray,
+    about_foot: np.ndarray,
+    under_object: np.ndarray | None,
+    sky: np.ndarray,
+) -> np.ndarray:
+    """What a wet road reflects, for a band of rows: ``(rows, W, 3)``.
+
+    Each row is the frame mirrored about the horizon, fading to the sky's
+    radiance where the mirror would look above the frame; under a compact
+    object it is mirrored about the object's foot. A mirror about a
+    horizontal line moves whole rows, so the frame read at a fractional row
+    is two rows weighted, and that is all there is to it: the compiled
+    kernel does it in one pass and the numpy below does the same sums.
+    (Exact mode makes the same picture with two of OpenCV's warps, whose
+    interpolation is OpenCV's own and has changed between versions.)
+    """
+    done = _native.wet_reflection(source, about_horizon, off_frame, about_foot, under_object, sky)
+    if done is not None:
+        return done
+    upper, lower, fraction = _rows_at(source, about_horizon.reshape(-1))
+    fraction = fraction.reshape(-1, 1, 1)
+    mirrored = source[upper] * (1.0 - fraction) + source[lower] * fraction
+    reflection: np.ndarray = mirrored * (1.0 - off_frame) + sky.reshape(1, 1, -1) * off_frame
+    if under_object is not None:
+        # Only the pixels something stands over; elsewhere the weight is nothing.
+        ys, xs = np.nonzero(under_object)
+        upper, lower, fraction = _rows_at(source, about_foot[ys, xs])
+        fraction = fraction[:, None]
+        footed = source[upper, xs] * (1.0 - fraction) + source[lower, xs] * fraction
+        weight = under_object[ys, xs][:, None]
+        reflection[ys, xs] = reflection[ys, xs] * (1.0 - weight) + footed * weight
+    return reflection
 
 
 def _apply_ground_wetness(
@@ -1364,17 +1490,6 @@ def _apply_ground_wetness(
     if lamp_gain > 1.0:
         source = linear * (1.0 + (lamp_gain - 1.0) * source_mask(linear)[..., None])
     band_shape = (band_bottom - band_top, width)
-    map_x = np.ascontiguousarray(np.broadcast_to(np.arange(width, dtype=np.float32), band_shape))
-
-    def mirror(source_rows: np.ndarray) -> np.ndarray:
-        map_y = np.clip(np.broadcast_to(source_rows, band_shape), 0.0, height - 1.0)
-        return cv2.remap(
-            source,
-            map_x,
-            np.ascontiguousarray(map_y, dtype=np.float32),
-            interpolation=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
 
     # A reflection that looks above the top of the frame sees something the
     # picture does not contain, which under an open sky is the sky.
@@ -1382,17 +1497,42 @@ def _apply_ground_wetness(
         sky_radiance = veil_radiance_linear(linear)
     margin = _OFF_FRAME_BLEND * height
     off_frame = np.clip((margin - about_horizon) / margin, 0.0, 1.0)[..., None]
-    distant = mirror(about_horizon) * (1.0 - off_frame) + sky_radiance.reshape(1, 1, -1) * off_frame
-    reflection = distant
-    if float(under_object.max()) > 0.0:
-        weight = under_object[..., None]
-        reflection = distant * (1.0 - weight) + mirror(about_foot) * weight
+    footed = float(under_object.max()) > 0.0
+
+    sky = sky_radiance.reshape(1, 1, -1)
+    if mode.fast():
+        reflection = _mirror_image(
+            source, about_horizon, off_frame, about_foot, under_object if footed else None, sky
+        )
+    else:
+        columns = np.arange(width, dtype=np.float32)
+        map_x = np.ascontiguousarray(np.broadcast_to(columns, band_shape))
+
+        def mirror(source_rows: np.ndarray) -> np.ndarray:
+            map_y = np.clip(np.broadcast_to(source_rows, band_shape), 0.0, height - 1.0)
+            return cv2.remap(
+                source,
+                map_x,
+                np.ascontiguousarray(map_y, dtype=np.float32),
+                interpolation=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+
+        reflection = mirror(about_horizon) * (1.0 - off_frame) + sky * off_frame
+        if footed:
+            weight = under_object[..., None]
+            reflection = reflection * (1.0 - weight) + mirror(about_foot) * weight
 
     # A puddle is nearly smooth. The film elsewhere is a rough mirror, which
     # smears a reflection along the line of sight far more than across it:
     # tens of pixels on a large frame, so on a reduced copy in fast mode.
-    sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)[inner]
     rough = wide_blur(reflection, max(1.5, 0.3 * smear), sigma_y=smear)[inner]
+    # The sharp image is weighted by standing water alone. Where there is
+    # none it is weighted by nothing, and need not be made: a damp road, or
+    # one with no puddles drawn, skips a blur of the whole band.
+    sharp = rough
+    if puddles is not None and darkening < _DAMP_ALBEDO_RATIO and puddles[top:bottom].any():
+        sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)[inner]
 
     # Schlick: R = R0 + (1 - R0)(1 - cos t)^5, where t is measured from the
     # surface normal, i.e. from vertical. cos t is the *sine* of the ray's

@@ -133,3 +133,17 @@ WM_EXPORT int wm_wet_composite(
         out, dry, sharp, rough, wetness, puddles, fresnel, film_fresnel, rows, width, ratio,
         spare, film, gloss);
 }
+
+WM_EXPORT int wm_mirror_rows(
+    const uint8_t *solid, ptrdiff_t height, ptrdiff_t width, double limit,
+    float *about_foot, float *in_reach) {
+    return active->mirror_rows(solid, height, width, limit, about_foot, in_reach);
+}
+
+WM_EXPORT void wm_wet_reflection(
+    float *out, const float *source, ptrdiff_t height, ptrdiff_t width, ptrdiff_t rows,
+    const float *about_horizon, const float *off_frame, const float *about_foot,
+    const float *under, const float *sky) {
+    active->wet_reflection(
+        out, source, height, width, rows, about_horizon, off_frame, about_foot, under, sky);
+}

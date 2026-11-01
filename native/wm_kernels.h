@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WM_ABI_VERSION 3
+#define WM_ABI_VERSION 4
 
 typedef struct {
     const char *name;
@@ -66,6 +66,22 @@ typedef struct {
         const float *wetness, const float *puddles, const float *fresnel,
         const float *film_fresnel, ptrdiff_t rows, ptrdiff_t width,
         float ratio, float spare, float film, float gloss);
+
+    /* rain._mirrored_rows: from `solid` (height x width of 0 or 1), the row
+     * each pixel is mirrored about the foot of what stands above it and
+     * whether it is in reach of that. Nonzero if it could not allocate. */
+    int (*mirror_rows)(
+        const uint8_t *solid, ptrdiff_t height, ptrdiff_t width, double limit,
+        float *about_foot, float *in_reach);
+
+    /* The wet road's mirror image for `rows` rows: `source` is the whole
+     * frame, (height, width, 3); `about_horizon` and `off_frame` hold one
+     * value a row, `about_foot` and `under` (which may be NULL) one a
+     * pixel, `sky` three. */
+    void (*wet_reflection)(
+        float *out, const float *source, ptrdiff_t height, ptrdiff_t width, ptrdiff_t rows,
+        const float *about_horizon, const float *off_frame, const float *about_foot,
+        const float *under, const float *sky);
 } wm_kernel_table;
 
 #endif
