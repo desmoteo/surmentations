@@ -394,8 +394,9 @@ geometry (a colour jitter, a blur), `provider.carry(before, after)` says so.
 OpenCV using every core.** A `DataLoader` worker has one, and there the
 picture is different: see the single-core table in
 [`docs/native_kernels.md`](docs/native_kernels.md), where `RandomFog`,
-`RandomRain` and `RandomSnow` are 3 to 7 times faster than they were at
-1024 px.
+`RandomRain` and `RandomSnow` are 5 to 8 times faster than they were at
+1024 px and the geometric mean over all 22 transforms is 2.8 times (2.1 at
+512 px).
 
 These are a laptop under thermal limits: absolute numbers move by up to 2x
 between runs, and the relative ordering plus the cold/warm gap are the parts
