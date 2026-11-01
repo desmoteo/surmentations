@@ -56,6 +56,7 @@ from weathermentations.base import WeatherTransform, first_frame, require_depth_
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
 from weathermentations.lens.dirt import scatter_psf
+from weathermentations.utils.channels import channel_sum
 from weathermentations.utils.color import TYPICAL_SCENE_ALBEDO
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
@@ -207,7 +208,7 @@ class NightFog(WeatherTransform):
         # The halo: what the fog took from each lamp, returned around it.
         # More fog in front of the lamps, wider halo.
         removed = radiance * clipped * (1.0 - one_way)
-        weight = removed.sum(axis=2)
+        weight = channel_sum(removed)
         thickness = float((optical_depth * weight).sum() / max(float(weight.sum()), 1e-9))
         halo = scatter_psf(removed, glow_radius * (0.5 + min(thickness, 3.0)))
 

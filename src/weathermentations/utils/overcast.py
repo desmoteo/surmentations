@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from weathermentations.utils.channels import weighted_colour
 from weathermentations.utils.photometry import luminance
 
 # At full strength: how far the logarithm of each pixel's luminance is pulled
@@ -64,8 +65,7 @@ def apply_overcast(
 
     if has_sky:
         assert sky is not None
-        weight = sky[..., None]
-        sky_colour = (linear_rgb * weight).sum(axis=(0, 1)) / weight.sum()
+        sky_colour = weighted_colour(linear_rgb, sky) / sky.sum()
         saturation = float((sky_colour.max() - sky_colour.min()) / max(sky_colour.max(), 1e-6))
         # A frame that is already grey overhead has less far to go.
         amount *= 0.3 + 0.7 * min(saturation / _CLEAR_SKY_SATURATION, 1.0)
