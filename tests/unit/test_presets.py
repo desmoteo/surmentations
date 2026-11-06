@@ -5,6 +5,7 @@ import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_rain import NightRain
+from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -28,6 +29,7 @@ _DEPTH_FREE = {
     # Lit by the camera's own illuminator rather than by the scene, so unlike
     # every other atmospheric effect here it needs no depth.
     "NightRain": NightRain,
+    "NightSnow": NightSnow,
     "DirtSoil": DirtSoil,
     "SunFlare": SunFlare,
     "HousingOccluders": HousingOccluders,

@@ -46,6 +46,8 @@ _STAGE_ORDER: dict[str, int] = {
     # terms and running them through the scene's reflectance-to-IR conversion
     # would convert them twice.
     "NightRain": 5,
+    # Likewise lit by the illuminator, and for the same reason.
+    "NightSnow": 5,
     "AcFlicker": 6,
     "RollingShutter": 6,
     # ISP: everything the processor does to the raw frame.

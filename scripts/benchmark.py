@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from weathermentations.atmosphere import (  # noqa: E402
     NightRain,
+    NightSnow,
     RandomFog,
     RandomRain,
     RandomSnow,
@@ -84,6 +85,7 @@ DEPTH_FREE = (
     "denoise_artifacts",
     "video_codec",
     "night_rain",
+    "night_snow",
 )
 DEPTH_CONDITIONED = ("fog", "rain", "snow", "night_ir", "cast_shadows")
 
@@ -117,6 +119,7 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "denoise_artifacts": TemporalDenoiseArtifacts(p=1.0),
         # Lit by the camera rather than the scene, so it needs no depth.
         "night_rain": NightRain(p=1.0),
+        "night_snow": NightSnow(p=1.0),
     }
     # Two ffmpeg subprocesses per call, so it is both the slowest transform
     # here and the one whose cost is least about this library.

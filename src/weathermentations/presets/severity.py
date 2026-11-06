@@ -175,6 +175,16 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 # every night frame.
                 "backscatter_range": (_lerp(0.01, 0.10, t), _lerp(0.06, 0.30, t)),
             },
+            "NightSnow": {
+                # The same water-equivalent ladder as RandomSnow, so a night
+                # frame and a day frame at one severity are the same storm.
+                "snowfall_rate_range_mm_h": (_lerp(0.2, 6.0, t), _lerp(1.2, 14.0, t)),
+                "snow_density_range_g_cm3": (_lerp(0.07, 0.03, t), _lerp(0.14, 0.07, t)),
+                # The glow from the flakes too small to resolve. It arrives
+                # with the storm: negligible in a flurry, most of the picture
+                # in a blizzard, which is when an IR camera goes blind.
+                "backscatter_range": (_lerp(0.01, 0.14, t), _lerp(0.06, 0.38, t)),
+            },
             "NightIrMode": {
                 # Severity is how little light there is to work with: a
                 # shorter illuminator reach and more gain, hence more noise.

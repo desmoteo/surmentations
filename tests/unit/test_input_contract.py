@@ -27,7 +27,13 @@ from typing import Any
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import NightRain, RandomFog, RandomRain, RandomSnow
+from weathermentations.atmosphere import (
+    NightRain,
+    NightSnow,
+    RandomFog,
+    RandomRain,
+    RandomSnow,
+)
 from weathermentations.camera import (
     AcFlicker,
     ExposureTransient,
@@ -63,6 +69,7 @@ BUILDERS: dict[str, Callable[[], Any]] = {
         depth_provider=_PROVIDER, p=1.0, accumulation_probability=1.0
     ),
     "NightRain": lambda: NightRain(p=1.0),
+    "NightSnow": lambda: NightSnow(p=1.0),
     "CastShadows": lambda: CastShadows(depth_provider=_PROVIDER, p=1.0),
     "NightIrMode": lambda: NightIrMode(depth_provider=_PROVIDER, p=1.0),
     "WaterDroplets": lambda: WaterDroplets(p=1.0),

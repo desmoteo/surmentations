@@ -29,6 +29,7 @@ import albumentations as A
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_rain import NightRain
+from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -74,6 +75,12 @@ DEFAULT_SEVERITY = 1
 DEFAULT_WEATHER_SEVERITY = 2
 
 
+#: How strongly the infrared ring lights something sitting on the dome,
+#: relative to full scale. It is centimetres from the lamp, so it is lit far
+#: harder than anything in the scene.
+_IR_RING_GLOW = (0.6, 1.6)
+
+
 def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
     """One transform at a severity level, built directly.
 
@@ -100,6 +107,7 @@ def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any
 def _stream(
     *,
     lit_by_mains: bool,
+    infrared: bool,
     dirt: float,
     occluders: float,
     codec: float,
@@ -115,7 +123,19 @@ def _stream(
     stream = [
         # Optics: on the glass, in front of everything the sensor does.
         _at(DirtSoil, "DirtSoil", dirt, severity),
-        _at(HousingOccluders, "HousingOccluders", occluders, severity),
+        # An insect on the dome is a dark silhouette unless the camera's own
+        # infrared ring is lighting it from a few centimetres away, which only
+        # happens in the IR-night state. The transform's default draws the
+        # glow from the whole 0-1.6 range whatever the lighting — right for
+        # exploring it, and here it put glowing white shapes on four daylit
+        # frames in five, a combination these pipelines exist to rule out.
+        _at(
+            HousingOccluders,
+            "HousingOccluders",
+            occluders,
+            severity,
+            glow_range=_IR_RING_GLOW if infrared else (0.0, 0.0),
+        ),
         # Sensor. Mains banding needs artificial light, so outdoors it belongs
         # to the night branches; indoors it would apply all day.
         _at(AcFlicker, "AcFlicker", 0.45 if lit_by_mains else 0.05, severity),
@@ -249,8 +269,15 @@ def _infrared_night(
     Everywhere else the weather is chosen once and applied before the sensor.
     Here it cannot be, because rain lit by the camera's own illuminator has to
     follow the reflectance-to-infrared conversion rather than precede it — the
-    streaks are already in infrared terms. Snow and fog still go before it:
-    they veil the *scene*, and the sensor then sees the veiled scene.
+    streaks are already in infrared terms. Fog still goes before it: it veils
+    the *scene*, and the sensor then sees the veiled scene.
+
+    Snow is split in two for the same reason. Its veil and whatever has
+    settled belong to the scene and go before the conversion; the falling
+    flakes are lit by the lamp and come after it, as `NightSnow`. Left to
+    `RandomSnow` alone they went through the conversion with everything else
+    and were lit by the depth of whatever was *behind* them, which made a
+    flake in front of the sky as dark as the sky.
 
     So this duplicates the shared tail across the four weather states rather
     than sharing one copy. That costs four sets of constructed objects and no
@@ -261,7 +288,7 @@ def _infrared_night(
     ir = _at(NightIrMode, "NightIrMode", 1.0, severity, depth_provider=depth_provider)
 
     def _with(*before: Any) -> list[Any]:
-        return [*before, *_stream(lit_by_mains=True, severity=severity, **tail)]
+        return [*before, *_stream(lit_by_mains=True, infrared=True, severity=severity, **tail)]
     return A.OneOf(
         [
             A.Sequential(
@@ -276,9 +303,11 @@ def _infrared_night(
                 _with(
                     _at(
                         RandomSnow, "RandomSnow", 1.0, weather_severity,
-                        depth_provider=depth_provider,
+                        # Veil and settled snow only; the flakes are NightSnow's.
+                        depth_provider=depth_provider, max_flakes=0,
                     ),
                     ir,
+                    _at(NightSnow, "NightSnow", 1.0, weather_severity),
                     _at(WaterDroplets, "WaterDroplets", wet_snow, severity),
                 ),
                 p=snow,
@@ -376,7 +405,7 @@ def surveillance(
                                 **weather,
                             ),
                             _at(SunFlare, "SunFlare", 0.12, severity),
-                            *_stream(lit_by_mains=False, severity=severity, **tail),
+                            *_stream(lit_by_mains=False, infrared=False, severity=severity, **tail),
                         ],
                         p=day,
                     ),
@@ -405,7 +434,7 @@ def surveillance(
                                 assumed_temperature_range_k=(4900.0, 5400.0),
                                 actual_temperature_range_k=(3900.0, 4600.0),
                             ),
-                            *_stream(lit_by_mains=True, severity=severity, **tail),
+                            *_stream(lit_by_mains=True, infrared=False, severity=severity, **tail),
                         ],
                         p=lit_night,
                     ),
@@ -481,7 +510,7 @@ def surveillance_lite(
                         [
                             _at(WaterDroplets, "WaterDroplets", droplets, severity),
                             _at(SunFlare, "SunFlare", 0.12, severity),
-                            *_stream(lit_by_mains=False, severity=severity, **tail),
+                            *_stream(lit_by_mains=False, infrared=False, severity=severity, **tail),
                         ],
                         p=1.0 - night,
                     ),
@@ -497,7 +526,7 @@ def surveillance_lite(
                     A.Sequential(
                         [
                             _at(WaterDroplets, "WaterDroplets", droplets, severity),
-                            *_stream(lit_by_mains=True, severity=severity, **tail),
+                            *_stream(lit_by_mains=True, infrared=False, severity=severity, **tail),
                         ],
                         p=night,
                     ),

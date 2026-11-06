@@ -174,6 +174,7 @@ def _paste_flake_sprite(
     rim_gain: float,
     cats_eye: float,
     frame_centre: tuple[float, float],
+    gain: float = 1.0,
 ) -> None:
     """Max-blend one flake's sprite into ``canvas``.
 
@@ -186,7 +187,8 @@ def _paste_flake_sprite(
     far larger than the flake and correspondingly translucent.
 
     ``smear_px`` is the full length of the flake's motion streak over the
-    exposure.
+    exposure. ``gain`` scales the whole sprite, for a caller whose flakes are
+    not all equally lit — by a lamp at the camera, say, rather than the sky.
     """
     render_radius = max(0.5, float(np.hypot(radius_px, blur_radius_px)))
     half_smear = 0.5 * smear_px / render_radius
@@ -237,7 +239,7 @@ def _paste_flake_sprite(
     # to the static one: a disc swept along a segment gains 2*half_smear/pi.
     defocus_coverage = min(1.0, (radius_px / render_radius) ** 2)
     smear_area_ratio = 1.0 + 2.0 * half_smear / np.pi
-    sprite = sprite * (defocus_coverage / smear_area_ratio)
+    sprite = sprite * (gain * defocus_coverage / smear_area_ratio)
 
     ksize = max(1, int(render_radius * 0.12)) | 1
     if ksize > 1:
