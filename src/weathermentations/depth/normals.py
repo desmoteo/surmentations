@@ -26,10 +26,32 @@ measurement:
   (see ``depth/scale.py``), so the normals are reliable in direction but not
   in magnitude, and the depth is smoothed before differencing — raw
   gradients of a learned depth map are dominated by its own noise.
-* Depth discontinuities (an object's silhouette against a distant
-  background) produce enormous fake gradients, which back-project to
-  surfaces nearly edge-on to the camera. Those read as *vertical*, so they
-  correctly receive no snow, but it is luck rather than design.
+* Depth discontinuities (an object's silhouette against what is behind it)
+  are not surfaces, and differencing across one invents a surface that joins
+  the two sides. That used to be left to luck, and the luck ran out in two
+  visible ways. Where the far side is *above* the near one — a treeline
+  against the sky — the invented surface recedes upward exactly as ground
+  does, so it collected a bright rim of snow. And because the depth was
+  blurred first, every object's outline was smeared into a band several
+  pixels wide that read as "not ground": the wet-road darkening stopped short
+  of every car and left it standing in a dry halo.
+
+  So derivatives are **one-sided** — each pixel takes its tangent from
+  whichever neighbour is on its own side of the jump — the depth is blurred
+  by one pixel rather than three, and a pixel both of whose neighbours are a
+  large step away is treated as lying on an edge rather than on a surface.
+  Measured on the reference photo, the snow weight along the skyline fell
+  from 0.34 to 0.01, and the road beside a car, which had come out up to
+  10.9% brighter than open road in the same row, is now within 5.4%. That is
+  halved, not gone: what remains is the softness of the depth map itself,
+  which is upsampled from a few hundred pixels and cannot place a silhouette
+  to the pixel.
+
+  Snapping the result to the *image's* edges with a guided filter was tried
+  and rejected on that same measurement: it scored worse than the original
+  (23.5%), because wherever the photograph has contrast that the geometry
+  does not — lane markings, a painted kerb — the filter copies it into the
+  mask.
 * Nothing here models shelter: the underside of a bridge faces up and will
   be given snow it would never receive in reality.
 """
@@ -45,52 +67,106 @@ import numpy as np
 DEFAULT_HORIZONTAL_FOV_DEG = 60.0
 
 
-def surface_normals(
-    depth_m: np.ndarray,
-    horizontal_fov_deg: float = DEFAULT_HORIZONTAL_FOV_DEG,
-    smooth_sigma_px: float = 3.0,
-) -> np.ndarray:
-    """``(H, W, 3)`` unit surface normals in camera coordinates, from metric depth.
+# Baseline, in pixels, of the one-sided differences. Two rather than one:
+# monocular depth is noisy pixel to pixel, and a longer baseline averages that
+# down without smearing the depth itself across edges the way a blur does.
+_DIFFERENCE_STEP_PX = 2
 
-    Camera convention: ``+x`` right, ``+y`` down, ``+z`` into the scene. A
-    surface facing the camera therefore has a normal near ``(0, 0, -1)``, and
-    a horizontal ground plane has one near ``(0, -1, 0)``.
+
+_Planes = tuple[np.ndarray, np.ndarray, np.ndarray]
+
+
+def _one_sided_tangent(point: _Planes, axis: int, step: int) -> _Planes:
+    """Derivative of the 3-D ``point`` field along ``axis`` that does not cross depth jumps.
+
+    Every pixel has two neighbours along an axis and so two candidate
+    tangents. On a smooth surface they agree. At a silhouette one of them
+    spans the jump to whatever is behind, and the other stays on the pixel's
+    own surface — which is recognisably the one with the smaller change in
+    depth. Taking that one gives each side of an edge its own normal instead
+    of both sides sharing a fictitious one.
+
+    ``point`` and the result are ``(x, y, z)`` as three separate planes: every
+    step downstream is a per-component expression, and keeping the components
+    apart is several times faster than interleaving them in one array.
     """
+    size = point[2].shape[axis]
+    if size < 2:
+        return (np.zeros_like(point[0]), np.zeros_like(point[1]), np.zeros_like(point[2]))
+    step = max(1, min(step, (size - 1) // 2))
+
+    def along(start: int | None, stop: int | None) -> tuple[slice, ...]:
+        index = [slice(None), slice(None)]
+        index[axis] = slice(start, stop)
+        return tuple(index)
+
+    def delta(plane: np.ndarray) -> np.ndarray:
+        # delta[i] = plane[i + step] - plane[i]: the forward difference at i
+        # and the backward difference at i + step.
+        difference: np.ndarray = plane[along(step, None)] - plane[along(None, -step)]
+        return difference
+
+    depth_delta = delta(point[2])
+    use_forward: np.ndarray | None = None
+    if size > 2 * step:
+        use_forward = np.abs(depth_delta[along(step, None)]) <= np.abs(
+            depth_delta[along(None, -step)]
+        )
+
+    def tangent(difference: np.ndarray) -> np.ndarray:
+        result = np.empty((point[2].shape), dtype=np.float32)
+        # Within `step` of either border only one neighbour exists.
+        result[along(None, step)] = difference[along(None, step)]
+        result[along(-step, None)] = difference[along(-step, None)]
+        if use_forward is not None:
+            result[along(step, -step)] = np.where(
+                use_forward, difference[along(step, None)], difference[along(None, -step)]
+            )
+        return result
+
+    return (tangent(delta(point[0])), tangent(delta(point[1])), tangent(depth_delta))
+
+
+# Relative change in depth across the difference baseline above which a
+# pixel is taken to sit *on* a silhouette rather than on a surface. A ground
+# plane only reaches this within a dozen rows of its own horizon, where it is
+# edge-on and carries nothing anyway; the ramp between a treetop and the sky
+# behind it exceeds it several times over.
+_SILHOUETTE_RELATIVE_JUMP = 0.2
+
+
+def _normals_and_jump(
+    depth_m: np.ndarray, horizontal_fov_deg: float, smooth_sigma_px: float
+) -> tuple[_Planes, np.ndarray]:
+    """Unit normals, as planes, and the relative depth change each was computed across."""
     height, width = depth_m.shape[:2]
-    # float() matters: np.tan returns a float64 scalar, and dividing the
-    # float32 coordinate grids by it would promote the whole back-projection
-    # to float64 — which cv2.Sobel then refuses to write into a CV_32F output.
     focal = float(width / (2.0 * np.tan(np.deg2rad(horizontal_fov_deg) / 2.0)))
     cx, cy = width / 2.0, height / 2.0
 
-    # Smooth before differencing: the gradient of a learned depth map is
-    # otherwise mostly the network's own high-frequency noise.
+    # Smoothed only as much as it must be. The gradient of a learned depth
+    # map is noisy, but every pixel of blur also spreads each silhouette into
+    # a ramp that one-sided differences cannot step around. One pixel is the
+    # measured compromise: none at all left row-to-row ripple in the result
+    # eleven times the original's, visible as scanlines inside a dark shadow.
     depth: np.ndarray = depth_m.astype(np.float32)
     if smooth_sigma_px > 0.1:
         depth = cv2.GaussianBlur(depth, (0, 0), sigmaX=smooth_sigma_px)
 
-    u = np.arange(width, dtype=np.float32).reshape(1, width) - cx
-    v = np.arange(height, dtype=np.float32).reshape(height, 1) - cy
+    # float32 scalars throughout: a float64 one would promote every plane.
+    u = (np.arange(width, dtype=np.float32).reshape(1, width) - np.float32(cx)) / np.float32(focal)
+    v = (np.arange(height, dtype=np.float32).reshape(height, 1) - np.float32(cy)) / np.float32(
+        focal
+    )
+    point: _Planes = (u * depth, v * depth, depth)
 
-    point_x = u * depth / focal
-    point_y = v * depth / focal
-    point_z = depth
+    ux, uy, uz = _one_sided_tangent(point, axis=1, step=_DIFFERENCE_STEP_PX)
+    vx, vy, vz = _one_sided_tangent(point, axis=0, step=_DIFFERENCE_STEP_PX)
 
-    # Tangent vectors along the image axes. Sobel gives a slightly smoothed
-    # central difference, which suits a noisy depth map better than a raw one.
-    def d_du(field: np.ndarray) -> np.ndarray:
-        return cv2.Sobel(field, cv2.CV_32F, 1, 0, ksize=3)
-
-    def d_dv(field: np.ndarray) -> np.ndarray:
-        return cv2.Sobel(field, cv2.CV_32F, 0, 1, ksize=3)
-
-    tangent_u = np.stack([d_du(point_x), d_du(point_y), d_du(point_z)], axis=-1)
-    tangent_v = np.stack([d_dv(point_x), d_dv(point_y), d_dv(point_z)], axis=-1)
-
-    normals = np.cross(tangent_u, tangent_v)
-    norm = np.linalg.norm(normals, axis=-1, keepdims=True)
-    normals = np.divide(normals, norm, out=np.zeros_like(normals), where=norm > 1e-8)
-
+    # n = tangent_u x tangent_v
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    length = np.sqrt(nx * nx + ny * ny + nz * nz)
     # Orient consistently toward the camera, or half the frame comes out
     # inverted depending on which way the cross product happened to fall.
     # The test has to be against the *view direction* (the camera sits at the
@@ -98,17 +174,36 @@ def surface_normals(
     # of n_z: a horizontal ground plane under a level camera has the normal
     # (0, -1, 0), whose z component is exactly zero, so an n_z test leaves
     # precisely the most important surface in the scene arbitrarily signed.
-    point = np.stack([point_x, point_y, point_z], axis=-1)
-    facing = np.sum(normals * point, axis=-1, keepdims=True)
-    flip = np.where(facing > 0.0, -1.0, 1.0).astype(np.float32)
-    return (normals * flip).astype(np.float32)
+    facing = nx * point[0] + ny * point[1] + nz * point[2]
+    scale = np.where(facing > 0.0, np.float32(-1.0), np.float32(1.0)) / np.maximum(
+        length, np.float32(1e-8)
+    )
+    scale[length <= 1e-8] = 0.0
+
+    jump = np.maximum(np.abs(uz), np.abs(vz)) / np.maximum(depth, np.float32(1e-6))
+    return (nx * scale, ny * scale, nz * scale), jump
+
+
+def surface_normals(
+    depth_m: np.ndarray,
+    horizontal_fov_deg: float = DEFAULT_HORIZONTAL_FOV_DEG,
+    smooth_sigma_px: float = 1.0,
+) -> np.ndarray:
+    """``(H, W, 3)`` unit surface normals in camera coordinates, from metric depth.
+
+    Camera convention: ``+x`` right, ``+y`` down, ``+z`` into the scene. A
+    surface facing the camera therefore has a normal near ``(0, 0, -1)``, and
+    a horizontal ground plane has one near ``(0, -1, 0)``.
+    """
+    normals, _jump = _normals_and_jump(depth_m, horizontal_fov_deg, smooth_sigma_px)
+    return np.stack(normals, axis=-1).astype(np.float32)
 
 
 def upward_facing(
     depth_m: np.ndarray,
     horizontal_fov_deg: float = DEFAULT_HORIZONTAL_FOV_DEG,
     camera_pitch_deg: float = 0.0,
-    smooth_sigma_px: float = 3.0,
+    smooth_sigma_px: float = 1.0,
 ) -> np.ndarray:
     """``(H, W)`` in ``[0, 1]``: how strongly each pixel's surface faces upward.
 
@@ -120,14 +215,25 @@ def upward_facing(
     which is the usual mounting for a surveillance camera and rotates world
     "up" away from the image's vertical axis.
     """
-    normals = surface_normals(depth_m, horizontal_fov_deg, smooth_sigma_px)
+    (_nx, ny, nz), jump = _normals_and_jump(depth_m, horizontal_fov_deg, smooth_sigma_px)
 
     # World up expressed in camera coordinates. With no pitch that is -y
     # (image y grows downward); pitching the camera down tilts it toward -z.
     pitch = np.deg2rad(camera_pitch_deg)
-    up = np.array([0.0, -np.cos(pitch), -np.sin(pitch)], dtype=np.float32)
+    cosine = ny * np.float32(-np.cos(pitch)) + nz * np.float32(-np.sin(pitch))
 
-    return np.clip(normals @ up, 0.0, 1.0).astype(np.float32)
+    # A pixel whose *smaller* depth step is still a large fraction of its
+    # depth is not on a surface at all: it is on the blurred edge between two
+    # of them, and has no orientation worth reading.
+    on_surface = 1.0 / (1.0 + (jump / np.float32(_SILHOUETTE_RELATIVE_JUMP)) ** 4)
+    facing_up: np.ndarray = (np.clip(cosine, 0.0, 1.0) * on_surface).astype(np.float32)
+
+    # The choice between a pixel's two neighbours flips from one pixel to the
+    # next along an edge, which leaves the outline of every object stepped.
+    # A one-pixel blur of the *result* takes that off without moving the edge.
+    if smooth_sigma_px > 0.1:
+        facing_up = cv2.GaussianBlur(facing_up, (0, 0), sigmaX=smooth_sigma_px)
+    return np.clip(facing_up, 0.0, 1.0).astype(np.float32)
 
 
 def horizon_row(
