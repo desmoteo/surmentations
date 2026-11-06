@@ -161,3 +161,27 @@ def test_night_rain_replaces_daylight_rain_under_infrared() -> None:
     assert not any("RandomRain" in s for s in night_rain), (
         "a frame got both the daylight and the illuminated rain model"
     )
+
+
+def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``codec=0.0`` is the documented setting for frames decoded from video,
+    and it has to work on a machine with no ffmpeg — `surveillance_lite` is
+    sold as running anywhere. It used to construct the codec transform anyway,
+    at probability zero, and the constructor is what demands the binary."""
+    from weathermentations.camera import codec as codec_module
+
+    monkeypatch.setattr(codec_module, "ffmpeg_path", lambda: None)
+
+    lite = surveillance_lite(codec=0.0)
+    lite.set_random_seed(0)
+    image = np.full((64, 64, 3), 120, dtype=np.uint8)
+    assert lite(image=image)["image"].shape == image.shape
+
+    surveillance(SharedDepthProvider(_GroundPlane()), codec=0.0)
+
+    # Asking for the codec stage without the binary still fails loudly, at
+    # construction, rather than silently training without it.
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        surveillance_lite(codec=0.2)

@@ -112,7 +112,7 @@ def _stream(
     flat list and cannot see inside the containers these pipelines are built
     from. ``tests/unit/test_pipeline_presets.py`` checks the order still holds.
     """
-    return [
+    stream = [
         # Optics: on the glass, in front of everything the sensor does.
         _at(DirtSoil, "DirtSoil", dirt, severity),
         _at(HousingOccluders, "HousingOccluders", occluders, severity),
@@ -129,9 +129,15 @@ def _stream(
             0.30 if lit_by_mains else 0.12,
             severity,
         ),
-        # Transmission, last: it acts on the finished picture.
-        _at(VideoCodecArtifacts, "VideoCodecArtifacts", codec, severity),
     ]
+    # Transmission, last: it acts on the finished picture. Left out entirely
+    # at probability zero rather than constructed and never fired, because
+    # constructing it requires the ffmpeg binary — and `codec=0.0` is both the
+    # documented setting for frames decoded from video and the only way to run
+    # these pipelines on a machine without ffmpeg.
+    if codec > 0.0:
+        stream.append(_at(VideoCodecArtifacts, "VideoCodecArtifacts", codec, severity))
+    return stream
 
 
 def weather_state(

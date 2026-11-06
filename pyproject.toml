@@ -29,7 +29,13 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "albumentations>=1.4",
+    # 2.0 is the real floor, not a preference: the InitSchema validators
+    # (`check_range_bounds`), per-transform seeding (`py_random`,
+    # `random_generator`) and `get_params_dependent_on_data` this library is
+    # built on do not exist in 1.4.x in the form used here, and the package
+    # fails at import or construction on every 1.4 release tried (1.4.0,
+    # 1.4.21, 1.4.24). Verified working on 2.0.0, 2.0.4 and 2.0.8.
+    "albumentations>=2.0",
     "numpy>=1.24",
     "opencv-python-headless>=4.8",
     "torch>=2.1",

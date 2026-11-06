@@ -100,6 +100,7 @@ from weathermentations.utils.precipitation import (
     snow_extinction_coefficient,
     snow_number_density,
     snow_physical_diameter,
+    width_cut_for_budget,
 )
 
 _ACCUMULATION_COLOR = np.array([235.0, 240.0, 245.0])
@@ -574,9 +575,27 @@ class RandomSnow(WeatherTransform):
             self.min_flake_width_px,
             size_scale=size_scale,
         )
-        count = int(
-            min(self.max_flakes, round(density * volume * visible * self.flake_count_scale))
+        population = density * volume * visible * self.flake_count_scale
+
+        # When the budget binds, raise the width threshold rather than
+        # truncating the field — the same rule rain follows, for the same
+        # reason. Capping the count alone draws an arbitrary subset, so past
+        # the cap a heavier snowfall stops looking heavier; at 1920 px and
+        # severity 5 that was five draws in six, each losing about a fifth of
+        # its flakes at random. Raising the cut keeps the flakes that are
+        # drawn the widest ones and hands the rest to the veil, which is what
+        # already represents everything too small to draw.
+        width_cut = width_cut_for_budget(
+            population,
+            self.max_flakes,
+            slope,
+            *self.flake_diameter_range_mm,
+            *self.distance_range_m,
+            focal,
+            self.min_flake_width_px,
+            size_scale=size_scale,
         )
+        count = int(min(self.max_flakes, round(population)))
 
         angle = self.py_random.uniform(*self.fall_angle_range)
         flutter = self.py_random.uniform(*self.flutter_range)
@@ -594,7 +613,7 @@ class RandomSnow(WeatherTransform):
             *self.flake_diameter_range_mm,
             *self.distance_range_m,
             focal,
-            self.min_flake_width_px,
+            width_cut,
             size_scale=size_scale,
         )
         count = len(melted_mm)
@@ -694,6 +713,8 @@ class RandomSnow(WeatherTransform):
             volume_m3=volume,
             number_density_per_m3=density,
             resolvable_fraction=visible,
+            population=population,
+            width_cut_px=width_cut,
             count_requested=count,
             veil_beta=veil_beta,
             accumulation_falloff=accumulation_falloff,

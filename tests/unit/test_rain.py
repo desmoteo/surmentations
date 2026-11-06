@@ -363,6 +363,56 @@ def test_gamma_drop_size_distribution_reduces_to_marshall_palmer() -> None:
     assert exponential.mean() == pytest.approx(analytic_mean, rel=0.05)
 
 
+def test_the_transform_samples_the_drop_size_distribution_it_was_asked_for(
+    provider: SharedDepthProvider, scene_hd: np.ndarray
+) -> None:
+    """``dsd_shape_mu`` must reach the sampler, not only the slope.
+
+    The helpers below were right and the transform was not: it computed the
+    gamma *slope* and then counted and sampled drops as if the distribution
+    were still exponential. A steeper slope with no ``D^mu`` term to balance
+    it is a distribution belonging to neither model, so asking for the gamma
+    produced fewer and *smaller* drops — at 50 mm/h, 62% fewer streaks and 2%
+    of drops above 2 mm, where the gamma has 14.8% and Marshall-Palmer 11.5%.
+    The opposite of what the parameter is documented to do.
+    """
+    from weathermentations.diagnostics import recording
+
+    def drawn(shape_mu: float) -> tuple[float, np.ndarray]:
+        transform = RandomRain(
+            depth_provider=provider,
+            p=1.0,
+            rain_rate_range_mm_h=(50.0, 50.0),
+            horizontal_fov_range_deg=(60.0, 60.0),
+            exposure_time_range=(0.005, 0.005),
+            dsd_shape_mu=shape_mu,
+            max_streaks=200000,
+        )
+        transform.set_random_seed(0)
+        with recording() as log:
+            params = transform.get_params_dependent_on_data(
+                {"shape": scene_hd.shape}, {"image": scene_hd}
+            )
+        streaks = params["streaks"]
+        # length = f v(D) T / z, so length * z recovers the fall speed, which
+        # is monotonic in the drop's diameter.
+        return float(log[0]["drew"]["population"]), streaks["length"] * streaks["distance"]
+
+    exponential_count, exponential_speed = drawn(0.0)
+    gamma_count, gamma_speed = drawn(3.0)
+
+    # The same rain rate through a different shape is about the same number of
+    # resolvable drops (NightRain, which always passed the shape through,
+    # moves by 2%), not a third of them.
+    assert gamma_count == pytest.approx(exponential_count, rel=0.25), (
+        f"mu=3 changed the resolvable population from {exponential_count:.0f} "
+        f"to {gamma_count:.0f}"
+    )
+    # ...and the gamma's are, if anything, the larger and faster ones.
+    assert np.median(gamma_speed) >= 0.97 * np.median(exponential_speed)
+    assert np.percentile(gamma_speed, 90) >= 0.97 * np.percentile(exponential_speed, 90)
+
+
 def test_gamma_shape_moves_mass_toward_larger_drops() -> None:
     """The point of the gamma is the large-drop end: Ulbrich (1983) fits
     observed spectra better than an exponential because a real distribution
