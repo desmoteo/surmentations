@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow
+from weathermentations.atmosphere import NightRain, NightSnow, RandomFog, RandomRain, RandomSnow
 from weathermentations.camera import (
     AcFlicker,
     ExposureTransient,
@@ -34,7 +34,7 @@ README = Path(__file__).resolve().parents[2] / "README.md"
 TRANSFORMS = {
     cls.__name__: cls
     for cls in (
-        RandomFog, RandomRain, RandomSnow,
+        RandomFog, RandomRain, RandomSnow, NightRain, NightSnow,
         WaterDroplets, DirtSoil, SunFlare, HousingOccluders,
         CastShadows, NightIrMode, AcFlicker, RollingShutter,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,

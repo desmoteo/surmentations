@@ -109,13 +109,13 @@ flowchart TD
     START([frame]) --> LIGHT{"lighting state<br/>(exclusive)"}
     LIGHT -->|55%| DAY["day<br/>CastShadows p=0.30<br/>SunFlare p=0.12"]
     LIGHT -->|15%| LIT["lit night<br/>ExposureTransient -1 to -2.6 stops,<br/>warm cast"]
-    LIGHT -->|30%| IR["IR night<br/>NightIrMode<br/>(rain becomes NightRain, after it)"]
+    LIGHT -->|30%| IR["IR night<br/>NightIrMode<br/>(rain and falling snow are lit<br/>by the lamp, after it)"]
     DAY --> W{"weather state<br/>(exclusive)"}
     LIT --> W
     IR --> W
     W -->|88%| CLEAR["clear<br/>droplets p=0.06<br/>dew, residual, spray"]
     W -->|6%| RAIN["rain<br/>RandomRain by day,<br/>NightRain under IR<br/>droplets p=0.35"]
-    W -->|3%| SNOW["snow<br/>droplets p=0.10"]
+    W -->|3%| SNOW["snow<br/>RandomSnow; under IR its flakes<br/>are NightSnow<br/>droplets p=0.10"]
     W -->|3%| FOG["fog<br/>droplets p=0.30"]
     CLEAR --> TAIL
     RAIN --> TAIL
@@ -190,7 +190,7 @@ def _weather(
     ], p=1.0)
 
 
-def _stream(lit_by_mains, codec_p):
+def _stream(lit_by_mains, codec_p, infrared=False):
     """Glass, sensor, ISP and transmission: independent, each with its own p.
 
     Ordered by hand in the physical chain, because `physical_order` sorts a
@@ -199,7 +199,9 @@ def _stream(lit_by_mains, codec_p):
     return [
         # Optics: on the glass, in front of everything the sensor does.
         DirtSoil(p=0.25),
-        HousingOccluders(p=0.12),
+        # A dark silhouette by day; lit by the IR ring, and glowing, only
+        # once the camera has switched its illuminator on.
+        HousingOccluders(p=0.12, glow_range=(0.6, 1.6) if infrared else (0.0, 0.0)),
         # Sensor. Mains banding needs artificial light, so it belongs to the
         # night branches outdoors (and would be all-day indoors).
         AcFlicker(p=0.45 if lit_by_mains else 0.05),
@@ -240,7 +242,7 @@ def surveillance(depth_provider, day=0.55, lit_night=0.15, ir_night=0.30, codec_
     ir = A.Sequential([
         _weather(depth_provider),
         NightIrMode(depth_provider=depth_provider, p=1.0),
-        *_stream(lit_by_mains=True, codec_p=codec_p),
+        *_stream(lit_by_mains=True, codec_p=codec_p, infrared=True),
     ], p=ir_night)
 
     return A.Compose([A.OneOf([day_branch, lit, ir], p=1.0)])
@@ -347,8 +349,19 @@ The IR-night branch does not reuse the weather state the other two share, and
 the reason is ordering rather than taste. Rain lit by the camera's own
 illuminator has to follow the reflectance-to-infrared conversion — its
 streaks are *already* in infrared terms, so running them through that
-conversion would apply it twice. Snow and fog still precede it: they veil the
-scene, and the sensor then sees the veiled scene.
+conversion would apply it twice. Fog still precedes it: it veils the scene,
+and the sensor then sees the veiled scene.
+
+Snow is split across the conversion. Its veil and settled snow are the scene
+and go before; its falling flakes are lit by the lamp and go after, as
+`NightSnow`, with `RandomSnow` built at `max_flakes=0` so the two do not both
+draw them. Left to `RandomSnow` alone the flakes were lit by the depth of
+whatever was behind them and vanished over anything distant.
+
+The same branch is the only one in which things on the dome glow. An insect
+or a web is a dark silhouette by day and under street lighting; under the
+infrared ring it is lit from centimetres away, so `HousingOccluders` is given
+a glow there and none anywhere else.
 
 So that branch builds its own four-way weather choice with the shared tail
 duplicated across the arms. That costs four sets of constructed objects and

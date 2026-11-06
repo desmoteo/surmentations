@@ -110,16 +110,43 @@ sequenceDiagram
     F->>P: get_depth(image)
     P->>E: estimate(image)
     E-->>P: relative depth 0..1
-    P-->>F: cached by array identity
-    C->>R: apply(image)
-    R->>P: get_depth(image)
-    Note over P: same array object → cache hit
-    P-->>R: same depth, no recompute
+    P-->>F: depth
+    F-->>C: fogged (a new array)
+    F->>P: carry(image, fogged)
+    Note over P: fogged shows the same scene
+    C->>R: apply(fogged)
+    R->>P: get_depth(fogged)
+    Note over P: known scene → no estimate
+    P-->>R: the clean frame's depth
 ```
 
 Construct **one** provider and pass that instance to every depth-conditioned
-transform. The cache is keyed on the identity of the image array, so it hits
-exactly when it should: within one sample, never across samples.
+transform.
+
+A transform returns a new array, so the second depth-conditioned transform in
+a chain never sees the array depth was estimated for. Recognising an image by
+the array alone therefore shares nothing: every depth-conditioned transform
+that fires pays for its own estimate. (The loss is cost, not accuracy — depth
+re-estimated from a fogged frame differs by only 1–3%, and by up to 5.5%
+behind droplets.) So each
+transform reports its output back, and the provider records that it shows a
+scene it already holds depth for. Depth belongs to the scene's geometry, which
+no appearance-only effect changes.
+
+The chain ends at `RollingShutter` (it moves pixels) and at any transform from
+outside this library (it might). The next request then estimates afresh: the
+slower path, never a wrong answer. `provider.carry(before, after)` vouches for
+a step of your own.
+
+An image is recognised by identity — through a weak reference, **not**
+`id()` — plus a sparse fingerprint of its pixels. The distinction is not
+pedantic. CPython gives a freed object's address to the next allocation of the
+same size, so in a `Dataset.__getitem__` that loads, transforms and returns,
+every frame has the previous frame's `id`; keyed on that, 51 of 60 consecutive
+frames were rendered with another image's depth. The fingerprint covers the
+case a weak reference cannot: a buffer overwritten in place, as
+`capture.read(frame)` does in a video loop. Nothing is kept across samples —
+a scene is dropped as soon as its arrays are freed.
 
 ### From relative depth to metres
 
@@ -362,7 +389,7 @@ flowchart LR
     OPT --> SENS["sensor"]
     SENS --> ISP["ISP"]
     ISP --> CODEC["codec"]
-    SENS -.-> S1["NightIrMode, NightRain, AcFlicker, RollingShutter"]
+    SENS -.-> S1["NightIrMode, NightRain, NightSnow, AcFlicker, RollingShutter"]
     ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts"]
     CODEC -.-> S3["VideoCodecArtifacts"]
 ```
@@ -435,6 +462,17 @@ streaks are already in infrared terms.
 
 See [`rain_visibility.md`](rain_visibility.md) for the measurements behind
 all of that.
+
+`NightSnow` is the same correction for snow, for a failure that is easier to
+miss. `RandomSnow` placed before `NightIrMode` sends its flakes through the
+infrared conversion with the rest of the frame, and that conversion lights
+each pixel by the depth of the *scene* there. A flake half a metre from the
+lens, drawn over a sky fifty metres away, is lit as though it were fifty
+metres away. Measured over a dark sky, the share of pixels standing clear of
+the background was 0.01-0.11% that way and 2.7-6.5% with the flakes lit by
+their own distance from the lamp. So at night the snow is split: its veil and
+whatever has settled stay with `RandomSnow`, before the conversion, and the
+falling flakes come after it.
 
 ### Night IR
 

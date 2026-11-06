@@ -66,7 +66,8 @@ augmented = transform(image=image)["image"]
 Construct **one** `SharedDepthProvider` and pass that same instance to every
 depth-conditioned transform, so depth is estimated once per image instead of
 once per transform. This is the single biggest throughput decision in a
-pipeline here — see [Performance](#performance).
+pipeline here — see [Performance](#performance). `provider.cache_info()`
+reports hits and misses if you want to confirm it is happening.
 
 ```python
 import albumentations as A
@@ -98,7 +99,8 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `RandomRain` | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground that darkens and mirrors the scene about the horizon with Fresnel-weighted reflectance | yes |
 | `RandomSnow` | Gunn-Marshall sizes corrected for snow density, Locatelli-Hobbs fall speeds, and accumulation on upward-facing surfaces | yes |
 | `NightRain` | Rain lit by the camera's **own infrared illuminator**, brightness falling as 1/z² from the lamp. The one case where rain reads as streaks rather than haze — see [`docs/rain_visibility.md`](docs/rain_visibility.md). Needs no depth, so it runs on CPU | no |
-| `CastShadows` | Hard cast shadows on upward-facing surfaces — a classic false-positive source. A loss of the direct beam, so texture survives and the shadow is bluer | yes |
+| `NightSnow` | Snow lit by the camera's own illuminator: each flake's brightness is set by *its* distance from the lamp, not by the scene behind it. `RandomSnow` before `NightIrMode` loses its flakes over anything distant; this is what puts them back. Needs no depth | no |
+| `CastShadows` | Shadows of people, vehicles and foliage on upward-facing surfaces, all thrown by one sun — a classic false-positive source. A loss of the direct beam, so texture survives and the shadow is bluer | yes |
 
 ### Lens and housing
 
@@ -115,7 +117,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | --- | --- | --- |
 | `NightIrMode` | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise | yes |
 | `AcFlicker` | Mains banding. Cancels exactly when the exposure is a whole number of flicker periods — the basis of a camera's anti-flicker setting | no |
-| `RollingShutter` | Row-dependent shear and wobble from camera motion during readout | no |
+| `RollingShutter` | Row-dependent shear and wobble from camera motion during readout. The one transform that moves pixels, so masks, boxes and keypoints move with it | no |
 | `ExposureTransient` | AE/AWB caught mid-correction. White-balance error is the ratio of two blackbody colours, so it stays on the blue-orange axis real illuminants vary on | no |
 | `WdrToneMapping` | Local tone mapping, with the black halos a cheap edge-preserving filter leaves | no |
 | `TemporalDenoiseArtifacts` | 3D-NR's "watercolour" flattening and chroma blotching | no |
@@ -157,8 +159,9 @@ and the physics behind it.
 | `RandomFog` | `beta_range` (extinction, 1/m), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
 | `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `exposure_time_range`, `wetness_probability`, `wetness_darkening_range`, `min_streak_width_px` |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
+| `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `min_flake_width_px`, `max_flakes` |
-| `CastShadows` | `shadow_count_range`, `shadow_scale_range`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
+| `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `background_blur_range`, `condensation_coverage_range` |
 | `DirtSoil` | `coverage_range`, `veil_strength_range`, `highlight_boost_range`, `deposits` (which substances), `smudge_count_range` |
 | `SunFlare` | `flare_position`, `intensity_range`, `ghost_count_range`, `aperture_blades_range`, `dispersion_ring_probability`, `scratch_count_range` |
@@ -305,6 +308,16 @@ depth-conditioned transform costs when they share one provider.
 Sharing one provider saves roughly **62 ms per extra transform at 512 px and
 86 ms at 1024 px**. Constructing a provider per transform throws that away.
 
+The saving holds along a whole pipeline, not only between adjacent
+transforms: each transform here passes the scene on with its output, so depth
+is estimated from the clean frame and reused by everything downstream —
+`CastShadows` → `RandomFog` → `RandomRain` all firing on one frame is one
+estimate, and so is `RandomFog` → `DirtSoil` → `NightIrMode`. Two things end
+the chain, and the next depth-conditioned transform then estimates afresh:
+`RollingShutter`, which moves pixels, and any transform from outside this
+library, which cannot be assumed not to. If you know such a step keeps
+geometry (a colour jitter, a blur), `provider.carry(before, after)` says so.
+
 These are a laptop under thermal limits: absolute numbers move by up to 2x
 between runs, and the relative ordering plus the cold/warm gap are the parts
 worth planning around.
@@ -358,10 +371,34 @@ rain, snow) tolerate a wrong guess; `NightIrMode`'s inverse-square illuminator
 does not, and a scene whose real near plane is 10 m will read too contrasty
 at the bottom of the frame.
 
-Only `RandomFog` currently exposes the calibration, as `depth_scale`; the
-other depth-conditioned transforms use the module defaults. If your scenes
-have a known and unusual scale, change the defaults rather than expecting a
-per-transform argument.
+The calibration belongs to the provider, so one setting reaches every
+depth-conditioned transform:
+
+```python
+provider = SharedDepthProvider(DepthAnythingV2Estimator(), depth_range_m=(1.0, 12.0))
+```
+
+`RandomFog` can additionally override the far plane for itself with
+`depth_scale`.
+
+**Clips.** Passed as `images=`, an `(N, H, W, 3)` array is treated the way
+Albumentations treats it: one set of parameters for every frame. Depth is
+estimated once, from the first frame, on the assumption that a clip is one
+camera looking at one scene. Nothing *advances* between frames, though — rain
+streaks sit in the same place in each — so this gives consistent conditions
+across a clip, not motion.
+
+**Annotations.** Every effect but one changes appearance only, so masks,
+boxes and keypoints pass through untouched. `RollingShutter` moves pixels and
+moves its annotations with them: masks are resampled, boxes become the box
+enclosing the sheared original, keypoints follow.
+
+**Input is RGB, `uint8` or float in `[0, 1]`.** Anything else — greyscale,
+RGBA, 16-bit — is refused with an error before any parameter is sampled,
+rather than rendered wrongly. The effects model colour radiance, so there is
+no greyscale form of them; convert a mono frame to three channels first.
+`RollingShutter` is the exception, since it only moves pixels: it takes any
+channel count and bit depth.
 
 **Compositing is in linear light.** If you chain these with other
 augmentation libraries that work on gamma-encoded values, the ordering matters
@@ -401,10 +438,14 @@ full sweep.
 | --- | --- | --- | --- |
 | ![night ir](docs/examples/night_ir_3.png) | ![night rain](docs/examples/night_rain_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![cast shadows](docs/examples/cast_shadows_3.png) |
 
-`night_rain` is rendered over an IR night frame rather than the daylit base
-scene, because its streaks are lit by the camera: on a sunny road they would
-be as invisible as `RandomRain`'s, which is the finding the transform exists
-to answer.
+| Night snow |
+| --- |
+| ![night snow](docs/examples/night_snow_3.png) |
+
+`night_rain` and `night_snow` are rendered over an IR night frame rather than
+the daylit base scene, because their particles are lit by the camera: on a
+sunny road they would be as invisible as `RandomRain`'s streaks, which is the
+finding the transforms exist to answer.
 
 ---
 
