@@ -303,7 +303,10 @@ class RandomRain(WeatherTransform):
             total internal reflection, so wet asphalt scatters back much less
             than dry: measured albedos run about 0.10-0.15 dry against
             0.05-0.08 wet, i.e. roughly a halving, which is what this
-            brackets.
+            brackets. It also decides how much of a mirror the ground is:
+            near 0.9 the surface is only damp and reflects nothing, and the
+            Fresnel reflection reaches full strength at 0.5, where there is
+            a continuous film.
         wetness_falloff_range: exponent on the upward-facing cosine. Water
             sheets on horizontal surfaces and runs off anything steeper, more
             sharply than snow settles, so this sits above snow's equivalent.
@@ -424,7 +427,7 @@ class RandomRain(WeatherTransform):
         wobble_range: tuple[float, float] = (0.05, 0.2),
         definition_softness: float = 0.45,
         veil_beta_range: tuple[float, float] | None = None,
-        wetness_probability: float = 0.4,
+        wetness_probability: float = 0.7,
         wetness_darkening_range: tuple[float, float] = (0.4, 0.7),
         wetness_falloff_range: tuple[float, float] = (4.0, 9.0),
         p: float = 0.5,
@@ -916,6 +919,12 @@ def render_streak_layer(
 # Water's normal-incidence reflectance, ((n - 1)/(n + 1))^2 for n = 1.33.
 _WATER_R0 = 0.02
 
+# Diffuse albedo of wet ground relative to dry at the two ends of "wet": a
+# surface that is merely damp, with water in its pores and no film over it,
+# and one that is soaked, where measured albedos have about halved.
+_DAMP_ALBEDO_RATIO = 0.9
+_SOAKED_ALBEDO_RATIO = 0.5
+
 
 def _apply_ground_wetness(
     linear: np.ndarray,
@@ -939,6 +948,13 @@ def _apply_ground_wetness(
     Schlick's approximation over the depression angle below the horizon gives
     the familiar look of a wet road — mirror-bright toward the horizon,
     merely dark and matte at your feet — which a single blend weight cannot.
+
+    **How much of it is a mirror at all.** A road that is only damp is darker
+    and nothing else: the water is in its pores, and the surface is as rough
+    as it was. It takes a continuous film to reflect, and by the time there
+    is one the road has darkened as far as it will. So the mirror is scaled
+    by how far ``darkening`` has gone from damp to soaked, rather than being
+    switched on at full strength by the first drop.
     """
     height, width = linear.shape[:2]
     rows = np.arange(height, dtype=np.float32)
@@ -965,6 +981,10 @@ def _apply_ground_wetness(
     drop = np.maximum(rows - horizon_px, 0.0)
     cos_theta = drop / np.sqrt(drop * drop + focal_px * focal_px)
     fresnel = _WATER_R0 + (1.0 - _WATER_R0) * (1.0 - cos_theta) ** 5
+    film = np.clip(
+        (_DAMP_ALBEDO_RATIO - darkening) / (_DAMP_ALBEDO_RATIO - _SOAKED_ALBEDO_RATIO), 0.0, 1.0
+    )
+    fresnel = fresnel * np.float32(film)
     fresnel_map = np.broadcast_to(fresnel.reshape(height, 1, 1), linear.shape)
 
     wet = linear * darkening * (1.0 - fresnel_map) + reflection * fresnel_map
