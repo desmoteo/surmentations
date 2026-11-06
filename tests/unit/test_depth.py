@@ -93,6 +93,25 @@ def test_depth_anything_v2_estimator_output_contract() -> None:
     assert depth.max() <= 1.0
 
 
+@requires_cuda
+def test_depth_anything_v2_gives_the_same_depth_for_float_and_uint8_input() -> None:
+    """The image processor rescales by 1/255 assuming 8-bit input. A float
+    image in [0, 1] went through that as-is and the network was asked for the
+    depth of a black frame: its answer correlated at -0.16 with the depth of
+    the same picture supplied as uint8."""
+    estimator = DepthAnythingV2Estimator()
+    rng = np.random.default_rng(0)
+    img = np.zeros((160, 224, 3), dtype=np.uint8)
+    img[:60] = (190, 205, 225)
+    img[60:] = (80, 84, 76)
+    img[90:130, 60:140] = (150, 40, 35)
+    img = np.clip(img.astype(np.int16) + rng.integers(-10, 11, img.shape), 0, 255).astype(np.uint8)
+
+    from_uint8 = estimator.estimate(img)
+    from_float = estimator.estimate(img.astype(np.float32) / 255.0)
+    np.testing.assert_allclose(from_float, from_uint8, atol=1e-4)
+
+
 def test_two_callers_sharing_one_provider_see_consistent_depth() -> None:
     """Simulates two depth-conditioned transforms chained in one `Compose` call,
     sharing a provider (mirrors the sequence-diagram contract in plan.md §2.3).

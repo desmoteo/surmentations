@@ -44,9 +44,8 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations.base import WeatherTransform, require_depth_provider
+from weathermentations.base import WeatherTransform, require_depth_provider, scene_of
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.depth.scale import to_pseudo_metric
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.grids import pixel_grid
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -183,11 +182,10 @@ class NightIrMode(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
-        image = data["image"]
+        scene = scene_of(data)
         height, width = params["shape"][:2]
 
-        relative_depth = self.depth_provider.get_depth(image)
-        depth_m = np.maximum(to_pseudo_metric(relative_depth, None), 0.3)
+        depth_m = np.maximum(self.depth_provider.get_metric_depth(scene), 0.3)
 
         reference = self.py_random.uniform(*self.illuminator_range_m)
         falloff = self.py_random.uniform(*self.beam_falloff_range)

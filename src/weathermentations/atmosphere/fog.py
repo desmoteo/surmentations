@@ -49,9 +49,13 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations.base import WeatherTransform, require_depth_provider
+from weathermentations.base import (
+    WeatherTransform,
+    first_frame,
+    require_depth_provider,
+    scene_of,
+)
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.depth.scale import to_pseudo_metric
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import estimate_airlight
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -83,8 +87,9 @@ class RandomFog(WeatherTransform):
         atmospheric_light: fixed airlight RGB, or ``None`` to estimate it per
             image with a dark-channel-prior-style search for the brightest
             haze-opaque region.
-        depth_scale: pseudo-metres at relative depth 1.0. ``None`` uses the
-            heuristic default (see ``depth/scale.py``).
+        depth_scale: pseudo-metres at relative depth 1.0, for this transform
+            only. ``None`` uses the provider's ``depth_range_m``, which is the
+            place to calibrate a whole pipeline.
         forward_scatter_range: how strongly fog blurs distant detail, as a
             fraction of the image diagonal at full optical depth. 0 disables
             the blur and leaves fog as a pure blend.
@@ -143,12 +148,13 @@ class RandomFog(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
-        image = data["image"]
+        scene = scene_of(data)
+        image = first_frame(scene)
         height, width = params["shape"][:2]
         diagonal = float(np.hypot(width, height))
 
-        relative_depth = self.depth_provider.get_depth(image)
-        depth_pm = to_pseudo_metric(relative_depth, self.depth_scale)
+        relative_depth = self.depth_provider.get_depth(scene)
+        depth_pm = self.depth_provider.to_metric(relative_depth, far_m=self.depth_scale)
 
         beta = self.py_random.uniform(*self.beta_range)
         gamma = self.py_random.uniform(*self.scattering_gamma_range)
@@ -180,7 +186,11 @@ class RandomFog(WeatherTransform):
         if self.atmospheric_light is not None:
             airlight = np.array(self.atmospheric_light, dtype=np.float32) / 255.0
         else:
-            airlight = estimate_airlight(image) / 255.0
+            # In the image's own units: 0-255 for integer input, already 0-1
+            # for float. Dividing a float image's airlight by 255 as well left
+            # it at ~0.003, so fog on float input composited toward *black*.
+            full_scale = 255.0 if np.issubdtype(image.dtype, np.integer) else 1.0
+            airlight = estimate_airlight(image) / full_scale
 
         return {
             "transmission": transmission,

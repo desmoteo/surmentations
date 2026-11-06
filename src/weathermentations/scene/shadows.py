@@ -47,10 +47,9 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations.base import WeatherTransform, require_depth_provider
+from weathermentations.base import WeatherTransform, require_depth_provider, scene_of
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.depth.scale import to_pseudo_metric
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
@@ -180,7 +179,7 @@ class CastShadows(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
-        image = data["image"]
+        scene = scene_of(data)
         height, width = params["shape"][:2]
         diagonal = float(np.hypot(width, height))
         rng = self.random_generator
@@ -201,9 +200,8 @@ class CastShadows(WeatherTransform):
             shapes = cv2.GaussianBlur(shapes, (0, 0), sigmaX=penumbra)
 
         # A shadow lands on surfaces, not on the frame — and never on sky.
-        relative_depth = self.depth_provider.get_depth(image)
         surface = upward_facing(
-            to_pseudo_metric(relative_depth, None),
+            self.depth_provider.get_metric_depth(scene),
             horizontal_fov_deg=self.horizontal_fov_deg,
             camera_pitch_deg=self.camera_pitch_deg,
         )

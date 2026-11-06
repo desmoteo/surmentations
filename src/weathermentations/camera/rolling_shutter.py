@@ -65,6 +65,13 @@ class RollingShutter(WeatherTransform):
         uint8, float32
     """
 
+    # Rows are displaced, so depth estimated before this no longer lines up
+    # with the pixels after it.
+    preserves_scene_geometry = False
+    # A resampling of pixel positions: it does not care what the pixels are,
+    # so greyscale (an IR camera's native output) and 16-bit frames are fine.
+    requires_rgb = False
+
     class InitSchema(BaseTransformInitSchema):
         pan_shift_range_px: Annotated[
             tuple[float, float],
@@ -142,10 +149,13 @@ class RollingShutter(WeatherTransform):
         map_x = np.arange(width, dtype=np.float32)[None, :] - horizontal[:, None]
         map_y = np.arange(height, dtype=np.float32)[:, None] - vertical[:, None]
 
-        return cv2.remap(
+        warped: np.ndarray = cv2.remap(
             img,
             np.ascontiguousarray(np.broadcast_to(map_x, (height, width)), dtype=np.float32),
             np.ascontiguousarray(np.broadcast_to(map_y, (height, width)), dtype=np.float32),
             interpolation=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_REPLICATE,
         )
+        # OpenCV drops a trailing channel axis of one, turning (H, W, 1) into
+        # (H, W).
+        return warped.reshape(img.shape)
