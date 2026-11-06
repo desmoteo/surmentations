@@ -43,6 +43,29 @@ opposite of the intuitive "closer is brighter".
 Everything composites in linear light, and the frame's mean level is
 renormalised afterwards to stand in for the camera's auto-exposure.
 
+The camera's exposure decides what rain looks like
+-------------------------------------------------
+The same shower is three different pictures depending on how the camera is
+exposing, and none of the three is the weather's doing:
+
+* **Shutter time** sets how far a drop travels while the shutter is open. At
+  1/2000 s a 2 mm drop moves 3 mm, barely more than its own width, and is
+  recorded as a near-opaque fleck; at 1/30 s it is drawn 22 cm long and 1%
+  opaque. The light it deposits is the same either way.
+* **Aperture** sets how defocused the near drops are — the ones wide enough
+  to resolve at all. A small aperture keeps them thin and therefore opaque;
+  a wide one spreads each over its circle of confusion.
+* **The two are not independent.** For a given light level the camera needs
+  a given exposure, ``T = K N^2 / E``: a lens stopped down four stops needs
+  a shutter sixteen times longer. So a stopped-down iris comes with long,
+  thin, faint streaks and an open one with short soft flecks, and drawing
+  the two from separate ranges produces the pairs no camera would choose —
+  a wide-open lens at 1/30 s in daylight, six or seven stops over-exposed.
+
+So the shutter time is not drawn. The light level is, along with the
+aperture, and the shutter follows from them through the metering equation,
+held within the range the camera can actually run.
+
 Accumulating many streaks
 -------------------------
 Streaks are accumulated as **occupancy**, not as repeated "over" composites:
@@ -82,6 +105,27 @@ from weathermentations.utils.precipitation import (
     sample_resolvable_particles,
     width_cut_for_budget,
 )
+
+# Width of the sensor the field of view is taken across, for turning an
+# aperture diameter into an f-number: a 1/2.8" sensor, the commonest in
+# surveillance cameras, on which a 70 degree field of view is a 4 mm lens.
+_SENSOR_WIDTH_MM = 5.6
+
+# K in the metering equation T = K N^2 / E: the incident-light exposure
+# constant (250 lux s at ISO 100) over a base sensitivity of ISO 200. At
+# 10 000 lux this gives 1/3100 s at f/1.6 and 1/125 s at f/8.
+_METERING_CONSTANT_LUX_S = 1.25
+
+
+def metered_exposure_s(f_number: float, illuminance_lux: float) -> float:
+    """Shutter time that exposes a scene under ``illuminance_lux`` at ``f_number``.
+
+    The standard incident-light exposure equation. It is what ties aperture
+    to shutter: the light a lens passes goes as ``1 / N^2``, so every stop
+    the iris closes doubles the time the shutter must stay open.
+    """
+    return _METERING_CONSTANT_LUX_S * f_number**2 / max(illuminance_lux, 1e-6)
+
 
 # Lowest rain rate the transform will accept. Named so presets and the docs
 # generator can clamp to it instead of hard-coding a number that silently
@@ -192,14 +236,28 @@ class RandomRain(WeatherTransform):
         distance_range_m: near and far bounds of the column of air in front
             of the lens whose drops are drawn individually. Drops beyond it
             are sub-pixel in width and are represented by the veil instead.
-        exposure_time_range: shutter time in seconds. With the drop's
-            terminal velocity this fixes the streak length, and therefore the
-            opacity ``alpha = D / (v T)``: a longer exposure draws a longer
-            *and proportionally fainter* streak, conserving deposited light.
+        exposure_time_range: the shortest and longest shutter time the
+            camera can run, in seconds. With the drop's terminal velocity the
+            shutter time fixes the streak length, and therefore the opacity
+            ``alpha = D / (v T)``: a longer exposure draws a longer *and
+            proportionally fainter* streak, conserving deposited light. The
+            time itself is not drawn from this range but metered — see
+            ``scene_illuminance_range_lux`` — and held inside it; give the
+            two ends the same value to pin the shutter.
+        scene_illuminance_range_lux: how much light the scene is under,
+            drawn per call on a log scale. Together with the aperture this
+            sets the shutter time, ``T = K N^2 / E``, which is why the two
+            come out correlated the way a camera's are: stopped down, a long
+            shutter and long thin streaks; wide open, a short one and soft
+            flecks. Rainy daylight runs from about 800 lux under a storm
+            cloud to 25 000 in a sunlit shower; a street at night is 5-150.
+            ``None`` draws the shutter time from ``exposure_time_range``
+            directly, on a log scale, independent of the aperture.
         horizontal_fov_range_deg: camera field of view, drawn per call. Used
             to project physical
             drop sizes and distances into pixels.
-        aperture_diameter_range_mm: lens aperture diameter, which sets the
+        aperture_diameter_range_mm: lens aperture diameter, drawn per call on
+            a log scale (evenly in stops), which sets the
             circle of confusion for drops away from the focal plane. Small
             values are both realistic for a surveillance or dash camera (f/1.6
             on a 4 mm lens is a 2.5 mm aperture) and what makes rain *visible*
@@ -207,7 +265,9 @@ class RandomRain(WeatherTransform):
             since defocus spreads a streak's fixed light over a wider band, a
             narrower streak is a proportionally more opaque one. It is the
             only lever that raises streak contrast without also shortening the
-            streaks, which shutter time does.
+            streaks, which shutter time does. The default spans a lens
+            stopped down in daylight (0.4 mm, about f/10 at 4 mm) to one wide
+            open (3 mm).
         focus_distance_range_m: what the camera is focused on, drawn per call.
         camera_pitch_range_deg: how far the camera is tilted **down** from
             level, drawn per call.
@@ -278,6 +338,14 @@ class RandomRain(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(1e-5, 1.0)),
         ]
+        scene_illuminance_range_lux: (
+            Annotated[
+                tuple[float, float],
+                AfterValidator(nondecreasing),
+                AfterValidator(check_range_bounds(0.01, 200000.0)),
+            ]
+            | None
+        )
         horizontal_fov_range_deg: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -343,9 +411,10 @@ class RandomRain(WeatherTransform):
         drop_diameter_range_mm: tuple[float, float] = (0.8, 6.0),
         dsd_shape_mu: float = 0.0,
         distance_range_m: tuple[float, float] = (0.4, 6.0),
-        exposure_time_range: tuple[float, float] = (0.003, 0.010),
+        exposure_time_range: tuple[float, float] = (1.0 / 8000.0, 1.0 / 25.0),
         horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
-        aperture_diameter_range_mm: tuple[float, float] = (0.9, 2.6),
+        aperture_diameter_range_mm: tuple[float, float] = (0.4, 3.0),
+        scene_illuminance_range_lux: tuple[float, float] | None = (800.0, 25000.0),
         focus_distance_range_m: tuple[float, float] = (8.0, 40.0),
         camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
         max_streaks: int = 16000,
@@ -367,6 +436,7 @@ class RandomRain(WeatherTransform):
         self.dsd_shape_mu = dsd_shape_mu
         self.distance_range_m = distance_range_m
         self.exposure_time_range = exposure_time_range
+        self.scene_illuminance_range_lux = scene_illuminance_range_lux
         self.horizontal_fov_range_deg = horizontal_fov_range_deg
         self.aperture_diameter_range_mm = aperture_diameter_range_mm
         self.focus_distance_range_m = focus_distance_range_m
@@ -389,6 +459,31 @@ class RandomRain(WeatherTransform):
         beta = rain_extinction_coefficient(rain_rate_mm_h)
         return (beta * 0.75, beta * 1.3)
 
+    def _exposure(self, horizontal_fov_deg: float) -> tuple[float, float, float, float]:
+        """Draw the camera's operating point: shutter, aperture, f-number, light.
+
+        Aperture and light are drawn; the shutter is what the camera would
+        then have to use. Both draws are log-uniform — stops and light levels
+        are ratios, and a uniform draw over 1/8000-1/25 s would put the
+        shutter slower than 1/50 s half the time.
+        """
+
+        def log_uniform(low: float, high: float) -> float:
+            return float(np.exp(self.py_random.uniform(np.log(low), np.log(high))))
+
+        light = log_uniform(*(self.scene_illuminance_range_lux or self.exposure_time_range))
+        aperture_mm = log_uniform(*self.aperture_diameter_range_mm)
+        focal_mm = 0.5 * _SENSOR_WIDTH_MM / np.tan(np.deg2rad(horizontal_fov_deg) / 2.0)
+        f_number = float(focal_mm / aperture_mm)
+        if self.scene_illuminance_range_lux is None:
+            # `light` was drawn from the shutter range: there is no meter.
+            return light, aperture_mm * 1e-3, f_number, float("nan")
+        shortest, longest = self.exposure_time_range
+        # Outside what the shutter can do, the camera makes up the rest with
+        # gain or runs dark; neither changes what a streak looks like.
+        exposure = float(np.clip(metered_exposure_s(f_number, light), shortest, longest))
+        return exposure, aperture_mm * 1e-3, f_number, light
+
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
@@ -407,8 +502,7 @@ class RandomRain(WeatherTransform):
         camera_pitch = self.py_random.uniform(*self.camera_pitch_range_deg)
 
         veil_beta = self.py_random.uniform(*self._veil_beta_bounds(rain_rate))
-        exposure = self.py_random.uniform(*self.exposure_time_range)
-        aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
+        exposure, aperture_m, f_number, illuminance = self._exposure(horizontal_fov)
         wind_angle = self.py_random.uniform(*self.wind_angle_range)
         angle_jitter = self.py_random.uniform(*self.angle_jitter_range)
         wobble_strength = self.py_random.uniform(*self.wobble_range)
@@ -465,6 +559,8 @@ class RandomRain(WeatherTransform):
             camera_pitch_deg=camera_pitch,
             exposure_s=exposure,
             aperture_mm=aperture_m * 1e3,
+            f_number=f_number,
+            scene_illuminance_lux=illuminance,
             wind_angle_deg=wind_angle,
             veil_beta=veil_beta,
             mp_slope=slope,
@@ -504,7 +600,11 @@ class RandomRain(WeatherTransform):
         # made streaks shrink over distant sky and swell over near road, i.e.
         # pasted onto surfaces rather than falling through the air.
         drop_width = focal * (diameter_mm * 1e-3) / distance_m
-        length = focal * (speed * exposure) / distance_m
+        # What the drop sweeps is its travel plus its own width. The second
+        # term is nothing at 1/100 s and most of the streak at 1/4000 s,
+        # where the drop moves less than its diameter: without it a frozen
+        # drop had no length and its opacity ran past one.
+        length = focal * (speed * exposure) / distance_m + drop_width
 
         # Defocus spreads a streak across the circle of confusion without
         # adding light, so it gets wider *and proportionally fainter*. This is

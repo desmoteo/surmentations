@@ -132,6 +132,65 @@ def test_dirt_deposit_hue_matches_the_substance() -> None:
     assert abs(warmth("soot")) < 1.0
 
 
+def test_dirt_glows_under_a_sky_the_camera_cannot_see() -> None:
+    """Dirt scatters light in from the whole hemisphere in front of the glass,
+    and most of that is outside the frame. A camera looking down at a road
+    has grime lit by a sky several times brighter than its view, which is the
+    milky lift a dirty dome shows by day — and what the model lacked while it
+    scattered only the frame's own light: a patch over asphalt was replaced
+    by a blur of the same asphalt, and the effect was all but invisible.
+
+    With the surroundings no brighter than the frame, flat light still shows
+    nothing: there is no brighter light to bring in.
+    """
+    road = np.full((128, 128, 3), 70, dtype=np.uint8)
+
+    def render(ambient: float) -> tuple[np.ndarray, np.ndarray]:
+        t = DirtSoil(
+            p=1.0,
+            deposits=("limescale",),
+            ambient_light_range=(ambient, ambient),
+            dust_film_range=(0.0, 0.0),
+            absorption_range=(0.0, 0.0),
+        )
+        t.set_random_seed(4)
+        params = t.get_params_dependent_on_data({"shape": road.shape}, {})
+        return t.apply(road, **params).astype(np.float32), params["dirt_mask"]
+
+    level, _mask = render(1.0)
+    assert float(np.abs(level - 70.0).max()) < 4.0, "flat light, nothing brighter to scatter in"
+
+    lit, mask = render(4.0)
+    thick, clean = mask > 0.5, mask < 0.02
+    assert thick.any() and clean.any()
+    assert float(lit[thick].mean()) > 70.0 + 5.0, "grime under an open sky should lift the road"
+    assert float(np.abs(lit[clean] - 70.0).max()) < 2.0, "clean glass must stay clean"
+    # Bounded by what is there to scatter: it cannot outshine the sky it
+    # stands in for (four times the frame, here level 133).
+    assert float(lit.max()) < 133.0
+
+
+def test_a_dust_film_leaves_no_clean_glass() -> None:
+    """Patches are what splashed or was smeared; the film is what settled.
+    It is even, so it veils every pixel and lowers contrast everywhere."""
+    image = np.zeros((128, 128, 3), dtype=np.uint8)
+    image[:, 64:] = 200
+
+    def render(film: float) -> tuple[np.ndarray, np.ndarray]:
+        t = DirtSoil(p=1.0, dust_film_range=(film, film), ambient_light_range=(1.0, 1.0))
+        t.set_random_seed(2)
+        params = t.get_params_dependent_on_data({"shape": image.shape}, {})
+        return t.apply(image, **params).astype(np.float32), params["dirt_mask"]
+
+    _bare, bare_mask = render(0.0)
+    filmed, filmed_mask = render(0.3)
+    assert float(bare_mask.min()) < 0.01
+    assert float(filmed_mask.min()) >= 0.3 - 1e-6
+    assert float(filmed_mask.max()) <= 1.0
+    # The dark half is lifted by light from the bright half, everywhere.
+    assert float(filmed[:, :40].min()) > 3.0
+
+
 def test_dirt_rejects_unknown_deposit() -> None:
     with pytest.raises(ValueError, match="Unknown deposit"):
         DirtSoil(p=1.0, deposits=("unobtanium",))
