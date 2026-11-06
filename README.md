@@ -138,8 +138,8 @@ seconds. Ranges are validated by a pydantic `InitSchema`, so an impossible
 value fails at construction rather than at render.
 
 **Derived quantities are not exposed.** A rain rate settles the drop-size
-distribution, the particle count, and — through the standard visibility
-relations — how dense the veil is. These are not independent in reality, and
+distribution, the particle count, and — through published visibility
+relations (Atlas 1953 for rain) — how dense the veil is. These are not independent in reality, and
 making them independent here is what allows a frame with a downpour's haze
 and a drizzle's streaks.
 
@@ -387,8 +387,9 @@ provider = SharedDepthProvider(DepthAnythingV2Estimator(), depth_range_m=(1.0, 1
 
 **Severity is extinction per metre, so it has to match the scene's scale.**
 The presets suit the default 3-50 m. Calibrate a provider to a landscape and
-the same fog, rain or snow hides everything past a few hundred metres — which
-is what that weather does, and leaves a blank frame. For long views, set fog
+the same fog or snow hides everything past a few hundred metres, and heavy
+rain everything past a kilometre or two — which is what that weather does,
+and leaves a blank frame. For long views, set fog
 by visibility (`beta = 3.912 / visibility_m`) and cap the precipitation veils
 with `veil_beta_range`, as `docs/generate_scene_examples.py` does.
 

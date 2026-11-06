@@ -1,7 +1,7 @@
 # Why rain streaks are faint, and what actually changes that
 
-Rain rendered by this library reads as haze, a wet road and drops on the
-glass, but rarely as streaks. This is the investigation into whether that is a
+Rain rendered by this library reads as a wet road and drops on the glass,
+with a distance haze in long views, but rarely as streaks. This is the investigation into whether that is a
 modelling error, and what the levers really are. Short version: **the streak
 photometry is correct, the drop-size distribution is not the lever, and the
 binding constraint is that a raindrop is sub-pixel at surveillance
@@ -152,6 +152,49 @@ drops above 2 mm against the gamma's 14.8%. The helpers and their tests were
 correct throughout, which is why nothing caught it; the test that does now
 asserts on what the transform draws rather than on what the helpers return.
 `NightRain` was unaffected.
+
+## The veil was eight times too strong
+
+The haze that distant rain adds was derived from `V = 1.9 R^-0.63` km,
+labelled the standard visibility-in-rain relation. It is not one. Atlas
+(1953), which is, gives an extinction of `0.25 R^0.63` per km for ordinary
+rain and `V = 11.6 R^-0.63` km. The exponent was right and the constant was
+8.2 times too large in extinction, at every rain rate.
+
+Three routes that do not share an error agree with Atlas:
+
+| rain rate | old constant | Atlas (1953) | Carbonneau (optical links) | Marshall-Palmer, summed |
+| --- | --- | --- | --- | --- |
+| 5 mm/h | 0.69 km | 5.7 km | 5.4 km | 3.9 km |
+| 20 mm/h | 0.29 km | 2.4 km | 2.1 km | 1.6 km |
+| 40 mm/h | 0.19 km | 1.5 km | 1.3 km | 1.1 km |
+| 80 mm/h | 0.12 km | 1.0 km | 0.8 km | 0.7 km |
+
+Visibility at 2% contrast. Carbonneau is `1.076 R^0.67` dB/km, the
+temperate-climate fit used for free-space optical links. The last column
+sums geometric cross-sections over the drop-size distribution the library
+already samples from, `pi N0 / Lambda^3`; it sits above the others because
+it counts light diffracted forward into the lens as lost. The two published
+figures are taken from papers quoting them, not from the originals.
+
+`rain_extinction_coefficient` now returns Atlas's value. Two consequences:
+
+* **Against the default 3-50 m depth range the veil nearly disappears.** At
+  40 mm/h the light surviving to 50 m goes from 35% to 88%. The old veil was
+  doing most of the work of making daylight rain visible, and it was doing
+  it with the haze of rain eight times heavier. What is left by day is the
+  wet road, the streaks and flecks, and the water on the glass, which is the
+  finding of this document rather than a regression against it.
+* **Against real distances rain now looks like rain.** With a provider
+  calibrated to a city road 900 m deep, severity-3 rain used to hide
+  everything beyond two hundred metres; it now greys the skyline.
+
+A note on snow, which was checked against the same error and not changed:
+`V = 0.6/R` km could not be confirmed against Rasmussen et al. directly, and
+their own data scatter by a factor of 3 to 10 between storms. The old
+docstring's remark that snow comes out at six times rain's extinction,
+offered as a check on both, held only because the rain figure was inflated;
+the ratio is about thirty.
 
 ## Verifying
 

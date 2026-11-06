@@ -609,6 +609,12 @@ Three things that used to be inputs are now consequences:
   downpour's haze and a drizzle's streaks. A pleasing check on two
   independently-sourced relations: at equal rate they put snow's extinction
   at ~7x rain's, matching the separately-reported figure.
+  **Superseded.** `V = 1.9 R^-0.63` km is not a published relation and was
+  8.2 times too strong in extinction. Atlas (1953) gives `0.25 R^0.63` per
+  km, `V = 11.6 R^-0.63` km, and Carbonneau's optical-link fit and a sum over
+  the Marshall-Palmer distribution agree with it. The 7x check passed only
+  because of the error; the ratio is about thirty. See
+  `docs/rain_visibility.md`.
 - **Which drops on glass slide.** From the capillary length, not a
   probability. See the droplets section.
 

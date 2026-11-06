@@ -63,9 +63,9 @@ to light, since the geometry is the same. See ``depth/normals.py``, which
 also documents where the estimate breaks down (it does not model shelter, so
 the underside of a bridge collects snow it never would).
 
-The veil is the other half of "it is snowing": snow scatters roughly 7x more
-than rain at the same precipitation rate, so heavy snowfall drops visibility
-hard, and that loss of contrast with distance is a stronger cue than the
+The veil is the other half of "it is snowing": snow scatters some thirty
+times more than rain at the same liquid-equivalent rate, so heavy snowfall
+drops visibility hard, and that loss of contrast with distance is a stronger cue than the
 flakes themselves.
 """
 
