@@ -363,6 +363,15 @@ or a web is a dark silhouette by day and under street lighting; under the
 infrared ring it is lit from centimetres away, so `HousingOccluders` is given
 a glow there and none anywhere else.
 
+Water on the glass follows the lighting state in two ways. Under the infrared
+ring `WaterDroplets` is given the same glow (`illuminator_glow_range`): a
+fogged dome scatters the ring's light back as a veil and each drop returns it
+from its rim, which is why a wet camera whites out at night. And in both
+night branches its `aperture_diameter_range_mm` is pinned to an open iris,
+1.4-3 mm. How sharp a drop looks is set by the aperture, so at night most of
+them dissolve into soft patches, while the day branch keeps the transform's
+default range, which also covers lenses that stop down in sunlight.
+
 So that branch builds its own four-way weather choice with the shared tail
 duplicated across the arms. That costs four sets of constructed objects and
 no runtime, and it keeps the exclusivity structural: a frame still gets

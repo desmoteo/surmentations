@@ -225,6 +225,21 @@ flowchart TB
   elongated/sliding droplets.
 - **Composite**: per-droplet distorted patch alpha-blended into the base
   image; streaks are a thin vertically-elongated variant of the same model.
+- **Superseded.** The per-droplet patch above, its Blinn-Phong highlight and
+  its painted rim describe a window photographed up close. For a camera
+  focused metres away they were wrong in ways that showed on real scenes:
+  drops far narrower than the lens aperture were drawn crisp (72-89% of them
+  against a 2.5 mm pupil), every drop carried a +210 highlight from a fixed
+  light whatever the scene, and the condensation veil blended towards white,
+  which raised fogged areas of a night street from level 35 to 102.
+  `lens/water_droplets.py` now builds one height field for all the water
+  (lobes merge; pinned drops get size-dependent irregular outlines, and each
+  runner is drawn row by row as a slug, a pear or a beading thread, on a
+  meandering track), refracts
+  the frame through it once with Snell and Fresnel, blurs the result with the
+  aperture disc, and treats condensation as scattering of the scene's own
+  light. `droplet_defocus_range` and `scene_compression_range` are gone;
+  `aperture_diameter_range_mm` and `horizontal_fov_range_deg` replace them.
 
 #### Dirt / soil (`lens/dirt.py`)
 - **Model**: dirt on/near the lens sits far outside the camera's depth of
