@@ -251,6 +251,13 @@ flowchart TB
   saturation under the mask.
 - **Params**: `blob_count_range`, `blob_size_range`, `opacity_range`,
   `color_range` (dirt/soil hue-saturation bounds), `defocus_blur_range`.
+- **Extended.** The scattering model that replaced this tint scattered only
+  light from inside the frame, from close to each pixel, so a patch of grime
+  over a road was replaced by a blur of the same road: severity 5 moved a
+  daylit frame by 6 levels. Dirt is lit from the whole hemisphere in front
+  of the glass. `lens/dirt.py` now adds the wide-angle share of that light
+  (`ambient_light_range`, relative to the frame's mean) and an even
+  `dust_film_range` under the patches; severity 5 moves the same frame by 18.
 
 #### Sun flare (`lens/sun_flare.py`)
 - **Model**: physically-motivated compound flare, not a single glow blob:
@@ -299,6 +306,12 @@ pseudo-metric depth given a user `depth_scale` or a heuristic default).
   "Photorealistic Rendering of Rain Streaks" (SIGGRAPH 2006).
 - **Params**: `streak_density_range`, `streak_length_range`, `angle_range`
   (wind), `brightness_range`, `veil_beta_range`, `wetness_probability`.
+- **Extended.** Shutter time and aperture were two independent uniform draws
+  from narrow ranges (1/333-1/100 s, 0.9-2.6 mm), so every frame got the
+  same middling streak. The shutter is now metered from a drawn light level
+  and the drawn aperture, `T = K N^2 / E`, within 1/8000-1/25 s, which gives
+  flecks, dashes and long streaks with the correlation a camera's exposure
+  has. A streak's length includes the drop's own width.
 
 ### 3.5 v1, phase 5 — Snow (`atmosphere/snow.py`)
 - **Model**: particle system of flake sprites (soft circular/star kernels),

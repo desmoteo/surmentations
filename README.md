@@ -107,7 +107,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | Transform | Models | Needs depth |
 | --- | --- | --- |
 | `WaterDroplets` | Water on the glass of a camera focused far beyond it: every drop a lobe of one refracting surface, so drops merge; large drops individually shaped — lopsided and bottom-heavy when pinned, and as runners anything from a blunt slug to a head trailing a thread that breaks into beads; sharpness set by the lens aperture, not chosen; condensation as scattering of the scene's own light; lit by the infrared ring at night | no |
-| `DirtSoil` | Grime as a *scattering* layer, not paint — energy-conserving, with per-deposit albedos from grey dust through yellow pollen to brown spray | no |
+| `DirtSoil` | Grime as a *scattering* layer, not paint, with per-deposit albedos from grey dust through yellow pollen to brown spray. Lit from the whole hemisphere in front of the glass, so it glows under a sky the camera is not looking at; patches over an even film of settled dust | no |
 | `SunFlare` | Veiling glare, halo, coating-tinted ghost chain, diffraction starburst, dispersion corona, plus CCTV-specific dome scratches, smear and IR leak | no |
 | `HousingOccluders` | Insects and webs on the dome — hugely magnified and defocused, silhouetted by day, glowing under the IR ring | no |
 
@@ -157,13 +157,13 @@ and the physics behind it.
 | Transform | Start with |
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `exposure_time_range`, `wetness_probability`, `wetness_darkening_range`, `min_streak_width_px` |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `min_streak_width_px` |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `min_flake_width_px`, `max_flakes` |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `aperture_diameter_range_mm` (sets how sharp the water looks), `coalescence_range`, `condensation_coverage_range`, `condensation_milkiness_range`, `illuminator_glow_range` (infrared ring on) |
-| `DirtSoil` | `coverage_range`, `veil_strength_range`, `highlight_boost_range`, `deposits` (which substances), `smudge_count_range` |
+| `DirtSoil` | `coverage_range`, `dust_film_range` (even film between the patches), `ambient_light_range` (how much brighter the surroundings are than the frame), `veil_strength_range`, `highlight_boost_range`, `deposits` (which substances), `smudge_count_range` |
 | `SunFlare` | `flare_position`, `intensity_range`, `ghost_count_range`, `aperture_blades_range`, `dispersion_ring_probability`, `scratch_count_range` |
 | `HousingOccluders` | `insect_count_range`, `insect_size_range`, `web_count_range`, `defocus_range`, `glow_range` (0 by day, >0 under the IR ring) |
 | `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range` |
@@ -286,10 +286,10 @@ python scripts/benchmark.py --no-depth             # CPU-only subset
 | `ExposureTransient` | 4.8 | 24.3 |
 | `HousingOccluders` | 10.8 | 66.7 |
 | `SunFlare` | 21.4 | 125.5 |
-| `DirtSoil` | 32.8 | 171.8 |
+| `DirtSoil` | 35.4 | 173.5 |
 | `TemporalDenoiseArtifacts` | 38.6 | 237.4 |
-| `WaterDroplets` | 64.5 | 153.8 |
 | `WdrToneMapping` | 102.9 | 146.2 |
+| `WaterDroplets` | 112.7 | 194.7 |
 | `VideoCodecArtifacts` | 170.4 | 251.9 |
 
 ### Depth-conditioned transforms — total ms per image
@@ -302,7 +302,7 @@ depth-conditioned transform costs when they share one provider.
 | `CastShadows` | 61.5 | **24.2** | 209.0 | 126.7 |
 | `NightIrMode` | 81.4 | **13.5** | 136.0 | 77.3 |
 | `RandomFog` | 86.7 | **19.8** | 212.7 | 114.0 |
-| `RandomRain` | 126.0 | 67.3 | 349.3 | 269.7 |
+| `RandomRain` | 140.1 | 81.4 | 384.4 | 304.8 |
 | `RandomSnow` | 135.4 | **32.1** | 245.8 | 177.0 |
 
 Sharing one provider saves roughly **62 ms per extra transform at 512 px and
@@ -320,7 +320,11 @@ geometry (a colour jitter, a blur), `provider.carry(before, after)` says so.
 
 These are a laptop under thermal limits: absolute numbers move by up to 2x
 between runs, and the relative ordering plus the cold/warm gap are the parts
-worth planning around.
+worth planning around. For that reason the `WaterDroplets`, `DirtSoil` and
+`RandomRain` rows, whose renderers changed after the table was measured, are
+not from a fresh run: each is the table's earlier figure scaled by the
+new-to-old ratio timed back to back in one session (droplets 1.17x at 512 px
+and 0.93x at 1024 px, dirt 1.08x and 1.01x, rain 1.21x and 1.13x).
 
 ### Choosing a budget
 
@@ -329,7 +333,7 @@ A `DataLoader` worker must keep ahead of the GPU. Rough guidance:
 - **Cheap enough to apply liberally** (under ~25 ms at 512 px):
   `RollingShutter`, `AcFlicker`, `ExposureTransient`, `HousingOccluders`,
   `SunFlare`.
-- **Moderate** (25-110 ms): `DirtSoil`, `TemporalDenoiseArtifacts`,
+- **Moderate** (25-115 ms): `DirtSoil`, `TemporalDenoiseArtifacts`,
   `WaterDroplets`, `WdrToneMapping`, and any *warm* depth-conditioned
   transform.
 - **Expensive, keep `p` low**: `VideoCodecArtifacts` (two ffmpeg subprocesses
@@ -381,6 +385,21 @@ provider = SharedDepthProvider(DepthAnythingV2Estimator(), depth_range_m=(1.0, 1
 `RandomFog` can additionally override the far plane for itself with
 `depth_scale`.
 
+**Severity is extinction per metre, so it has to match the scene's scale.**
+The presets suit the default 3-50 m. Calibrate a provider to a landscape and
+the same fog, rain or snow hides everything past a few hundred metres — which
+is what that weather does, and leaves a blank frame. For long views, set fog
+by visibility (`beta = 3.912 / visibility_m`) and cap the precipitation veils
+with `veil_beta_range`, as `docs/generate_scene_examples.py` does.
+
+**The scene's own conditions are not detected.** Nothing here knows that a
+frame is already night, or under a roof. `RandomFog`, `RandomRain` and
+`RandomSnow` are daylight models: their veil takes its colour from the
+brightest pixels in the frame, which on a real night frame are the street
+lamps, and the whole frame turns that colour. Use `NightRain` and `NightSnow`
+there. Rain's wet-ground pass likewise treats any level surface as paving,
+and snow settles indoors if you ask it to.
+
 **Clips.** Passed as `images=`, an `(N, H, W, 3)` array is treated the way
 Albumentations treats it: one set of parameters for every frame. Depth is
 estimated once, from the first frame, on the assumption that a clip is one
@@ -420,6 +439,13 @@ reference photo below. Each effect gets one image per severity level, so
 variant also re-rolls the setup knobs severity leaves alone — sun position,
 camera pitch, deposit mix, mains frequency — since those change the picture as
 much as the weather does.
+
+The same effects over eight other scenes — a crossing from straight above, a
+covered car park, a real night street, mountains across a valley — are in
+[`docs/examples/scenes/`](docs/examples/scenes/README.md), one page per scene,
+with the shipped pipelines run over each. That set is the place to look for
+where the models stop fitting, and each page says what the transforms had to
+be told about the scene to get there.
 
 Each cell shows the **median of seven draws**, not the first: effects that can
 legitimately draw themselves out of existence otherwise produce a cell the
@@ -505,7 +531,8 @@ intentionally changes:
 
 ```bash
 python -m tests.visual_regression.generate_goldens
-python docs/generate_examples.py          # and the gallery
+python docs/generate_examples.py          # the severity gallery
+python docs/generate_scene_examples.py    # every effect over sample_scenes/
 ```
 
 Two test files are worth knowing about because they guard properties rather
@@ -520,3 +547,9 @@ the gallery once discarded a library fix while every library test passed.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+The photographs in [`sample_scenes/`](sample_scenes/) and the images derived
+from them under [`docs/examples/scenes/`](docs/examples/scenes/) are not
+covered by it. They are from Wikimedia Commons under CC BY, CC BY-SA and CC0
+licences, listed with their authors in
+[`sample_scenes/SOURCES.md`](sample_scenes/SOURCES.md).

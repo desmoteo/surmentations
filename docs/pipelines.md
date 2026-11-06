@@ -372,6 +372,12 @@ night branches its `aperture_diameter_range_mm` is pinned to an open iris,
 them dissolve into soft patches, while the day branch keeps the transform's
 default range, which also covers lenses that stop down in sunlight.
 
+The rain in the street-lit night branch is seen by the same camera, so it is
+metered for 5-150 lux with that open iris. `RandomRain` derives its shutter
+time from the light level and the aperture, and at those levels it sits at
+the slow end of the shutter's range: long faint streaks, where the day
+branch mostly gets short flecks and dashes.
+
 So that branch builds its own four-way weather choice with the shared tail
 duplicated across the arms. That costs four sets of constructed objects and
 no runtime, and it keeps the exclusivity structural: a frame still gets
@@ -400,8 +406,15 @@ rather than assuming. Going from 1/333-1/100 s to 1/50-1/22 s takes the
 median streak from 10 px to 52 px — and the high-frequency energy the rain
 adds stays flat, 4.21 against 4.13. That is `α = D/(vT)` doing its job: a
 longer exposure spreads one drop's light over more pixels, so the streak gets
-longer and proportionally fainter. There is no shutter speed at which
-daylight rain becomes dramatic.
+longer and proportionally fainter.
+
+A shorter shutter does the opposite, and helps somewhat: on a 1280 px road
+scene at 30 mm/h the same measure goes from 5.9 at 1/30 s to 9.7 at 1/2000 s,
+flecks in place of streaks. Which of those a camera produces is set by the
+light and its aperture, so `RandomRain` meters its shutter time from a drawn
+light level and aperture instead of drawing it from that one narrow range.
+The picture varies a good deal more as a result. There is still no shutter
+speed at which daylight rain becomes dramatic.
 
 What actually says "rain" in a daylit frame is the **wet road** and water on
 the glass, which is why this pipeline raises `wetness_probability` to 0.85

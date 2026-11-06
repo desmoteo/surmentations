@@ -78,8 +78,10 @@ Sampling 26.7 ms (**8.5%**), rasterisation 287.7 ms. Same shape as rain.
 > patch. It now builds one height field for all the water and refracts the
 > frame through it in a single remap, which is what A1 and D3 below were
 > reaching for by other means: there is no per-droplet shading or blur left
-> to tabulate or batch. 154 ms at 1024 px and 65 ms at 512 px, with the
-> aperture disc and the film's scatter lobes computed at reduced size.
+> to tabulate or batch. It did not make the transform cheaper overall. Timed
+> back to back against the renderer it replaced, it costs 17% more at 512 px
+> and 7% less at 1024 px: the per-droplet work went, and a full-frame
+> refraction, an aperture-disc convolution and three scatter lobes came in.
 
 ~280 droplets rendered per call (the condensation pass contributes most of
 them), each with **2 `GaussianBlur` calls and a `remap`** — 561 blur calls per
