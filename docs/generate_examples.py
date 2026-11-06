@@ -291,12 +291,23 @@ def _variant_kwargs(
 
 
 def _build(
-    name: str, level: int, index: int, rng: np.random.Generator, provider: SharedDepthProvider
+    name: str,
+    level: int,
+    index: int,
+    rng: np.random.Generator,
+    provider: SharedDepthProvider,
+    extra: dict[str, Any] | None = None,
 ) -> Any:
-    """Construct one transform at ``level`` severity with this variant's overrides."""
+    """Construct one transform at ``level`` severity with this variant's overrides.
+
+    ``extra`` is applied last. It is how ``generate_scene_examples.py`` tells
+    a transform what it cannot read off the picture: how far the camera is
+    pitched, whether it is night, how bright the sky outside the frame is.
+    """
     preset: dict[str, Any] = SEVERITY[level][EFFECTS[name]]
     kwargs: dict[str, Any] = {"p": 1.0, **preset}
     kwargs.update(_variant_kwargs(name, index, rng, preset))
+    kwargs.update(extra or {})
 
     if name in ("water_droplets", "night_droplets"):
         return WaterDroplets(**kwargs)
