@@ -80,6 +80,13 @@ DEFAULT_WEATHER_SEVERITY = 2
 #: harder than anything in the scene.
 _IR_RING_GLOW = (0.6, 1.6)
 
+#: Entrance pupil, in millimetres, of a camera with its iris wide open — every
+#: camera at night, when there is no light to spare. It decides how sharp
+#: water on the glass looks: drops narrower than this dissolve into a loss of
+#: contrast. By day the transform's own default applies, which also covers
+#: lenses that stop down in sunlight and so render the same drops crisply.
+_OPEN_IRIS_MM = (1.4, 3.0)
+
 
 def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any) -> Any:
     """One transform at a severity level, built directly.
@@ -172,6 +179,7 @@ def weather_state(
     wet_clear: float = 0.06,
     severity: int = DEFAULT_WEATHER_SEVERITY,
     droplet_severity: int = DEFAULT_SEVERITY,
+    night: bool = False,
 ) -> A.OneOf:
     """Exactly one atmospheric state per frame, including "clear".
 
@@ -198,6 +206,10 @@ def weather_state(
             cost 24% of the frame's high-frequency detail against 15% at
             severity 1, and they were the most conspicuous thing in the
             output while the rain they signalled was invisible.
+        night: the frame is lit artificially, so the lens is wide open. That
+            matters to the water on the glass and to nothing else here: its
+            sharpness is set by the aperture, and at night most of it blurs
+            away into soft patches of lost contrast.
 
     Raises:
         ValueError: if the three weather probabilities sum to 1 or more.
@@ -208,6 +220,11 @@ def weather_state(
             f"rain + snow + fog must leave room for clear weather, got {total:.3f}. "
             "These are absolute probabilities, not relative weights."
         )
+    glass = {"aperture_diameter_range_mm": _OPEN_IRIS_MM} if night else {}
+
+    def _droplets(probability: float) -> Any:
+        return _at(WaterDroplets, "WaterDroplets", probability, droplet_severity, **glass)
+
     return A.OneOf(
         [
             A.Sequential(
@@ -223,26 +240,26 @@ def weather_state(
                         RandomRain, "RandomRain", 1.0, severity,
                         depth_provider=depth_provider, wetness_probability=0.85,
                     ),
-                    _at(WaterDroplets, "WaterDroplets", wet_rain, droplet_severity),
+                    _droplets(wet_rain),
                 ],
                 p=rain,
             ),
             A.Sequential(
                 [
                     _at(RandomSnow, "RandomSnow", 1.0, severity, depth_provider=depth_provider),
-                    _at(WaterDroplets, "WaterDroplets", wet_snow, droplet_severity),
+                    _droplets(wet_snow),
                 ],
                 p=snow,
             ),
             A.Sequential(
                 [
                     _at(RandomFog, "RandomFog", 1.0, severity, depth_provider=depth_provider),
-                    _at(WaterDroplets, "WaterDroplets", wet_fog, droplet_severity),
+                    _droplets(wet_fog),
                 ],
                 p=fog,
             ),
             A.Sequential(
-                [_at(WaterDroplets, "WaterDroplets", wet_clear, droplet_severity)],
+                [_droplets(wet_clear)],
                 p=1.0 - total,
             ),
         ],
@@ -289,13 +306,25 @@ def _infrared_night(
 
     def _with(*before: Any) -> list[Any]:
         return [*before, *_stream(lit_by_mains=True, infrared=True, severity=severity, **tail)]
+
+    def _droplets(probability: float) -> Any:
+        # Water on the glass sits in the infrared ring's beam, centimetres
+        # from the lamp, and the iris is wide open. Both are properties of
+        # this lighting state, not draws: a wet dome under its own
+        # illuminator glows, and by day it cannot.
+        return _at(
+            WaterDroplets, "WaterDroplets", probability, severity,
+            illuminator_glow_range=_IR_RING_GLOW,
+            aperture_diameter_range_mm=_OPEN_IRIS_MM,
+        )
+
     return A.OneOf(
         [
             A.Sequential(
                 _with(
                     ir,
                     _at(NightRain, "NightRain", 1.0, weather_severity),
-                    _at(WaterDroplets, "WaterDroplets", wet_rain, severity),
+                    _droplets(wet_rain),
                 ),
                 p=rain,
             ),
@@ -308,7 +337,7 @@ def _infrared_night(
                     ),
                     ir,
                     _at(NightSnow, "NightSnow", 1.0, weather_severity),
-                    _at(WaterDroplets, "WaterDroplets", wet_snow, severity),
+                    _droplets(wet_snow),
                 ),
                 p=snow,
             ),
@@ -319,12 +348,12 @@ def _infrared_night(
                         depth_provider=depth_provider,
                     ),
                     ir,
-                    _at(WaterDroplets, "WaterDroplets", wet_fog, severity),
+                    _droplets(wet_fog),
                 ),
                 p=fog,
             ),
             A.Sequential(
-                _with(ir, _at(WaterDroplets, "WaterDroplets", wet_clear, severity)),
+                _with(ir, _droplets(wet_clear)),
                 p=max(1.0 - rain - snow - fog, 1e-6),
             ),
         ],
@@ -402,6 +431,7 @@ def surveillance(
                                 depth_provider,
                                 severity=weather_severity,
                                 droplet_severity=severity,
+                                night=False,
                                 **weather,
                             ),
                             _at(SunFlare, "SunFlare", 0.12, severity),
@@ -415,6 +445,7 @@ def surveillance(
                                 depth_provider,
                                 severity=weather_severity,
                                 droplet_severity=severity,
+                                night=True,
                                 **weather,
                             ),
                             # Night under street or shop lighting, camera still
@@ -525,7 +556,10 @@ def surveillance_lite(
                     # if you need night as a domain.
                     A.Sequential(
                         [
-                            _at(WaterDroplets, "WaterDroplets", droplets, severity),
+                            _at(
+                                WaterDroplets, "WaterDroplets", droplets, severity,
+                                aperture_diameter_range_mm=_OPEN_IRIS_MM,
+                            ),
                             *_stream(lit_by_mains=True, infrared=False, severity=severity, **tail),
                         ],
                         p=night,

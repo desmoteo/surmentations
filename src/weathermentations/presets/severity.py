@@ -43,12 +43,18 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
         t = (level - 1) / 4.0
         severities[level] = {
             "WaterDroplets": {
-                "droplet_count_range": (int(_lerp(8, 90, t)), int(_lerp(25, 220, t))),
-                "droplet_radius_range": (_lerp(0.002, 0.004, t), _lerp(0.012, 0.038, t)),
-                "condensation_coverage_range": (_lerp(0.04, 0.3, t), _lerp(0.15, 0.75, t)),
+                # Calibrated for a far-focused camera, where the aperture
+                # dissolves most small drops and a film only redistributes
+                # the scene's own light. Both make water on the glass far
+                # gentler per drop than a renderer that draws crisp beads
+                # and a white veil, so the ladder needs more of it: at the
+                # counts that suited the old renderer, level 1 moved a frame
+                # by 1.0 level behind an open iris and level 5 by 15.
+                "droplet_count_range": (int(_lerp(20, 160, t)), int(_lerp(50, 380, t))),
+                "droplet_radius_range": (_lerp(0.002, 0.004, t), _lerp(0.014, 0.04, t)),
+                "condensation_coverage_range": (_lerp(0.08, 0.5, t), _lerp(0.25, 0.95, t)),
                 "condensation_edge_softness_range": (_lerp(0.45, 0.25, t), _lerp(0.7, 0.5, t)),
-                "condensation_milkiness_range": (_lerp(0.1, 0.4, t), _lerp(0.3, 0.8, t)),
-                "droplet_defocus_range": (_lerp(0.05, 0.2, t), _lerp(0.2, 0.5, t)),
+                "condensation_milkiness_range": (_lerp(0.2, 0.6, t), _lerp(0.4, 0.95, t)),
                 "trail_probability": _lerp(0.1, 0.6, t),
             },
             "DirtSoil": {
