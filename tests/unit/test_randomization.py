@@ -33,6 +33,9 @@ from weathermentations.camera import (
     TemporalDenoiseArtifacts,
     WdrToneMapping,
 )
+from weathermentations.camera.analog import AnalogVideoArtifacts
+from weathermentations.camera.demosaic import DemosaicArtifacts
+from weathermentations.camera.ir_cut import IrCutFilterFault
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
@@ -143,6 +146,9 @@ def _transforms() -> dict[str, Any]:
         "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts(p=1.0),
         "NightIrMode": NightIrMode(depth_provider=provider, p=1.0),
         "HousingOccluders": HousingOccluders(p=1.0, insect_count_range=(2, 5)),
+        "AnalogVideoArtifacts": AnalogVideoArtifacts(p=1.0),
+        "DemosaicArtifacts": DemosaicArtifacts(p=1.0),
+        "IrCutFilterFault": IrCutFilterFault(p=1.0),
         "FoliageIntrusion": FoliageIntrusion(p=1.0),
         "LensTamper": LensTamper(p=1.0),
         "SnowOnHousing": SnowOnHousing(p=1.0),

@@ -23,7 +23,10 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
+from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.codec import ffmpeg_path
+from weathermentations.camera.demosaic import DemosaicArtifacts
+from weathermentations.camera.ir_cut import IrCutFilterFault
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
@@ -46,6 +49,9 @@ _DEPTH_FREE = {
     "SunFlare": SunFlare,
     "SourceGlare": SourceGlare,
     "HousingOccluders": HousingOccluders,
+    "AnalogVideoArtifacts": AnalogVideoArtifacts,
+    "DemosaicArtifacts": DemosaicArtifacts,
+    "IrCutFilterFault": IrCutFilterFault,
     "FoliageIntrusion": FoliageIntrusion,
     "LensTamper": LensTamper,
     "SnowOnHousing": SnowOnHousing,

@@ -64,7 +64,10 @@ from weathermentations.camera import (  # noqa: E402
     VideoCodecArtifacts,
     WdrToneMapping,
 )
+from weathermentations.camera.analog import AnalogVideoArtifacts  # noqa: E402
 from weathermentations.camera.codec import ffmpeg_path  # noqa: E402
+from weathermentations.camera.demosaic import DemosaicArtifacts  # noqa: E402
+from weathermentations.camera.ir_cut import IrCutFilterFault  # noqa: E402
 from weathermentations.depth import (  # noqa: E402
     DepthAnythingV2Estimator,
     SharedDepthProvider,
@@ -145,6 +148,9 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "night_rain": NightRain(p=1.0),
         "night_snow": NightSnow(p=1.0),
         "spider_web": SpiderWeb(p=1.0),
+        "analog_video_artifacts": AnalogVideoArtifacts(p=1.0),
+        "demosaic_artifacts": DemosaicArtifacts(p=1.0),
+        "ir_cut_filter_fault": IrCutFilterFault(p=1.0),
         "foliage_intrusion": FoliageIntrusion(p=1.0),
         "lens_tamper": LensTamper(p=1.0),
         "snow_on_housing": SnowOnHousing(p=1.0),
