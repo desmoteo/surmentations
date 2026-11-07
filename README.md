@@ -28,6 +28,9 @@ than exposed.
 
 - **[`docs/how_it_works.md`](docs/how_it_works.md)** — what each effect
   models and why, with diagrams. Start here to decide which knobs matter.
+- **[`docs/transforms/`](docs/transforms/README.md)** — one page per
+  transform: the algorithm as a diagram, the model, every parameter with
+  its default, sample output at five severities, and the papers behind it.
 - **[`docs/rain_visibility.md`](docs/rain_visibility.md)** — why rain streaks
   are faint at surveillance resolutions, measured; and the drop-size
   distribution options.
@@ -153,6 +156,10 @@ falling back to a CPU path slow enough to blow a training-step budget.
 ---
 
 ## The effects
+
+Each transform has a page of its own under
+[`docs/transforms/`](docs/transforms/README.md), with its algorithm, its
+parameters, samples and references. The tables here are the overview.
 
 ### Weather and scene
 

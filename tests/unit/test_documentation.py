@@ -123,3 +123,39 @@ def test_every_module_has_a_page_on_the_site() -> None:
     assert _modules("src/surmentations/**/*.py", "src") == pages
     tests = {path.stem for path in (ROOT / "docs/site/tests").glob("*.rst")}
     assert _modules("tests/**/*.py", ".") == tests
+
+
+def test_every_transform_has_a_page_that_matches_its_source() -> None:
+    """``docs/transforms`` holds one page a transform, generated from the source.
+
+    A page that was edited by hand, or left behind when a docstring, a
+    default or a diagram changed, no longer says what the code does:
+    ``python docs/make_transform_pages.py`` rewrites them all.
+    """
+    from docs.make_transform_pages import OUT, pages, transforms
+
+    expected = pages()
+    exported = {name for names in transforms().values() for name in names}
+    assert {f"{name}.md" for name in exported} | {"README.md"} == set(expected)
+    on_disk = {path.name: path.read_text() for path in OUT.glob("*.md")}
+    assert set(on_disk) == set(expected)
+    stale = sorted(name for name, text in expected.items() if on_disk[name] != text)
+    assert not stale, f"regenerate with docs/make_transform_pages.py: {stale}"
+
+
+def test_every_page_has_a_diagram_and_its_references_are_known() -> None:
+    from docs.make_transform_pages import PAGES, SOURCES, pages
+
+    written = pages()
+    for name, text in written.items():
+        if name != "README.md":
+            assert "```mermaid" in text and "## References" in text, name
+    cited = {key for _diagram, references in PAGES.values() for key in references}
+    assert cited <= set(SOURCES)
+    # Diagrams must parse: a label holding brackets or parentheses is quoted.
+    for name, text in written.items():
+        for block in re.findall(r"```mermaid\n(.*?)```", text, re.S):
+            for line in block.splitlines():
+                for label in re.findall(r"\[([^\"\[\]]*?)\]", line):
+                    assert not any(c in label for c in "()[]{}"), f"{name}: {line.strip()!r}"
+
