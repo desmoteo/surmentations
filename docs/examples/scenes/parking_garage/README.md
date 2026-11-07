@@ -17,45 +17,80 @@ Source: [Interior of Rupert Street parking garage - DSC 8051.jpg](https://common
 | Fog | visibility 27 m (0.6 x the farthest point) |
 | Rain and snow veils | capped so visibility stays above 67.5 m and 45 m |
 
-## Effects at severity 3
+## What a provider with scene labels and geometry read off it
+
+The photograph and its label map, with the horizon the geometry estimator
+found drawn across both. See
+[scene understanding](../../../scene_understanding.md) for how each is made
+and how far to trust it.
+
+![labels and horizon](reading.jpg)
+
+| | |
+| --- | --- |
+| Field of view | 68°, assumed: a picture does not tell it |
+| Horizon | 0.52 of the frame's height from the top, or above: there is no sky in the frame to mark it |
+| Camera pitch below level | at least -1°, so the by-eye 4° stands |
+| Roll | +0.4° |
+| Camera height | not found: fewer than three usable vehicles or people in view |
+| Depth | the by-eye range above: there is no height to measure from |
+| Labels | structure 58%, pavement 41%, road 0%, lamp 0%, sky 0%, pole 0% |
+
+## Without and with it
+
+Every effect that depends on what the provider knows, twice: on the left with
+the plain provider and the by-eye values above, on the right with the provider
+that read the scene. The parameters and the seed are the same, so what differs
+is what the labels and the geometry changed.
+
+| `fog` without | `fog` with |
+| --- | --- |
+| ![`fog` without](effects/fog.jpg) | ![`fog` with](aware/fog.jpg) |
+
+| `night_ir` without | `night_ir` with |
+| --- | --- |
+| ![`night_ir` without](effects/night_ir.jpg) | ![`night_ir` with](aware/night_ir.jpg) |
+
+| `local_plumes` without | `local_plumes` with |
+| --- | --- |
+| ![`local_plumes` without](effects/local_plumes.jpg) | ![`local_plumes` with](aware/local_plumes.jpg) |
+
+## The other effects at severity 3
 
 One representative draw each: the median of seven by how much the frame changed.
+These do not read the scene, and are the same with either provider.
 
-| water_droplets | dirt_soil | fog |
+| water_droplets | dirt_soil | housing_occluders |
 | --- | --- | --- |
-| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![fog](effects/fog.jpg) |
+| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![housing_occluders](effects/housing_occluders.jpg) |
 
-| housing_occluders | night_ir | ac_flicker |
+| ac_flicker | rolling_shutter | exposure_transient |
 | --- | --- | --- |
-| ![housing_occluders](effects/housing_occluders.jpg) | ![night_ir](effects/night_ir.jpg) | ![ac_flicker](effects/ac_flicker.jpg) |
+| ![ac_flicker](effects/ac_flicker.jpg) | ![rolling_shutter](effects/rolling_shutter.jpg) | ![exposure_transient](effects/exposure_transient.jpg) |
 
-| rolling_shutter | exposure_transient | wdr_tone_mapping |
+| wdr_tone_mapping | denoise_artifacts | video_codec |
 | --- | --- | --- |
-| ![rolling_shutter](effects/rolling_shutter.jpg) | ![exposure_transient](effects/exposure_transient.jpg) | ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) |
+| ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) | ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) |
 
-| denoise_artifacts | video_codec | night_droplets |
+| night_droplets | sensor_noise | transmission_faults |
 | --- | --- | --- |
-| ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) | ![night_droplets](effects/night_droplets.jpg) |
+| ![night_droplets](effects/night_droplets.jpg) | ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) |
 
-| sensor_noise | transmission_faults | spider_web |
+| spider_web | night_insects | ir_dome_glare |
 | --- | --- | --- |
-| ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) |
+| ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) | ![ir_dome_glare](effects/ir_dome_glare.jpg) |
 
-| night_insects | ir_dome_glare | lens_tamper |
+| lens_tamper | ir_cut_filter_fault | demosaic_artifacts |
 | --- | --- | --- |
-| ![night_insects](effects/night_insects.jpg) | ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![lens_tamper](effects/lens_tamper.jpg) |
+| ![lens_tamper](effects/lens_tamper.jpg) | ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) |
 
-| ir_cut_filter_fault | demosaic_artifacts | analog_video |
+| analog_video | focus_shift | camera_vibration |
 | --- | --- | --- |
-| ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) |
+| ![analog_video](effects/analog_video.jpg) | ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) |
 
-| focus_shift | camera_vibration | on_screen_overlay |
+| on_screen_overlay |  |  |
 | --- | --- | --- |
-| ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) |
-
-| local_plumes |  |  |
-| --- | --- | --- |
-| ![local_plumes](effects/local_plumes.jpg) |  |  |
+| ![on_screen_overlay](effects/on_screen_overlay.jpg) |  |  |
 
 Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow`, `wet_ground`, `snow_cover`, `frost_on_glass`, `snow_on_housing`, `foliage_intrusion`, `ground_fog`, `night_foliage` — the scene is under a roof.
 
@@ -66,6 +101,7 @@ Not rendered: `heat_shimmer` — it is turbulence over sunlit ground, which show
 ## `surveillance_lite` pipeline
 
 4 consecutive draws. Each is a different combination of effects.
+This pipeline takes no depth provider, so there is nothing to compare.
 
 | draw 0 | draw 1 |
 | --- | --- |

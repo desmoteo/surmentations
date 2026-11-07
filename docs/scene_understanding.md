@@ -73,7 +73,9 @@ point of every scene placed at two numbers given by hand.
 | [`NightRain`](transforms/NightRain.md), [`NightSnow`](transforms/NightSnow.md), [`NightInsects`](transforms/NightInsects.md), [`WaterDroplets`](transforms/WaterDroplets.md), [`SpiderWeb`](transforms/SpiderWeb.md), [`FoliageIntrusion`](transforms/FoliageIntrusion.md) | | The scene's field of view, where a provider earlier in the pipeline settled one |
 
 The same frame, without and with: the photograph, the effect with a plain
-provider, and the effect with labels and an estimated geometry.
+provider, and the effect with labels and an estimated geometry. The
+[scene gallery](examples/scenes/README.md) has the same comparison for
+every effect that reads the scene, over eight scenes, and for the pipeline.
 
 A soaked road. The far road keeps its sheen, the rain's veil is over the
 scene's real distances, and at night the lamps stand above a horizon that is
@@ -324,8 +326,10 @@ depth-conditioned transform fires on a frame pays for none of them.
 - With no sky and no ground-level camera (a view straight down, a car
   park under a roof) the estimator gives a bound and no more; give the
   geometry for those cameras.
-- The [scene gallery](examples/scenes/README.md) still uses its by-eye
-  values and a plain provider.
+- A veil set for one scale is wrong for another. The
+  [scene gallery](examples/scenes/README.md) shows every such effect twice,
+  from the same parameters: its rain and snow veils were capped for the
+  by-eye distances, and over the measured ones some are much thicker.
 
 ## Writing your own
 

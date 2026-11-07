@@ -27,36 +27,23 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from docs.generate_scene_examples import SCENES  # noqa: E402
+from docs.generate_scene_examples import (  # noqa: E402
+    SCENES,
+    draw_horizon,
+    label_legend,
+    label_picture,
+)
 from surmentations.atmosphere import GroundFog, RandomRain, RandomSnow  # noqa: E402
 from surmentations.camera import NightIrMode  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
 from surmentations.perception import (  # noqa: E402
     GroundPlaneGeometryEstimator,
-    SceneClass,
     SegmentationLabelEstimator,
 )
 from surmentations.presets.severity import GROUND_SEVERITY, SEVERITY  # noqa: E402
 
 OUT_DIR = REPO / "docs" / "assets" / "scene_understanding"
 REFERENCE = REPO / "docs" / "examples" / "00_base_scene.png"
-
-# One colour per scene class, for the label maps.
-PALETTE: dict[SceneClass, tuple[int, int, int]] = {
-    SceneClass.OTHER: (40, 40, 40),
-    SceneClass.SKY: (135, 190, 235),
-    SceneClass.ROAD: (105, 105, 110),
-    SceneClass.PAVEMENT: (175, 145, 175),
-    SceneClass.TERRAIN: (150, 120, 70),
-    SceneClass.GRASS: (125, 215, 85),
-    SceneClass.FOLIAGE: (35, 125, 40),
-    SceneClass.STRUCTURE: (150, 85, 65),
-    SceneClass.VEHICLE: (225, 40, 40),
-    SceneClass.PERSON: (250, 215, 40),
-    SceneClass.WATER: (40, 70, 215),
-    SceneClass.POLE: (235, 235, 235),
-    SceneClass.LAMP: (255, 150, 30),
-}
 
 # The three scenes the effects are compared on: a motorway from a bridge,
 # a city road under a long view, a lamp-lit street at night.
@@ -92,14 +79,6 @@ def _by_eye_pitch(name: str) -> float:
     return SCENES[name].camera_pitch_deg if name in SCENES else 18.0
 
 
-def _coloured(labels: np.ndarray) -> np.ndarray:
-    """A label map as a picture, one colour per class."""
-    table = np.zeros((256, 3), dtype=np.uint8)
-    for scene_class, colour in PALETTE.items():
-        table[int(scene_class)] = colour
-    return table[labels]
-
-
 def _tile(image: np.ndarray, width: int, height: int) -> np.ndarray:
     """``image`` resized to a tile of the figure."""
     return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
@@ -115,27 +94,6 @@ def _save(name: str, image: np.ndarray) -> None:
     )
 
 
-def _legend(width: int) -> np.ndarray:
-    """A strip naming the colours of the label maps."""
-    strip = np.full((34, width, 3), 255, dtype=np.uint8)
-    step = width // len(PALETTE)
-    for index, (scene_class, colour) in enumerate(PALETTE.items()):
-        left = index * step
-        cv2.rectangle(strip, (left + 6, 9), (left + 22, 25), colour, -1)
-        cv2.rectangle(strip, (left + 6, 9), (left + 22, 25), (0, 0, 0), 1)
-        cv2.putText(
-            strip,
-            scene_class.name.lower(),
-            (left + 27, 23),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.42,
-            (0, 0, 0),
-            1,
-            cv2.LINE_AA,
-        )
-    return strip
-
-
 def read_scenes(
     images: dict[str, np.ndarray], depth: DepthAnythingV2Estimator, labels: Any
 ) -> list[str]:
@@ -148,19 +106,12 @@ def read_scenes(
         height, width = image.shape[:2]
         told = provider.describe(image)
         geometry, camera, metric = told["geometry"], told["camera"], told["metric"]
-        named = _coloured(provider.get_labels(image))
+        named = label_picture(provider.get_labels(image))
         photograph = image.copy()
         horizon = "none found"
         if geometry.horizon is not None:
-            row = geometry.horizon * height
-            slope = np.tan(np.radians(geometry.roll_deg))
-            ends = [
-                (0, round(row - 0.5 * width * slope)),
-                (width - 1, round(row + 0.5 * width * slope)),
-            ]
             for picture in (photograph, named):
-                cv2.line(picture, ends[0], ends[1], (0, 0, 0), 5, cv2.LINE_AA)
-                cv2.line(picture, ends[0], ends[1], (255, 235, 0), 2, cv2.LINE_AA)
+                draw_horizon(picture, geometry.horizon, geometry.roll_deg)
             horizon = f"{geometry.horizon:.2f}" + (" or above" if geometry.horizon_is_bound else "")
         tiles.append(np.hstack([_tile(photograph, 360, 240), _tile(named, 360, 240)]))
         pitch = "open" if camera.pitch_deg is None else f"{camera.pitch_deg:+.0f}°"
@@ -180,7 +131,7 @@ def read_scenes(
         last = np.hstack([tiles[-1], np.full_like(tiles[-1], 255)])
         grid.append(last)
     figure = np.vstack(grid)
-    _save("labels_and_horizon.jpg", np.vstack([figure, _legend(figure.shape[1])]))
+    _save("labels_and_horizon.jpg", np.vstack([figure, label_legend(figure.shape[1])]))
     return rows
 
 
