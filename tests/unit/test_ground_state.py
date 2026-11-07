@@ -516,3 +516,50 @@ def test_a_wet_road_leaves_the_vehicles_on_it_as_they_were() -> None:
     wetness, _horizon, _far_end = _read_wet_ground(depth, scene, 60.0, 30.0, 6.0)
     assert float(wetness[car].mean()) < 0.1
     assert float(wetness[200:, 200:].mean()) > 0.9
+
+
+def test_small_far_things_on_the_road_are_not_painted_over() -> None:
+    """A car four hundred metres off is a dozen pixels and no bump in any
+    depth map, and the far end of a wet road is where it is most nearly a
+    mirror: the traffic there was being painted out with sky. A thing that
+    small is still unlike the road immediately round it. A broad change, the
+    dark half of a road lit from one side, is not a thing."""
+    from surmentations.utils.ground import small_things
+
+    rng = np.random.default_rng(3)
+    scene = np.full((240, 320, 3), 0.2, dtype=np.float32)
+    scene[:, 160:] = 0.07
+    scene += rng.normal(0.0, 0.004, scene.shape).astype(np.float32)
+    scene[60:66, 40:52] = 0.03  # a far car on the lit half
+    scene[150:156, 230:242] = 0.4  # a pale one on the dark half
+    scene[100:240, 100:103] = 0.8  # a lane marking
+    ground = np.ones((240, 320), dtype=np.float32)
+    things = small_things(np.clip(scene, 0.0, 1.0), ground)
+    assert things.shape == ground.shape and things.dtype == np.float32
+    assert float(things[61:65, 42:50].mean()) > 0.8
+    assert float(things[151:155, 232:240].mean()) > 0.8
+    assert float(things[120:220, 101].mean()) > 0.8, "a marking is kept as it is"
+    # The open road on either side of the change of light is road.
+    assert float(things[:, 10:30].max()) < 0.05 and float(things[:, 290:310].max()) < 0.05
+    assert float(things[20:40, 200:280].max()) < 0.05
+
+
+def test_a_soaked_road_is_plainly_darker_and_its_far_end_is_not() -> None:
+    """What a wet road looks like from above: dark underfoot, where water
+    reflects a few per cent of the sky, and pale towards the horizon, where
+    it reflects most of it."""
+    from surmentations.atmosphere.rain import _apply_ground_wetness
+
+    height, width = 240, 320
+    image = np.full((height, width, 3), 0.3, dtype=np.float32)
+    image[:60] = 0.8  # sky
+    wetness = np.zeros((height, width), dtype=np.float32)
+    wetness[64:] = 1.0
+    out = _apply_ground_wetness(
+        image, wetness, 0.37, horizon_px=60.0, focal_px=280.0,
+        sky_radiance=np.full(3, 0.8, dtype=np.float32),
+    )  # fmt: skip
+    near, far = float(out[225:238].mean()), float(out[68:74].mean())
+    assert near < 0.6 * 0.3, "underfoot it is asphalt at well under its dry brightness"
+    assert far > 0.3, "and at its far end it is paler than it was dry"
+    assert far > 2.0 * near

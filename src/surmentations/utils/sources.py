@@ -62,6 +62,13 @@ def source_mask(linear_rgb: np.ndarray) -> np.ndarray:
 # The smallest clipped region taken for a lamp, as a fraction of the frame:
 # nine pixels of an 800 x 533 one. Below it is a glint on a leaf or a kerb.
 _MIN_LAMP_AREA_FRACTION = 2e-5
+# A lamp's clipped region at the frame's own resolution is a ragged thing,
+# the fitting and the flare round it: it fills a quarter of its bounding box
+# or more, and the box is at most this many times longer than it is wide. A
+# lit kerb or a strip of lit road is longer; a spray of lit leaves is
+# emptier.
+_MIN_LAMP_BOX_FILL = 0.25
+_MAX_LAMP_ASPECT = 2.5
 
 
 def lamp_mask(linear_rgb: np.ndarray) -> np.ndarray:
@@ -72,8 +79,12 @@ def lamp_mask(linear_rgb: np.ndarray) -> np.ndarray:
     None of those was many times brighter than the sensor could record, and
     raising them by a lamp's over-range factor before a wet road reflects
     them filled its puddles with slabs of saturated yellow. A lamp is a
-    region that is compact, neither a speck nor a surface: it fills its own
-    bounding box as a disc does, as :func:`light_sources` requires too.
+    region that is compact, neither a speck nor a surface nor a strip.
+
+    The test is looser than :func:`light_sources`', which looks at a reduced
+    copy on which a lamp is a blob. At full size its outline is ragged, and
+    asked to fill its box as a disc does, every lamp of the night street
+    this was tuned on failed: a wet road then reflected no lamp at all.
     """
     clipped = source_mask(linear_rgb)
     count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
@@ -83,11 +94,13 @@ def lamp_mask(linear_rgb: np.ndarray) -> np.ndarray:
         return clipped
     frame = float(clipped.size)
     areas = stats[:, cv2.CC_STAT_AREA].astype(np.float64)
-    boxes = stats[:, cv2.CC_STAT_WIDTH] * stats[:, cv2.CC_STAT_HEIGHT]
+    wide = stats[:, cv2.CC_STAT_WIDTH].astype(np.float64)
+    tall = stats[:, cv2.CC_STAT_HEIGHT].astype(np.float64)
     lamp = (
         (areas >= _MIN_LAMP_AREA_FRACTION * frame)
         & (areas <= _MAX_AREA_FRACTION * frame)
-        & (areas >= _MIN_BOX_FILL * boxes)
+        & (areas >= _MIN_LAMP_BOX_FILL * wide * tall)
+        & (np.maximum(wide, tall) <= _MAX_LAMP_ASPECT * np.minimum(wide, tall))
     )
     lamp[0] = False
     return (clipped * lamp[labels]).astype(np.float32)

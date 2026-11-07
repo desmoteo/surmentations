@@ -101,6 +101,7 @@ from surmentations.utils.ground import (
     fill_to_edges,
     ground_noise,
     level_ground_weight,
+    small_things,
     standing_objects,
     vegetation_weight,
 )
@@ -1299,8 +1300,7 @@ def wet_albedo(dry: np.ndarray, ratio: float) -> np.ndarray:
 
 
 # Roughness of the film between puddles, as the fraction of the frame's
-# height its reflections are smeared over down the road, and how much of a
-# smooth surface's reflectance it keeps towards the camera. A puddle is
+# height its reflections are smeared over down the road. A puddle is
 # smooth: sharp, and the full Fresnel value.
 _FILM_SMEAR = 0.035
 # A rough surface does not smear a reflection by one amount. Most of its
@@ -1321,7 +1321,14 @@ _FILM_STREAK_WIDTH = 0.1
 # road, it left no streak at all, so there it is taken this many times
 # higher.
 _STREAK_LAMP_OVER = 30.0
-_FILM_GLOSS = 0.6
+# How much of a smooth surface's reflectance the film keeps towards the
+# camera, and the exponent its reflectance rises by towards the horizon.
+# Short of all of it: a film follows the road's texture, the stones that
+# stand proud of it shadow some of what would be seen at a grazing angle,
+# and standing water beside it is the brighter mirror. But most of it, for
+# roughness spreads a reflection and does not absorb it. At 0.6 the pale
+# sheen at a wet road's far end was two-thirds of what it is now.
+_FILM_GLOSS = 0.75
 _FILM_GRAZING_EXPONENT = 3.5
 
 # Below this weight a pixel is not wet ground: it is something standing on
@@ -1479,6 +1486,10 @@ def _read_wet_ground(
     # smooth bump in the depth map with the road's own orientation, and was
     # darkened and reflected in with the road it stood on.
     wetness *= 1.0 - standing_objects(depth_m, linear_scene, wetness)
+    # Nor on what is too small and too far for the depth map to show
+    # standing, which is where the road is most nearly a mirror: the traffic
+    # at the far end of a motorway was being painted out with sky.
+    wetness *= 1.0 - small_things(linear_scene, wetness)
     # Nothing above the ground's far end is level ground under the camera,
     # whatever way it faces: the water on a roof is not this road's.
     height = depth_m.shape[0]
