@@ -68,6 +68,15 @@ here for airlight estimation); Sakaridis et al. 2018 (Foggy Cityscapes,
 beta ladder and sky handling); Quilez, "Better Fog" (separate extinction and
 inscattering, sun-tinted fog colour).
 
+## With scene labels and geometry
+
+With a provider that knows more than depth
+(`perception`): the sky is what the scene's labels
+call sky, and the fog is over real metres where the camera's height is
+known, unless `depth_scale` says otherwise.
+
+See [scene understanding](../scene_understanding.md).
+
 ## Parameters
 
 | Parameter | Default | Meaning |

@@ -796,6 +796,18 @@ def _arguments(cls: type) -> list[tuple[str, str]]:
     return found
 
 
+def _with_scene_understanding(cls: type) -> str | None:
+    """What a class's docstring says a provider's labels and geometry change, if anything.
+
+    The paragraph that opens "With a provider that", which the transforms
+    that use the scene's labels or its camera each carry between their
+    summary and their arguments.
+    """
+    doc = inspect.cleandoc(cls.__doc__ or "")
+    found = re.search(r"^(With a provider that.*?)(?=\n\n|\Z)", doc, re.M | re.S)
+    return None if found is None else to_markdown(found.group(1))
+
+
 def _summary(cls: type) -> str:
     """The first sentence of a class's docstring."""
     return inspect.cleandoc(cls.__doc__ or "").split("\n\n")[0].replace("\n", " ")
@@ -846,6 +858,16 @@ def page(name: str) -> str:
         parts.append(f"| Tests | [`{test.relative_to(ROOT)}`](../../{test.relative_to(ROOT)}) |")
     parts += ["", "## Algorithm", "", "```mermaid", diagram, "```", ""]
     parts += ["## Model", "", to_markdown(module.__doc__ or ""), ""]
+    aware = _with_scene_understanding(cls)
+    if aware is not None:
+        parts += [
+            "## With scene labels and geometry",
+            "",
+            aware,
+            "",
+            "See [scene understanding](../scene_understanding.md).",
+            "",
+        ]
 
     parts += ["## Parameters", "", "| Parameter | Default | Meaning |", "| --- | --- | --- |"]
     signature = inspect.signature(cls.__init__).parameters

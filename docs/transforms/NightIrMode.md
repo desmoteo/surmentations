@@ -61,6 +61,19 @@ that automatically instead of having to paint it on.
 the signal and read noise does not scale at all, so a gained-up dark frame is
 noisiest in the shadows — not uniformly noisy.
 
+## With scene labels and geometry
+
+With a provider that carries scene labels
+(`labels`): vegetation is lifted by
+name as well as by colour, so a tree is bright in the near infrared in
+shade, in autumn and under a sodium lamp too; and the sky, which
+reflects neither the illuminator nor the ambient light, is dark. Where
+the camera's height is known the illuminator's inverse-square law runs
+over real metres, and a scene beyond its reach is lit by the ambient
+term alone.
+
+See [scene understanding](../scene_understanding.md).
+
 ## Parameters
 
 | Parameter | Default | Meaning |

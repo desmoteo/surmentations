@@ -118,6 +118,18 @@ times more than rain at the same liquid-equivalent rate, so heavy snowfall
 drops visibility hard, and that loss of contrast with distance is a stronger cue than the
 flakes themselves.
 
+## With scene labels and geometry
+
+With a provider that knows more than depth
+(`perception`): the field of view and the pitch
+are the scene's camera's; the veil is over real metres where the
+camera's height is known; and snow settles by name as well as by shape,
+on a labelled vehicle as `vehicle_cover_range` says, on a lawn as on
+any ground, on a tree's crown as a dusting, and not on a person, the sky
+or open water. Without one, nothing here changes.
+
+See [scene understanding](../scene_understanding.md).
+
 ## Parameters
 
 | Parameter | Default | Meaning |

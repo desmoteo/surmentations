@@ -115,6 +115,18 @@ unlike sequential `over` blending it does not depend on the order the
 streaks happen to be drawn in. That order-independence is what lets the whole
 field be rasterised in one batch (and, on a GPU, with a plain scatter-add).
 
+## With scene labels and geometry
+
+With a provider that knows more than depth
+(`perception`): the field of view and the pitch
+are the scene's camera's, and the two ranges below are drawn only for
+what it leaves open; the veil is over real metres where the camera's
+height is known; the wet road's horizon is the camera's; and the road
+is laid on what is labelled as paving and kept off the vehicles, people
+and vegetation on it. Without one, nothing here changes.
+
+See [scene understanding](../scene_understanding.md).
+
 ## Parameters
 
 | Parameter | Default | Meaning |

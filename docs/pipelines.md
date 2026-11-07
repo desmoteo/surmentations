@@ -269,6 +269,26 @@ transform = surveillance(provider)
 augmented = transform(image=image)["image"]
 ```
 
+The provider is also where a pipeline is told what its scenes hold and how
+its camera is mounted. Nothing in the pipeline changes; every transform in
+it asks the provider:
+
+```python
+from surmentations.perception import InstallationGeometry, SegmentationLabelEstimator
+
+provider = SharedDepthProvider(
+    DepthAnythingV2Estimator(),
+    labels=SegmentationLabelEstimator(),
+    geometry=InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_m=6.5),
+)
+transform = surveillance(provider)
+```
+
+The weather then falls through one camera, the wet road and the settled
+snow keep off what stands on them, and the infrared branch's illuminator
+works over the scene's real distances. See
+[`scene_understanding.md`](scene_understanding.md).
+
 ### Why `NightIrMode` is `p=1.0` *inside* its branch
 
 Because the branch **is** the IR-night state, and its weight — 30% — is what
