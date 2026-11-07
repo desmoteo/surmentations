@@ -4,6 +4,14 @@ These sit downstream of the optical effects in ``lens/`` and the atmospheric
 ones in ``atmosphere/``: the physical chain is scene -> atmosphere -> optics
 -> sensor -> ISP -> codec, and applying them out of that order produces
 images that could not exist (codec blocking underneath lens blur, say).
+
+By stage: the sensor (``NightIrMode`` and its filter stuck open,
+``IrCutFilterFault``; ``AcFlicker``, ``RollingShutter``,
+``CameraVibration``, ``SensorNoise``, ``DemosaicArtifacts``); the processor
+(``ExposureTransient``, ``WdrToneMapping``, ``TemporalDenoiseArtifacts``);
+the link (``VideoCodecArtifacts`` or ``AnalogVideoArtifacts``, then
+``TransmissionFaults``); and ``OnScreenOverlay``, drawn by the camera
+before the link or by the recorder after it.
 """
 
 from weathermentations.camera.analog import AnalogVideoArtifacts

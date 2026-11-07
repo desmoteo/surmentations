@@ -108,8 +108,23 @@ DEPTH_FREE = (
     "transmission_faults",
     "night_rain",
     "night_snow",
+    "spider_web",
+    "night_insects",
+    "ir_dome_glare",
+    "frost_on_glass",
+    "snow_on_housing",
+    "lens_tamper",
+    "foliage_intrusion",
+    "focus_shift",
+    "ir_cut_filter_fault",
+    "demosaic_artifacts",
+    "analog_video_artifacts",
+    "camera_vibration",
+    "on_screen_overlay",
 )
-DEPTH_CONDITIONED = ("fog", "rain", "snow", "night_ir", "cast_shadows")
+DEPTH_CONDITIONED = (
+    "fog", "rain", "snow", "night_ir", "cast_shadows", "ground_fog", "local_plumes", "heat_shimmer",
+)  # fmt: skip
 
 
 @dataclass

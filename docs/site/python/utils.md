@@ -1,6 +1,6 @@
 # Utilities
 
-The arithmetic the effects share: colour, photometry, filters, grids, noise, the sky and the ground.
+The arithmetic the effects share: colour, photometry, filters, grids, noise, the sky, the ground and the illuminator.
 
 ```{toctree}
 :maxdepth: 1

@@ -32,6 +32,11 @@ so they are lit far more strongly than anything in the scene and read as
 bright glowing shapes. A web at night is the classic case: barely visible by
 day, a blazing tangle of loops on the night feed. The same geometry produces
 both, so one parameter — how strongly the near field is lit — covers it.
+
+The webs here are lines, blurred. :class:`~weathermentations.lens.SpiderWeb`
+is a web as geometry, thread by thread at its own distance, and
+:class:`~weathermentations.atmosphere.NightInsects` is the insect in
+flight; this transform is what has settled on the dome.
 """
 
 from __future__ import annotations

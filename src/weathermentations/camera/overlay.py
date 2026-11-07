@@ -49,6 +49,11 @@ from pydantic import AfterValidator, Field
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 
+# Where `physical_order` puts an overlay: a camera's just before the codec,
+# a recorder's after the link. They extend the table in presets/pipeline.py.
+CAMERA_STAGE = 10
+RECORDER_STAGE = 13
+
 # A 5 by 7 face: seven rows of five dots a character, top row first.
 _FACE = {
     "0": "01110 10001 10011 10101 11001 10001 01110",
@@ -397,8 +402,3 @@ class OnScreenOverlay(WeatherTransform):
         kept: np.ndarray = bboxes[np.array(keep, dtype=bool)]
         return kept
 
-
-# Where `physical_order` puts an overlay: a camera's just before the codec,
-# a recorder's after the link. Kept beside the table they extend.
-CAMERA_STAGE = 10
-RECORDER_STAGE = 13

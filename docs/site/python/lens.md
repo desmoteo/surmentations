@@ -1,6 +1,6 @@
 # Lens and housing
 
-What is on the glass, and what the lens does with bright light.
+What is on the glass and the housing, and what the lens does with bright light and with a focus that has drifted.
 
 ```{toctree}
 :maxdepth: 1

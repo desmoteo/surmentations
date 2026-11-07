@@ -833,7 +833,9 @@ One pinned core, fast mode, against the commit before, twelve frames each
 ## A transform written with its kernel: `SpiderWeb`
 
 Added after the rounds above, and the first transform here designed with
-both halves at once. A web in front of the lens is drawn as discs of light,
+both halves at once. `NightInsects`, added after it, draws its streaks
+and its motes of dust with the same kernel; the fourteen other transforms
+added then are numpy and OpenCV only. A web in front of the lens is drawn as discs of light,
 one for each bead on a thread and a row of them for the thread between:
 eleven thousand discs for a typical frame at 1024 pixels and fifty thousand
 for a web against the glass, from under a pixel to forty across, added and
