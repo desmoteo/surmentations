@@ -31,10 +31,13 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.ground_fog import GroundFog
+from weathermentations.atmosphere.heat_shimmer import HeatShimmer
 from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
+from weathermentations.atmosphere.plumes import LocalPlumes
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -122,6 +125,13 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     # severity does not control.
     "SunFlare": lambda k: SunFlare(p=1.0, flare_position=(0.75, 0.15), **k),
     "HousingOccluders": lambda k: HousingOccluders(p=1.0, **k),
+    "GroundFog": lambda k: GroundFog(depth_provider=_provider(), p=1.0, **k),
+    "LocalPlumes": lambda k: LocalPlumes(depth_provider=_provider(), p=1.0, **k),
+    # The ladder is the turbulence; the path and the lens are held long.
+    "HeatShimmer": lambda k: HeatShimmer(
+        depth_provider=_provider(), p=1.0, depth_scale=6000.0,
+        horizontal_fov_range_deg=(3.0, 5.0), **k
+    ),
     "OnScreenOverlay": lambda k: OnScreenOverlay(p=1.0, **k),
     "CameraVibration": lambda k: CameraVibration(p=1.0, **k),
     "FocusShift": lambda k: FocusShift(p=1.0, **k),

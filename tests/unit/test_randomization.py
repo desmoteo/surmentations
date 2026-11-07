@@ -20,8 +20,11 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.ground_fog import GroundFog
+from weathermentations.atmosphere.heat_shimmer import HeatShimmer
 from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_insects import NightInsects
+from weathermentations.atmosphere.plumes import LocalPlumes
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -153,6 +156,15 @@ def _transforms() -> dict[str, Any]:
         "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts(p=1.0),
         "NightIrMode": NightIrMode(depth_provider=provider, p=1.0),
         "HousingOccluders": HousingOccluders(p=1.0, insect_count_range=(2, 5)),
+        "GroundFog": GroundFog(depth_provider=provider, p=1.0),
+        "LocalPlumes": LocalPlumes(depth_provider=provider, p=1.0),
+        "HeatShimmer": HeatShimmer(
+            depth_provider=provider,
+            p=1.0,
+            depth_scale=6000.0,
+            horizontal_fov_range_deg=(3.0, 5.0),
+            log10_cn2_range=(-12.4, -12.0),
+        ),
         "OnScreenOverlay": OnScreenOverlay(p=1.0),
         "CameraVibration": CameraVibration(p=1.0),
         "FocusShift": FocusShift(p=1.0, focus_distance_range_m=(0.02, 0.2)),

@@ -6,10 +6,13 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.ground_fog import GroundFog
+from weathermentations.atmosphere.heat_shimmer import HeatShimmer
 from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
+from weathermentations.atmosphere.plumes import LocalPlumes
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -79,6 +82,9 @@ _DEPTH_CONDITIONED = {
     "RandomSnow": RandomSnow,
     "NightIrMode": NightIrMode,
     "CastShadows": CastShadows,
+    "GroundFog": GroundFog,
+    "LocalPlumes": LocalPlumes,
+    "HeatShimmer": HeatShimmer,
 }
 # Needs the ffmpeg binary, so it is covered separately and skipped without it.
 _EXTERNAL_TOOL = {

@@ -52,7 +52,10 @@ from weathermentations.atmosphere import (  # noqa: E402
     RandomRain,
     RandomSnow,
 )
+from weathermentations.atmosphere.ground_fog import GroundFog  # noqa: E402
+from weathermentations.atmosphere.heat_shimmer import HeatShimmer  # noqa: E402
 from weathermentations.atmosphere.night_insects import NightInsects  # noqa: E402
+from weathermentations.atmosphere.plumes import LocalPlumes  # noqa: E402
 from weathermentations.camera import (  # noqa: E402
     AcFlicker,
     ExposureTransient,
@@ -177,6 +180,9 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
             "night_ir": NightIrMode(depth_provider=depth_provider, p=1.0),
             "night_fog": NightFog(depth_provider=depth_provider, p=1.0),
             "cast_shadows": CastShadows(depth_provider=depth_provider, p=1.0),
+            "ground_fog": GroundFog(depth_provider=depth_provider, p=1.0),
+            "local_plumes": LocalPlumes(depth_provider=depth_provider, p=1.0),
+            "heat_shimmer": HeatShimmer(depth_provider=depth_provider, p=1.0),
         }
     return transforms
 
