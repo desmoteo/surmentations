@@ -146,7 +146,7 @@ class SnowOnHousing(WeatherTransform):
         patch_count_range: tuple[int, int] = (0, 4),
         patch_size_range: tuple[float, float] = (0.03, 0.14),
         defocus_range: tuple[float, float] = (0.01, 0.04),
-        brightness_range: tuple[float, float] = (0.55, 1.0),
+        brightness_range: tuple[float, float] = (0.35, 0.75),
         glow_range: tuple[float, float] = (0.0, 0.0),
         p: float = 0.5,
     ):
