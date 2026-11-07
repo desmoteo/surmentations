@@ -99,7 +99,7 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
 from surmentations import _native, mode
-from surmentations.base import CameraTransform
+from surmentations.base import CameraTransform, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.color import sky_radiance_linear
 from surmentations.utils.noise import value_noise
@@ -1229,7 +1229,7 @@ class WaterDroplets(CameraTransform):
         mm_per_px = pane_width_mm / max(width, 1)
         shedding_px = shedding_radius_mm(hysteresis) / mm_per_px
         aperture_mm = self.py_random.uniform(*self.aperture_diameter_range_mm)
-        fov_deg = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        fov_deg = scene_fov(data, self.py_random.uniform(*self.horizontal_fov_range_deg))
         focal_px = (width / 2.0) / math.tan(math.radians(fov_deg) / 2.0)
 
         placements = _sample_positions(

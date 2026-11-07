@@ -102,6 +102,7 @@ from surmentations.base import CameraTransform, first_frame, require_depth_provi
 from surmentations.depth.normals import upward_facing
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
+from surmentations.perception.labels import SceneClass, class_weight
 from surmentations.utils.color import (
     TYPICAL_SCENE_ALBEDO,
     illuminant_radiance_linear,
@@ -362,6 +363,18 @@ _SNOW_OPACITY = 0.95
 # vehicle and not for ground.
 _VEHICLE_WIDTH = 0.09
 
+# What the scene's labels say about where snow lies, where the provider has
+# them: what is a vehicle, what nothing settles on, what is a tree's crown
+# and what is a lawn. And how soft a labelled region's edge is taken to be,
+# as a fraction of the diagonal.
+_NAMED: dict[str, tuple[SceneClass, ...]] = {
+    "vehicle": (SceneClass.VEHICLE,),
+    "bare": (SceneClass.PERSON, SceneClass.SKY, SceneClass.WATER),
+    "canopy": (SceneClass.FOLIAGE,),
+    "lawn": (SceneClass.GRASS,),
+}
+_LABEL_EDGE = 0.003
+
 # Share of a tree's lit foliage that carries snow when the ground is covered.
 _CANOPY_COVER = 0.7
 
@@ -380,6 +393,14 @@ _CAST_SATURATION = (0.3, 0.6)
 
 class RandomSnow(CameraTransform):
     """Physically-parameterised falling snow with depth-derived accumulation.
+
+    With a provider that knows more than depth
+    (:mod:`surmentations.perception`): the field of view and the pitch
+    are the scene's camera's; the veil is over real metres where the
+    camera's height is known; and snow settles by name as well as by shape,
+    on a labelled vehicle as ``vehicle_cover_range`` says, on a lawn as on
+    any ground, on a tree's crown as a dusting, and not on a person, the sky
+    or open water. Without one, nothing here changes.
 
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
@@ -718,8 +739,9 @@ class RandomSnow(CameraTransform):
         relative_depth = self.depth_provider.get_depth(scene)
         depth_pm = self.depth_provider.to_metric(relative_depth)
         linear_scene, _scale, _is_integer = to_linear_unit(first_frame(scene))
+        labels = self.depth_provider.get_labels(scene)
         sky = sky_to_depth_edge(
-            sky_weight(linear_scene, relative_depth), relative_depth, linear_scene
+            sky_weight(linear_scene, relative_depth, labels), relative_depth, linear_scene
         )
 
         # Every physical quantity is drawn per call. A scalar here would make
@@ -731,6 +753,11 @@ class RandomSnow(CameraTransform):
         horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
         focus_distance = self.py_random.uniform(*self.focus_distance_range_m)
         camera_pitch = self.py_random.uniform(*self.camera_pitch_range_deg)
+        # Where the provider knows how the camera is mounted, the scene is
+        # seen through that camera and not through this draw of one.
+        horizontal_fov, camera_pitch = self.depth_provider.settle_view(
+            scene, horizontal_fov, camera_pitch
+        )
         fall_speed_scale = self.py_random.uniform(*self.fall_speed_scale_range)
         accumulation_falloff = self.py_random.uniform(*self.accumulation_falloff_range)
         vehicle_cover = self.py_random.uniform(*self.vehicle_cover_range)
@@ -866,6 +893,16 @@ class RandomSnow(CameraTransform):
             # A level patch the width of a car is a car. Whether snow
             # stays on it depends on whether it has been standing there.
             vehicles = small_level_areas(as_read, _VEHICLE_WIDTH)
+            named: dict[str, np.ndarray] = {}
+            if labels is not None:
+                # What the network could name. A vehicle is a vehicle
+                # whether or not its roof is an island of level surface,
+                # and nothing settles on a person, the sky or open water.
+                soften = max(1.0, _LABEL_EDGE * float(np.hypot(height, width)))
+                for name, classes in _NAMED.items():
+                    named[name] = class_weight(labels, classes, soften_px=soften)
+                vehicles = np.maximum(vehicles, named["vehicle"])
+                as_read = as_read * (1.0 - named["bare"])
             level = fill_to_edges(as_read * (1.0 - vehicles), linear_scene)
             level = level + vehicle_cover * as_read * vehicles
             # Foliage has no surface to read a normal from, and from above a
@@ -896,6 +933,11 @@ class RandomSnow(CameraTransform):
                 (steady - 0.15) / 0.2, 0.0, 1.0
             )
             canopy = rough * np.maximum(vegetation_weight(linear_scene), unsteady)
+            if named:
+                # A tree is a canopy and a lawn is ground, by name, where
+                # texture and colour could only guess: by night, in leaf
+                # that is not green, on grass that is rough.
+                canopy = np.maximum(canopy * (1.0 - named["lawn"]), named["canopy"])
             ground = level * (1.0 - canopy)
             if accumulation_patchiness > 0.0:
                 # Wind scours snow off exposed ground and it melts first

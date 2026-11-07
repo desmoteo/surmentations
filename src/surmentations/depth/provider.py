@@ -4,6 +4,11 @@ One :class:`SharedDepthProvider` is constructed by the user and passed to
 every depth-conditioned transform, so that depth is estimated **once per
 scene** and reused by every transform that needs it.
 
+The same goes for the two things that may be worked out alongside depth
+(:mod:`surmentations.perception`): what each pixel of the scene is, and
+how the camera is mounted over it. Both are optional, both are made when
+the scene's depth is, from the same frame, and both are held with it.
+
 What "the same scene" means
 ---------------------------
 Two things, and the second is the one that makes sharing work at all:
@@ -62,6 +67,20 @@ from surmentations.depth.scale import (
     DEFAULT_MAX_DISTANCE_METERS,
     DEFAULT_MIN_DISTANCE_METERS,
     to_pseudo_metric,
+)
+from surmentations.perception.geometry import (
+    Camera,
+    GeometryEstimator,
+    InstallationGeometry,
+    metric_depth,
+    metric_scale,
+)
+from surmentations.perception.labels import (
+    GROUND,
+    SceneClass,
+    SceneLabelEstimator,
+    check_labels,
+    class_weight,
 )
 
 # Samples per axis of the content fingerprint. 32 x 32 pixels is a few
@@ -142,13 +161,41 @@ class _Scene:
     there is not the one exact mode would make, and is not handed to it.
     """
 
-    __slots__ = ("aliases", "depth", "fast")
+    __slots__ = (
+        "aliases",
+        "asked",
+        "depth",
+        "disparity",
+        "fast",
+        "fov",
+        "geometry",
+        "labels",
+        "metric",
+        "pitch",
+    )
 
     def __init__(self, depth: np.ndarray, image: np.ndarray) -> None:
-        """A scene known by one array, with its depth and the mode it was estimated in."""
+        """A scene known by one array, with its depth and the mode it was estimated in.
+
+        What else is known of the scene starts empty: its labels and its
+        geometry are filled in by the provider that made it, and the field
+        of view and pitch its camera is taken to have are settled the first
+        time a transform asks.
+        """
         self.depth = depth
         self.aliases = [_Alias(image)]
         self.fast = mode.fast()
+        # Whether its depth has been asked for yet, which is what the
+        # provider's count of cache hits goes by.
+        self.asked = False
+        self.labels: np.ndarray | None = None
+        self.geometry: InstallationGeometry | None = None
+        self.disparity: np.ndarray | None = None
+        self.fov: float | None = None
+        self.pitch: float | None = None
+        # The two numbers that turn disparity into metres; False once they
+        # have been looked for and there are none.
+        self.metric: tuple[float, float] | bool | None = None
 
     def knows(self, image: np.ndarray) -> bool:
         """Whether ``image`` shows this scene, in the mode its depth was made in."""
@@ -183,6 +230,20 @@ class SharedDepthProvider:
             indoor camera might be ``(1.0, 12.0)``; a mast over a motorway,
             ``(15.0, 400.0)``. It matters linearly to fog, rain and snow, and
             quadratically to ``NightIrMode``'s inverse-square illuminator.
+        labels: what names the pixels of each scene
+            (:mod:`surmentations.perception.labels`), or ``None``. With
+            one, every effect that reads the ground, the sky or the
+            vegetation is told what the network saw as well as what the
+            depth map suggests.
+        geometry: how the camera is mounted
+            (:mod:`surmentations.perception.geometry`), or ``None``.
+            Give an :class:`~surmentations.perception.geometry.InstallationGeometry`
+            for a fixed camera whose mounting is known, or a
+            :class:`~surmentations.perception.geometry.GeometryEstimator`
+            to have it worked out of each frame. With one, every transform
+            that asks sees the scene through the same camera, and where the
+            camera's height is known the depth is in metres measured from
+            it and ``depth_range_m`` is not used.
         max_scenes: how many scenes to keep depth for. One is all a single
             pipeline call needs; the default leaves room for a few calls in
             flight at once (a thread pool sharing one provider), which would
@@ -190,9 +251,9 @@ class SharedDepthProvider:
             back to re-estimating. A scene whose arrays have all been freed is
             dropped regardless, so in an ordinary loop only one is ever held.
 
-    The provider pickles as its estimator alone — cached depth is per-process
-    state — so it survives being sent to a ``DataLoader`` worker if the
-    estimator does.
+    The provider pickles as its estimators alone — cached depth is
+    per-process state — so it survives being sent to a ``DataLoader`` worker
+    if they do.
     """
 
     def __init__(
@@ -203,6 +264,8 @@ class SharedDepthProvider:
             DEFAULT_MIN_DISTANCE_METERS,
             DEFAULT_MAX_DISTANCE_METERS,
         ),
+        labels: SceneLabelEstimator | None = None,
+        geometry: InstallationGeometry | GeometryEstimator | None = None,
     ) -> None:
         """Wrap ``estimator``; see the class docstring for the arguments.
 
@@ -216,7 +279,20 @@ class SharedDepthProvider:
             raise ValueError(
                 f"depth_range_m must be (near, far) with 0 < near < far, got {depth_range_m}"
             )
+        if labels is not None and not isinstance(labels, SceneLabelEstimator):
+            raise TypeError(
+                f"labels must be a SceneLabelEstimator or None, got {type(labels).__name__}"
+            )
+        if geometry is not None and not isinstance(
+            geometry, (InstallationGeometry, GeometryEstimator)
+        ):
+            raise TypeError(
+                "geometry must be an InstallationGeometry, a GeometryEstimator or None, "
+                f"got {type(geometry).__name__}"
+            )
         self._estimator = estimator
+        self._labels = labels
+        self._geometry = geometry
         self._max_scenes = max_scenes
         self.depth_range_m = (float(near), float(far))
         self._init_state()
@@ -237,6 +313,8 @@ class SharedDepthProvider:
         """Pickle as the estimator and the settings; the scenes held stay behind."""
         return {
             "_estimator": self._estimator,
+            "_labels": self._labels,
+            "_geometry": self._geometry,
             "_max_scenes": self._max_scenes,
             "depth_range_m": self.depth_range_m,
         }
@@ -244,6 +322,8 @@ class SharedDepthProvider:
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Restore the estimator and settings, with nothing cached."""
         self._estimator = state["_estimator"]
+        self._labels = state.get("_labels")
+        self._geometry = state.get("_geometry")
         self._max_scenes = state["_max_scenes"]
         self.depth_range_m = state["depth_range_m"]
         self._init_state()
@@ -262,6 +342,59 @@ class SharedDepthProvider:
         ]
         del self._scenes[: max(0, len(self._scenes) - self._max_scenes)]
 
+    def _scene_for(
+        self,
+        image: np.ndarray,
+        labels: np.ndarray | None = None,
+        geometry: InstallationGeometry | None = None,
+    ) -> _Scene:
+        """The scene ``image`` shows, made now if it is not held. Call with the lock held.
+
+        Making a scene estimates its depth, and with them its labels and its
+        geometry where the provider has an estimator for them, all from this
+        one frame: the frame a pipeline starts from, before fog or rain has
+        been drawn over it. ``labels`` and ``geometry`` given here are used
+        in place of the estimators'.
+        """
+        scene = self._find(image)
+        if scene is not None:
+            self._scenes.remove(scene)
+            self._scenes.append(scene)
+            return scene
+
+        self._misses += 1
+        frame = _reference_frame(image)
+        depth = np.asarray(self._estimator.estimate(frame))
+        if depth.shape != frame.shape[:2]:
+            raise ValueError(
+                f"{type(self._estimator).__name__}.estimate returned depth of shape "
+                f"{depth.shape} for an image of shape {frame.shape}; a DepthEstimator "
+                f"must return one value per pixel, shape {frame.shape[:2]}."
+            )
+        # A view, so the flag does not leak onto an array the estimator
+        # may still own.
+        depth = depth.view()
+        depth.flags.writeable = False
+        scene = _Scene(depth, image)
+
+        if labels is None and self._labels is not None:
+            labels = self._labels.estimate(frame)
+        if labels is not None:
+            source = "remember()" if self._labels is None else type(self._labels).__name__
+            scene.labels = check_labels(labels, frame.shape[:2], source=source).view()
+            scene.labels.flags.writeable = False
+        scene.disparity = self._estimator.disparity(depth)
+        if isinstance(self._geometry, GeometryEstimator):
+            estimated = self._geometry.estimate(frame, scene.disparity, scene.labels)
+            geometry = estimated if geometry is None else geometry.filled_from(estimated)
+        elif geometry is None:
+            geometry = self._geometry
+        scene.geometry = geometry
+
+        self._scenes.append(scene)
+        self._prune()
+        return scene
+
     def get_depth(self, image: np.ndarray) -> np.ndarray:
         """Relative depth for ``image``, estimated at most once per scene.
 
@@ -271,43 +404,244 @@ class SharedDepthProvider:
         it before modifying it.
         """
         with self._lock:
+            scene = self._scene_for(image)
+            # A hit is a request for depth that did not need an estimate of
+            # its own: every one for a scene after the first. Asking after a
+            # scene's labels or its camera is not a request for depth, and
+            # the first one that follows it is the one the estimate was for.
+            self._hits += scene.asked
+            scene.asked = True
+            return scene.depth
+
+    def get_labels(self, image: np.ndarray) -> np.ndarray | None:
+        """What each pixel of ``image``'s scene is, or ``None`` with nothing to say.
+
+        One :class:`~surmentations.perception.labels.SceneClass` per pixel,
+        ``(H, W)`` uint8, read-only and shared like the depth. Made with the
+        scene's depth, from the same frame, so a transform late in a
+        pipeline is told about the scene and not about the fog over it.
+        ``None`` when the provider has no label estimator and none were
+        given through :meth:`remember`.
+        """
+        with self._lock:
+            return self._scene_for(image).labels
+
+    def get_geometry(self, image: np.ndarray) -> InstallationGeometry | None:
+        """What is known of the camera's mounting for ``image``'s scene, or ``None``.
+
+        The geometry the provider was given, or its estimator's reading of
+        the frame. What it leaves open stays open here; :meth:`settle_camera`
+        is what a transform calls.
+        """
+        with self._lock:
+            return self._scene_for(image).geometry
+
+    def remember(
+        self,
+        image: np.ndarray,
+        *,
+        labels: np.ndarray | None = None,
+        geometry: InstallationGeometry | None = None,
+    ) -> None:
+        """Tell the provider what is already known about ``image``, before a pipeline runs.
+
+        ``labels`` are ground truth where a dataset has it: one
+        :class:`~surmentations.perception.labels.SceneClass` per pixel,
+        folded from the dataset's own classes. ``geometry`` is this frame's
+        camera, for a dataset that mixes cameras whose mountings are known.
+        Either takes the place of what an estimator would have made, and a
+        geometry that leaves something open has it filled in by the
+        provider's estimator if there is one.
+
+        Call it with the array the pipeline is about to be given: the scene
+        is recognised by that array, as it is for depth.
+        """
+        with self._lock:
             scene = self._find(image)
-            if scene is not None:
-                self._hits += 1
-                self._scenes.remove(scene)
-                self._scenes.append(scene)
-                return scene.depth
+            if scene is None:
+                self._scene_for(image, labels=labels, geometry=geometry)
+                return
+            if labels is not None:
+                frame = _reference_frame(image)
+                scene.labels = check_labels(labels, frame.shape[:2], source="remember()").view()
+                scene.labels.flags.writeable = False
+            if geometry is not None:
+                scene.geometry = geometry
+            scene.fov = scene.pitch = scene.metric = None
 
-            self._misses += 1
-            frame = _reference_frame(image)
-            depth = np.asarray(self._estimator.estimate(frame))
-            if depth.shape != frame.shape[:2]:
-                raise ValueError(
-                    f"{type(self._estimator).__name__}.estimate returned depth of shape "
-                    f"{depth.shape} for an image of shape {frame.shape}; a DepthEstimator "
-                    f"must return one value per pixel, shape {frame.shape[:2]}."
-                )
-            # A view, so the flag does not leak onto an array the estimator
-            # may still own.
-            depth = depth.view()
-            depth.flags.writeable = False
+    def settle_camera(
+        self,
+        image: np.ndarray,
+        horizontal_fov_deg: float | None = None,
+        pitch_deg: float | None = None,
+    ) -> Camera | None:
+        """The camera ``image``'s scene is seen through, the same for every caller.
 
-            self._scenes.append(_Scene(depth, image))
-            self._prune()
-            return depth
+        ``horizontal_fov_deg`` and ``pitch_deg`` are the caller's own draws.
+        Where the scene's geometry says otherwise they are ignored. Where it
+        leaves the field of view or the pitch open, the first caller's draw
+        is kept for the scene, so that two transforms on one frame do not
+        each see it through a camera of their own. A pitch drawn above a
+        horizon that is known only as a bound is moved down to it.
+
+        ``None`` when the provider has no geometry for the scene, or its
+        field of view is neither known nor proposed; the caller then uses
+        its own draws, as before there was a geometry to ask.
+        """
+        with self._lock:
+            scene = self._scene_for(image)
+            geometry = scene.geometry
+            if geometry is None:
+                return None
+            height, width = _reference_frame(image).shape[:2]
+            if scene.fov is None:
+                known = geometry.horizontal_fov_deg
+                scene.fov = horizontal_fov_deg if known is None else known
+            if scene.fov is None:
+                return None
+            if scene.pitch is None:
+                view = geometry.view(width, height, scene.fov, pitch_deg)
+                scene.pitch = None if view is None else view.pitch_deg
+            return Camera(
+                width, height, scene.fov, scene.pitch, geometry.roll_deg, geometry.height_m
+            )
+
+    def settle_view(
+        self, image: np.ndarray, horizontal_fov_deg: float, pitch_deg: float
+    ) -> tuple[float, float]:
+        """A transform's field of view and pitch, as :meth:`settle_camera` settles them.
+
+        The two numbers a transform drew, replaced by the scene's camera
+        where it has one: what a transform calls straight after drawing them.
+        """
+        camera = self.settle_camera(image, horizontal_fov_deg, pitch_deg)
+        if camera is None:
+            return horizontal_fov_deg, pitch_deg
+        pitch = pitch_deg if camera.pitch_deg is None else camera.pitch_deg
+        return camera.horizontal_fov_deg, pitch
+
+    def horizon_row(self, image: np.ndarray) -> float | None:
+        """Row of the horizon in ``image`` at its middle column, where the geometry fixes it.
+
+        ``None`` when the provider has no geometry for the scene, the
+        geometry leaves the tilt open or only bounds it, or no field of view
+        has been settled yet. May be negative, or past the frame's last row.
+        """
+        with self._lock:
+            geometry = self._scene_for(image).geometry
+            if geometry is None or not geometry.fixes_tilt:
+                return None
+            camera = self.settle_camera(image)
+            return None if camera is None else camera.horizon_row
+
+    def settle_fov(self, image: np.ndarray, horizontal_fov_deg: float) -> float:
+        """A transform's field of view, as :meth:`settle_camera` settles it.
+
+        For a transform that draws a field of view and no pitch. Nothing is
+        proposed for the pitch, which is left for a transform that draws one.
+        """
+        camera = self.settle_camera(image, horizontal_fov_deg)
+        return horizontal_fov_deg if camera is None else camera.horizontal_fov_deg
+
+    def _metric_of(self, scene: _Scene) -> tuple[float, float] | None:
+        """The scale and offset that put ``scene``'s depth in metres, or ``None``.
+
+        There are none without a camera whose height, field of view and
+        pitch are all known and not merely proposed, a depth backend that
+        gives its disparity, and enough ground to fit them to. Looked for
+        once per scene.
+        """
+        if scene.metric is None:
+            geometry, disparity = scene.geometry, scene.disparity
+            height, width = scene.depth.shape
+            camera = None if geometry is None else geometry.view(width, height, scene.fov)
+            if geometry is not None and camera is None:
+                # Its field of view is still open. A transform may yet
+                # propose one, so this is not the last word on the scene.
+                return None
+            scene.metric = False
+            if (
+                camera is not None
+                and disparity is not None
+                and camera.height_m is not None
+                and camera.pitch_deg is not None
+            ):
+                found = metric_scale(disparity, self._ground_of(scene, camera), camera)
+                scene.metric = False if found is None else found
+        return scene.metric if isinstance(scene.metric, tuple) else None
+
+    def _ground_of(self, scene: _Scene, camera: Camera) -> np.ndarray:
+        """Which of ``scene``'s pixels are ground, ``(H, W)`` bool.
+
+        By the scene's labels where it has them. Without, by what faces up
+        in the depth map as the camera is known to be tilted, which is what
+        the wet road and the settled snow read too.
+        """
+        if scene.labels is not None:
+            return class_weight(scene.labels, GROUND) > 0.5
+        # Imported here: these import the compiled kernels, which nothing
+        # else in this module needs.
+        from surmentations.depth.normals import upward_facing
+        from surmentations.utils.ground import level_ground_weight
+
+        near, far = self.depth_range_m
+        pseudo = to_pseudo_metric(scene.depth, far, near)
+        assert camera.pitch_deg is not None
+        facing = upward_facing(pseudo, camera.horizontal_fov_deg, camera.pitch_deg)
+        level: np.ndarray = level_ground_weight(facing, 6.0) > 0.5
+        return level
 
     def to_metric(self, relative_depth: np.ndarray, far_m: float | None = None) -> np.ndarray:
-        """Relative depth in pseudo-metres, through this provider's calibration.
+        """Relative depth in metres, through this provider's calibration.
+
+        Real metres where the scene's camera is known well enough to measure
+        from (:func:`~surmentations.perception.geometry.metric_scale`):
+        the depth is then scaled so that the ground lies where a camera at
+        that height and tilt would see it. Otherwise pseudo-metres, the
+        nearest and farthest point of the scene placed at ``depth_range_m``.
 
         ``far_m`` overrides the far plane for one call, which is what
-        ``RandomFog``'s ``depth_scale`` does.
+        ``RandomFog``'s ``depth_scale`` does, and is always in pseudo-metres:
+        an explicit far plane is the caller's own calibration.
         """
+        if far_m is None:
+            with self._lock:
+                held = [scene for scene in self._scenes if scene.depth is relative_depth]
+                metric = self._metric_of(held[-1]) if held else None
+                if metric is not None:
+                    disparity = held[-1].disparity
+                    assert disparity is not None
+                    return metric_depth(disparity, *metric)
         near, far = self.depth_range_m
         return to_pseudo_metric(relative_depth, far if far_m is None else far_m, near)
 
     def get_metric_depth(self, image: np.ndarray) -> np.ndarray:
         """:meth:`get_depth` followed by :meth:`to_metric`."""
         return self.to_metric(self.get_depth(image))
+
+    def describe(self, image: np.ndarray) -> dict[str, Any]:
+        """What the provider knows about ``image``'s scene, for a log or a report.
+
+        The geometry as read, the camera as settled so far, the scale and
+        offset of metric depth if it is metric, and the share of the frame
+        each scene class covers.
+        """
+        with self._lock:
+            scene = self._scene_for(image)
+            shares: dict[str, float] = {}
+            if scene.labels is not None:
+                counts = np.bincount(scene.labels.ravel(), minlength=len(SceneClass))
+                shares = {
+                    SceneClass(index).name: float(count) / scene.labels.size
+                    for index, count in enumerate(counts)
+                    if count
+                }
+            return {
+                "geometry": scene.geometry,
+                "camera": self.settle_camera(image),
+                "metric": self._metric_of(scene),
+                "label_shares": shares,
+            }
 
     def carry(self, source: np.ndarray, derived: np.ndarray) -> bool:
         """Record that ``derived`` shows the same scene geometry as ``source``.
@@ -338,6 +672,38 @@ class SharedDepthProvider:
         """
         with self._lock:
             return DepthCacheInfo(self._hits, self._misses, len(self._scenes))
+
+
+def settled_view(
+    image: np.ndarray, horizontal_fov_deg: float, pitch_deg: float
+) -> tuple[float, float]:
+    """A field of view and a pitch, as whichever live provider knows the scene settles them.
+
+    For a transform that draws a camera and has no provider of its own: the
+    rain an infrared lamp lights, say. It is told what the provider of a
+    transform earlier in the pipeline settled for this scene, and is given
+    its own two numbers back when no provider holds the scene or has a
+    geometry for it. Never estimates anything.
+    """
+    for provider in list(_LIVE_PROVIDERS):
+        with provider._lock:
+            if provider._find(image) is None:
+                continue
+            return provider.settle_view(image, horizontal_fov_deg, pitch_deg)
+    return horizontal_fov_deg, pitch_deg
+
+
+def settled_fov(image: np.ndarray, horizontal_fov_deg: float) -> float:
+    """A field of view, as whichever live provider knows the scene settles it.
+
+    :func:`settled_view` for a transform that draws no pitch.
+    """
+    for provider in list(_LIVE_PROVIDERS):
+        with provider._lock:
+            if provider._find(image) is None:
+                continue
+            return provider.settle_fov(image, horizontal_fov_deg)
+    return horizontal_fov_deg
 
 
 def carry_depth(source: np.ndarray, derived: np.ndarray) -> None:

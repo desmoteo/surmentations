@@ -52,7 +52,7 @@ from pydantic import AfterValidator, Field
 
 from surmentations import mode
 from surmentations.atmosphere.rain import render_streak_layer
-from surmentations.base import CameraTransform
+from surmentations.base import CameraTransform, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.grids import pixel_grid
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -234,12 +234,13 @@ class NightRain(CameraTransform):
         and rolled off smoothly at the lamp's reach, the ``beam`` across the
         frame, and the ``backscatter`` of the drops too small to resolve.
         """
-        del data
         height, width = params["shape"][:2]
         rng = self.random_generator
 
         rain_rate = self.py_random.uniform(*self.rain_rate_range_mm_h)
-        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        horizontal_fov = scene_fov(
+            data, self.py_random.uniform(*self.horizontal_fov_range_deg)
+        )
         focus_distance = self.py_random.uniform(*self.focus_distance_range_m)
         exposure = self.py_random.uniform(*self.exposure_time_range)
         aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3

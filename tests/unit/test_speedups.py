@@ -22,7 +22,7 @@ from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw, recording
 from surmentations.utils import precipitation
 from surmentations.utils.color import veil_radiance_linear
-from surmentations.utils.sources import source_mask
+from surmentations.utils.sources import lamp_mask
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the depth model requires CUDA"
@@ -191,7 +191,7 @@ def _wet_road_over_the_whole_frame(linear, wetness, darkening, horizon_px, focal
     def mirrored(over):
         source = linear
         if lamp_gain > 1.0:
-            source = linear * (1.0 + (over - 1.0) * source_mask(linear)[..., None])
+            source = linear * (1.0 + (over - 1.0) * lamp_mask(linear)[..., None])
 
         def mirror(source_rows):
             map_y = np.clip(np.broadcast_to(source_rows, (height, width)), 0.0, height - 1.0)

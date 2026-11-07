@@ -94,6 +94,7 @@ from surmentations.base import CameraTransform, first_frame, require_depth_provi
 from surmentations.depth.normals import depth_work_size, horizon_row, upward_facing
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
+from surmentations.perception.labels import NOT_GROUND, PAVED, SceneClass, class_weight
 from surmentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
 from surmentations.utils.filters import wide_blur
 from surmentations.utils.ground import (
@@ -117,7 +118,7 @@ from surmentations.utils.precipitation import (
     width_cut_for_budget,
 )
 from surmentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
-from surmentations.utils.sources import light_sources, source_mask
+from surmentations.utils.sources import lamp_mask, light_sources
 
 # Width of the sensor the field of view is taken across, for turning an
 # aperture diameter into an f-number: a 1/2.8" sensor, the commonest in
@@ -225,6 +226,14 @@ def streak_alpha(drop_diameter_px: float, streak_length_px: float) -> float:
 
 class RandomRain(CameraTransform):
     """Physically-grounded rain: photometrically correct streaks, veil, wet ground.
+
+    With a provider that knows more than depth
+    (:mod:`surmentations.perception`): the field of view and the pitch
+    are the scene's camera's, and the two ranges below are drawn only for
+    what it leaves open; the veil is over real metres where the camera's
+    height is known; the wet road's horizon is the camera's; and the road
+    is laid on what is labelled as paving and kept off the vehicles, people
+    and vegetation on it. Without one, nothing here changes.
 
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
@@ -598,8 +607,9 @@ class RandomRain(CameraTransform):
         relative_depth = self.depth_provider.get_depth(scene)
         depth_pm = self.depth_provider.to_metric(relative_depth)
         linear_scene, _scale, _is_integer = to_linear_unit(first_frame(scene))
+        labels = self.depth_provider.get_labels(scene)
         sky = sky_to_depth_edge(
-            sky_weight(linear_scene, relative_depth), relative_depth, linear_scene
+            sky_weight(linear_scene, relative_depth, labels), relative_depth, linear_scene
         )
 
         # Every physical quantity is drawn per call. A scalar here would make
@@ -609,6 +619,11 @@ class RandomRain(CameraTransform):
         horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
         focus_distance = self.py_random.uniform(*self.focus_distance_range_m)
         camera_pitch = self.py_random.uniform(*self.camera_pitch_range_deg)
+        # Where the provider knows how the camera is mounted, the scene is
+        # seen through that camera and not through this draw of one.
+        horizontal_fov, camera_pitch = self.depth_provider.settle_view(
+            scene, horizontal_fov, camera_pitch
+        )
 
         veil_beta = self.py_random.uniform(*self._veil_beta_bounds(rain_rate))
         exposure, aperture_m, f_number, illuminance = self._exposure(horizontal_fov)
@@ -750,7 +765,13 @@ class RandomRain(CameraTransform):
         horizon = far_end = 0.0
         if draw_wetness:
             wetness, horizon, far_end = _wet_ground(
-                depth_pm, linear_scene, horizontal_fov, camera_pitch, wetness_falloff
+                depth_pm,
+                linear_scene,
+                horizontal_fov,
+                camera_pitch,
+                wetness_falloff,
+                labels=labels,
+                horizon_row=self.depth_provider.horizon_row(scene),
             )
 
         puddle_coverage = self.py_random.uniform(*self.puddle_coverage_range)
@@ -1175,6 +1196,13 @@ _WATER_R0 = 0.02
 _WET_GROUND_NEAR_M = 120.0
 _WET_GROUND_FAR_M = 400.0
 
+# What a film of water does not lie on, whatever the depth map makes of it:
+# everything that is never ground, and a lawn, which holds its water in the
+# grass. And how soft the edge of a labelled region is taken to be, as a
+# fraction of the diagonal: a network's outline is a few pixels out.
+_NO_FILM = (*NOT_GROUND, SceneClass.GRASS)
+_LABEL_EDGE = 0.003
+
 # Fraction of the frame's height over which a reflection hands over from the
 # mirrored picture to the sky, as its source row nears the top edge.
 _OFF_FRAME_BLEND = 0.08
@@ -1349,6 +1377,8 @@ def _read_wet_ground(
     horizontal_fov_deg: float,
     camera_pitch_deg: float,
     falloff: float,
+    labels: np.ndarray | None = None,
+    horizon_row: float | None = None,
 ) -> tuple[np.ndarray, float, float]:
     """Where the ground is wet, ``(H, W)`` in ``[0, 1]``; the horizon's row; the ground's far end.
 
@@ -1357,6 +1387,18 @@ def _read_wet_ground(
     surface and left a seam where it ended; on a camera pitched further down
     -- the normal CCTV mounting -- the ground fills the frame while a bottom
     band stays pinned to the bottom third.
+
+    ``labels`` are the scene's classes, where the provider has them
+    (:mod:`surmentations.perception.labels`). They add what the depth map
+    is unsure of and take out what it cannot tell from road: a carriageway
+    is wet whatever its estimated normals say, and a vehicle, a person, a
+    tree or a lawn is not, however level and however like the road beside
+    it. They decide nothing else; ground the network had no name for is
+    still read from the depth map.
+
+    ``horizon_row`` is the horizon where the camera's mounting fixes it
+    (:mod:`surmentations.perception.geometry`), in place of the one read
+    off the depth of the ground's two ends.
     """
     cosine = upward_facing(
         depth_m, horizontal_fov_deg=horizontal_fov_deg, camera_pitch_deg=camera_pitch_deg
@@ -1367,6 +1409,13 @@ def _read_wet_ground(
     # a real road, whose estimated normals wander a few degrees, at 40-70% of
     # the effect, so a soaked road came out half dry.
     wetness = level_ground_weight(cosine, falloff)
+    paved = None
+    if labels is not None:
+        soften = max(1.0, _LABEL_EDGE * float(np.hypot(*labels.shape)))
+        paved = class_weight(labels, PAVED, soften_px=soften)
+        # A road is ground. Where its normals wander, on a camber or in the
+        # depth map's own noise, it used to be wet in patches.
+        wetness = np.maximum(wetness, paved)
     # Up to the foot of whatever stands on it. The depth map blurs the edge
     # of every object, and the band of road inside that blur has no
     # orientation to read, so it was left dry: a pale outline round each car
@@ -1375,13 +1424,23 @@ def _read_wet_ground(
     # Water lies as a film on paving. On grass and crops it is held in the
     # canopy and the soil, and there is no mirror.
     wetness *= _paved_weight(linear_scene)
+    if labels is not None:
+        # And not on what the network could name and the depth map could
+        # not tell from road. By colour a tree is vegetation by day and
+        # paving under a sodium lamp.
+        wetness *= 1.0 - class_weight(labels, _NO_FILM, soften_px=soften)
     # And on ground near enough to be a road. Level ground hundreds of metres
     # off is terrain, seen at so shallow an angle that a film on it would be
     # a perfect mirror: a bright band of reflected sky along the horizon of
     # every landscape.
-    wetness *= np.clip(
+    near_enough = np.clip(
         (_WET_GROUND_FAR_M - depth_m) / (_WET_GROUND_FAR_M - _WET_GROUND_NEAR_M), 0.0, 1.0
     )
+    if paved is not None:
+        # A road that far off is still a road, and the long sheen towards
+        # the horizon is the most recognisable thing about a wet one.
+        near_enough = np.maximum(near_enough, paved)
+    wetness *= near_enough
     # Fit the horizon on the surface actually being wet, not on the raw
     # cosine. A distant flat plane's normal points at the camera, so `n . up`
     # there is sin(pitch) and crosses a lenient threshold at about 18 degrees
@@ -1392,6 +1451,10 @@ def _read_wet_ground(
     # same mask the renderer uses keeps the two consistent and holds the
     # estimate at 123 +- 4 rows across the whole pitch range.
     horizon, far_end = ground_horizon(depth_m, wetness)
+    if horizon_row is not None:
+        # Known from how the camera is mounted, which is better than read
+        # from a depth map; the ground still ends where it ends.
+        horizon = min(float(horizon_row), far_end)
     # And not on what stands on the road. A vehicle far enough off is a
     # smooth bump in the depth map with the road's own orientation, and was
     # darkened and reflected in with the road it stood on.
@@ -1514,6 +1577,8 @@ def _wet_ground(
     horizontal_fov_deg: float,
     camera_pitch_deg: float,
     falloff: float,
+    labels: np.ndarray | None = None,
+    horizon_row: float | None = None,
 ) -> tuple[np.ndarray, float, float]:
     """:func:`_read_wet_ground`, at the size the depth map was estimated at.
 
@@ -1529,17 +1594,33 @@ def _wet_ground(
     size = depth_work_size(height, width)
     if size is None:
         return _read_wet_ground(
-            depth_m, linear_scene, horizontal_fov_deg, camera_pitch_deg, falloff
+            depth_m,
+            linear_scene,
+            horizontal_fov_deg,
+            camera_pitch_deg,
+            falloff,
+            labels,
+            horizon_row,
         )
     small_depth = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
     small_scene = cv2.resize(linear_scene, size, interpolation=cv2.INTER_AREA)
-    wetness, horizon, far_end = _read_wet_ground(
-        small_depth, small_scene, horizontal_fov_deg, camera_pitch_deg, falloff
-    )
-    wetness = cv2.resize(wetness, (width, height), interpolation=cv2.INTER_LINEAR)
     # A row of the small frame is `height / size[1]` rows of the large one,
     # centre to centre.
     rows = height / size[1]
+    small_labels = None
+    if labels is not None:
+        small_labels = cv2.resize(labels, size, interpolation=cv2.INTER_NEAREST)
+    small_horizon = None if horizon_row is None else (horizon_row + 0.5) / rows - 0.5
+    wetness, horizon, far_end = _read_wet_ground(
+        small_depth,
+        small_scene,
+        horizontal_fov_deg,
+        camera_pitch_deg,
+        falloff,
+        small_labels,
+        small_horizon,
+    )
+    wetness = cv2.resize(wetness, (width, height), interpolation=cv2.INTER_LINEAR)
     wetness = np.clip(wetness, 0.0, 1.0).astype(np.float32)
     return wetness, (horizon + 0.5) * rows - 0.5, (far_end + 0.5) * rows - 0.5
 
@@ -1655,7 +1736,9 @@ def _apply_ground_wetness(
     **What a lamp's reflection is worth.** A lamp is recorded at clipping and
     was many times brighter, and 2% of that is still a bright streak on the
     road where 2% of the clipped value is nothing. ``lamp_gain`` is the
-    factor clipped pixels are raised by before they are reflected.
+    factor a lamp's clipped pixels are raised by before they are reflected.
+    A lamp's, and not every clipped pixel's: the lit road and the leaves
+    round a lamp are clipped too and were not that bright.
 
     ``mirror_px`` is the row the picture is mirrored about where that is not
     the horizon (:func:`ground_horizon`); ``horizon_px`` is always what the
@@ -1689,7 +1772,7 @@ def _apply_ground_wetness(
     )
     about_horizon, about_foot = about_horizon[band], about_foot[band]
     under_object = under_object[band]
-    lamps = source_mask(linear)[..., None] if lamp_gain > 1.0 else None
+    lamps = lamp_mask(linear)[..., None] if lamp_gain > 1.0 else None
     band_shape = (band_bottom - band_top, width)
 
     # A reflection that looks above the top of the frame sees something the

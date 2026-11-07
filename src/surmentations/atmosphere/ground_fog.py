@@ -164,6 +164,11 @@ class GroundFog(CameraTransform):
     Depth-conditioned: the heights the layer depends on come from the depth
     map, so it needs a ``depth_provider``.
 
+    With a provider that knows how the camera is mounted
+    (:mod:`surmentations.perception.geometry`) the layer is laid under
+    that camera: its field of view, its pitch, and its height where that is
+    known, in place of the three ranges below.
+
     Args:
         depth_provider: one shared provider.
         visibility_range_m: visibility at ground level, inside the layer.
@@ -283,17 +288,31 @@ class GroundFog(CameraTransform):
         visibility = self.py_random.uniform(*self.visibility_range_m)
         scale_height = self.py_random.uniform(*self.layer_height_range_m)
         camera_height = self.py_random.uniform(*self.camera_height_range_m)
-        pitch = math.radians(self.py_random.uniform(*self.camera_pitch_range_deg))
-        focal = focal_length_px(
-            width, height, self.py_random.uniform(*self.horizontal_fov_range_deg)
+        pitch_deg = self.py_random.uniform(*self.camera_pitch_range_deg)
+        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        # Where the provider knows how the camera is mounted, the layer is
+        # laid under that camera: its tilt, its lens, and its height if
+        # that is known too, since how deep in the fog the camera stands
+        # is most of what a ground fog looks like.
+        horizontal_fov, pitch_deg = self.depth_provider.settle_view(
+            scene, horizontal_fov, pitch_deg
         )
+        camera = self.depth_provider.settle_camera(scene)
+        if camera is not None and camera.height_m is not None:
+            camera_height = camera.height_m
+        pitch = math.radians(pitch_deg)
+        focal = focal_length_px(width, height, horizontal_fov)
         patchiness = self.py_random.uniform(*self.patchiness_range)
         patch_scale = self.py_random.uniform(*self.patch_scale_range_m)
 
         relative_depth = self.depth_provider.get_depth(scene)
         depth_m = self.depth_provider.to_metric(relative_depth, far_m=self.depth_scale)
         linear, _scale, _is_integer = to_linear_unit(image)
-        sky = sky_to_depth_edge(sky_weight(linear, relative_depth), relative_depth, linear)
+        sky = sky_to_depth_edge(
+            sky_weight(linear, relative_depth, self.depth_provider.get_labels(scene)),
+            relative_depth,
+            linear,
+        )
         depth_m = lift_sky(depth_m, sky)
 
         distance, relative_height, across, forward = scene_points(depth_m, focal, pitch)

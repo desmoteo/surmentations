@@ -214,6 +214,11 @@ def _draw_cast_shape(
 class CastShadows(CameraTransform):
     """Hard-edged cast shadows on upward-facing surfaces.
 
+    With a provider that knows how the camera is mounted
+    (:mod:`surmentations.perception.geometry`), which surfaces face up is
+    read through that camera, in place of ``camera_pitch_deg`` and
+    ``horizontal_fov_deg``.
+
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
         shadow_count_range: how many cast shadows to place.
@@ -370,10 +375,15 @@ class CastShadows(CameraTransform):
             shapes = wide_blur(shapes, penumbra)
 
         # A shadow lands on surfaces, not on the frame — and never on sky.
+        # Through the scene's own camera where the provider knows it, and
+        # this transform's otherwise.
+        horizontal_fov, camera_pitch = self.depth_provider.settle_view(
+            scene, self.horizontal_fov_deg, self.camera_pitch_deg
+        )
         surface = upward_facing(
             self.depth_provider.get_metric_depth(scene),
-            horizontal_fov_deg=self.horizontal_fov_deg,
-            camera_pitch_deg=self.camera_pitch_deg,
+            horizontal_fov_deg=horizontal_fov,
+            camera_pitch_deg=camera_pitch,
         )
         occlusion = np.clip(shapes, 0.0, 1.0) * surface**self.surface_sharpness
 

@@ -53,7 +53,7 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
 from surmentations.atmosphere.night_rain import _beam_profile
-from surmentations.base import CameraTransform
+from surmentations.base import CameraTransform, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.lens.water_droplets import _aperture_blur
 from surmentations.utils.color import illuminant_radiance_linear
@@ -421,7 +421,6 @@ class FoliageIntrusion(CameraTransform):
         already times ``cover``; and ``lamp``, the infrared ring's light it
         returns, already times ``cover``.
         """
-        del data
         height, width = params["shape"][:2]
         rng = self.random_generator
 
@@ -429,7 +428,9 @@ class FoliageIntrusion(CameraTransform):
         gain = self.py_random.uniform(*self.illuminator_gain_range)
         exposure = self.py_random.uniform(*self.exposure_time_range)
         sway = self.py_random.uniform(*self.sway_speed_range_m_s)
-        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        horizontal_fov = scene_fov(
+            data, self.py_random.uniform(*self.horizontal_fov_range_deg)
+        )
         aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
         focus = self.py_random.uniform(*self.focus_distance_range_m)
         focal = focal_length_px(width, height, horizontal_fov)

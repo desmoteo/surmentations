@@ -79,6 +79,11 @@ def channel_extinction(beta: float, gamma: float) -> np.ndarray:
 class RandomFog(CameraTransform):
     """Physically-grounded fog/haze, conditioned on scene depth.
 
+    With a provider that knows more than depth
+    (:mod:`surmentations.perception`): the sky is what the scene's labels
+    call sky, and the fog is over real metres where the camera's height is
+    known, unless ``depth_scale`` says otherwise.
+
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
         beta_range: extinction coefficient, in 1/m against ``depth_scale``'s
@@ -179,7 +184,9 @@ class RandomFog(CameraTransform):
         # means and put at the far plane; see utils/sky.py.
         linear_scene, _scale, _is_integer = to_linear_unit(image)
         sky = sky_to_depth_edge(
-            sky_weight(linear_scene, relative_depth), relative_depth, linear_scene
+            sky_weight(linear_scene, relative_depth, self.depth_provider.get_labels(scene)),
+            relative_depth,
+            linear_scene,
         )
         depth_pm = lift_sky(depth_pm, sky)
 

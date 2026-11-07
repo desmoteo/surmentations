@@ -48,7 +48,7 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
 from surmentations.atmosphere.night_rain import _beam_profile
-from surmentations.base import CameraTransform
+from surmentations.base import CameraTransform, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.illuminator import lamp_falloff, splat_discs, veiling_glare
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -301,7 +301,6 @@ class NightInsects(CameraTransform):
         Returns the ``discs`` (centres, radii, and the light each holds),
         the ``glare`` and the ``beam`` across the frame.
         """
-        del data
         height, width = params["shape"][:2]
         rng = self.random_generator
 
@@ -311,7 +310,9 @@ class NightInsects(CameraTransform):
         dust_brightness = self.py_random.uniform(*self.dust_brightness_range)
         falloff = self.py_random.uniform(*self.beam_falloff_range)
         exposure = self.py_random.uniform(*self.exposure_time_range)
-        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        horizontal_fov = scene_fov(
+            data, self.py_random.uniform(*self.horizontal_fov_range_deg)
+        )
         aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
         focus = self.py_random.uniform(*self.focus_distance_range_m)
         glare = self.py_random.uniform(*self.glare_range)
