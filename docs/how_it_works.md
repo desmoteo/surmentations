@@ -360,7 +360,11 @@ some point:
   not, and within reach of that bump it does not look like the road beside
   it, which the road at its wheels does. A provider with scene labels adds
   the network's word for it: a labelled vehicle is dry whatever the depth
-  map and the colours say.
+  map and the colours say. And what is too small and too far for any depth
+  map to show standing, the traffic at the far end of a motorway, is told
+  by being unlike the road immediately round it (`small_things`): the far
+  end is where the road is most nearly a mirror, and those cars were being
+  painted out with sky.
 - **Film and puddles are different mirrors.** The film is as rough as the
   road: it smears a reflection a long way down the road and its
   reflectance rises sooner towards the horizon. Most of its facets lie
@@ -371,6 +375,13 @@ some point:
   pixels that record it, or spread that thin it would not show. Standing water
   (`puddle_coverage_range`), laid out in ground coordinates so it
   foreshortens with the road, is smooth and mirrors the sky cleanly.
+- **Soaked is dark.** Aged asphalt measures 0.12-0.18 dry and 0.05-0.07
+  wet, and the road in a sunlit photograph has further to fall than that.
+  The top of the ground ladder stopped at half the dry brightness, the film
+  was given 60% of a smooth surface's reflectance where it is now 75%, and
+  a soaked road came out as a dry one a shade darker: nothing in it said
+  wet. At night the same road reflected no lamp, because the test for what
+  is a lamp asked a ragged clipped outline to fill its box as a disc does.
 - **The whole road is wet, and stays dark.** Level ground now carries the
   full effect up to the foot of each object, where estimated normals used
   to leave it at 40-70% with a dry outline round every car; and the

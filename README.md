@@ -541,10 +541,10 @@ once one provider holds the frame's depth.
 | `NightFog` | 24.2 | 90.5 |
 | `GroundFog` | 24.9 | 114.6 |
 | `RandomSnow` | 49.8 | 143.1 |
-| `RandomRain`, wet road | 69.1 | 160.4 |
+| `RandomRain`, wet road | 73.1 | 164.6 |
 
 `RandomRain` draws the wet road in 40% of frames by default
-(`wetness_probability`), so it costs about 40 ms at 512 px and 107 ms at
+(`wetness_probability`), so it costs about 42 ms at 512 px and 109 ms at
 1024 px on average.
 
 The depth map itself is estimated once per new frame on the GPU: 12 and
