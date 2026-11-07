@@ -52,6 +52,10 @@ from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.foliage import FoliageIntrusion
+from weathermentations.lens.frost import FrostOnGlass
+from weathermentations.lens.snow_cap import SnowOnHousing
+from weathermentations.lens.tamper import LensTamper
 from weathermentations.scene import CastShadows
 
 
@@ -84,6 +88,10 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),
     "HousingOccluders": lambda: HousingOccluders(p=1.0),
+    "FoliageIntrusion": lambda: FoliageIntrusion(p=1.0),
+    "LensTamper": lambda: LensTamper(p=1.0),
+    "SnowOnHousing": lambda: SnowOnHousing(p=1.0),
+    "FrostOnGlass": lambda: FrostOnGlass(p=1.0),
     "IrDomeGlare": lambda: IrDomeGlare(p=1.0),
     "NightInsects": lambda: NightInsects(p=1.0),
     "SpiderWeb": lambda: SpiderWeb(p=1.0),

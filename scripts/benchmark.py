@@ -78,6 +78,10 @@ from weathermentations.lens import (  # noqa: E402
     WaterDroplets,
 )
 from weathermentations.lens.dome_glare import IrDomeGlare  # noqa: E402
+from weathermentations.lens.foliage import FoliageIntrusion  # noqa: E402
+from weathermentations.lens.frost import FrostOnGlass  # noqa: E402
+from weathermentations.lens.snow_cap import SnowOnHousing  # noqa: E402
+from weathermentations.lens.tamper import LensTamper  # noqa: E402
 from weathermentations.scene import CastShadows  # noqa: E402
 
 DEPTH_FREE = (
@@ -141,6 +145,10 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "night_rain": NightRain(p=1.0),
         "night_snow": NightSnow(p=1.0),
         "spider_web": SpiderWeb(p=1.0),
+        "foliage_intrusion": FoliageIntrusion(p=1.0),
+        "lens_tamper": LensTamper(p=1.0),
+        "snow_on_housing": SnowOnHousing(p=1.0),
+        "frost_on_glass": FrostOnGlass(p=1.0),
         "ir_dome_glare": IrDomeGlare(p=1.0),
         "night_insects": NightInsects(p=1.0),
     }

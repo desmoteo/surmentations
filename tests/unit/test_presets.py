@@ -28,7 +28,11 @@ from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.foliage import FoliageIntrusion
+from weathermentations.lens.frost import FrostOnGlass
+from weathermentations.lens.snow_cap import SnowOnHousing
 from weathermentations.lens.source_glare import SourceGlare
+from weathermentations.lens.tamper import LensTamper
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
 
@@ -42,6 +46,10 @@ _DEPTH_FREE = {
     "SunFlare": SunFlare,
     "SourceGlare": SourceGlare,
     "HousingOccluders": HousingOccluders,
+    "FoliageIntrusion": FoliageIntrusion,
+    "LensTamper": LensTamper,
+    "SnowOnHousing": SnowOnHousing,
+    "FrostOnGlass": FrostOnGlass,
     "IrDomeGlare": IrDomeGlare,
     "NightInsects": NightInsects,
     "SpiderWeb": SpiderWeb,

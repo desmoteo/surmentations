@@ -50,6 +50,10 @@ from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.foliage import FoliageIntrusion
+from weathermentations.lens.frost import FrostOnGlass
+from weathermentations.lens.snow_cap import SnowOnHousing
+from weathermentations.lens.tamper import LensTamper
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
 
@@ -112,6 +116,10 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     # severity does not control.
     "SunFlare": lambda k: SunFlare(p=1.0, flare_position=(0.75, 0.15), **k),
     "HousingOccluders": lambda k: HousingOccluders(p=1.0, **k),
+    "FoliageIntrusion": lambda k: FoliageIntrusion(p=1.0, **k),
+    "LensTamper": lambda k: LensTamper(p=1.0, **k),
+    "SnowOnHousing": lambda k: SnowOnHousing(p=1.0, **k),
+    "FrostOnGlass": lambda k: FrostOnGlass(p=1.0, **k),
     "IrDomeGlare": lambda k: IrDomeGlare(p=1.0, **k),
     "NightInsects": lambda k: NightInsects(p=1.0, **k),
     # Lit by the camera like the night rain and snow below, and measured on
