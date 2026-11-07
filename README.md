@@ -166,7 +166,7 @@ parameters, samples and references. The tables here are the overview.
 | Transform | Models | Needs depth |
 | --- | --- | --- |
 | [`RandomFog`](docs/transforms/RandomFog.md) | Koschmieder extinction with per-channel scattering, the sky found and put at the far plane, and a veil the colour of the horizon sky, not of the brightest pixels | yes |
-| [`RandomRain`](docs/transforms/RandomRain.md) | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground: dark surfaces darkened far more than pale ones, each object's reflection smeared down the road from its foot, Fresnel-weighted, with puddles that mirror the sky cleanly. At night, streaks lit by the lamps in the frame and a road that reflects them | yes |
+| [`RandomRain`](docs/transforms/RandomRain.md) | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground: dark surfaces darkened far more than pale ones, each object's reflection smeared down the road from its foot, Fresnel-weighted, with puddles that mirror the sky cleanly, and the vehicles on the road left as they were. At night, streaks lit by the lamps in the frame and a road that carries each lamp's long reflection | yes |
 | [`RandomSnow`](docs/transforms/RandomSnow.md) | Gunn-Marshall sizes corrected for snow density, Locatelli-Hobbs fall speeds, and settled snow: level ground covered up to the foot of each object, clumps on tree foliage, lit by the light on the spot, so white by day and orange under sodium lamps | yes |
 | [`NightRain`](docs/transforms/NightRain.md) | Rain lit by the camera's **own infrared illuminator**, brightness falling as 1/z² from the lamp. The one case where rain reads as streaks rather than haze — see [`docs/rain_visibility.md`](docs/rain_visibility.md). Needs no depth, so it runs on CPU | no |
 | [`NightSnow`](docs/transforms/NightSnow.md) | Snow lit by the camera's own illuminator: each flake's brightness is set by *its* distance from the lamp, not by the scene behind it. `RandomSnow` before `NightIrMode` loses its flakes over anything distant; this is what puts them back. Needs no depth | no |
@@ -499,10 +499,10 @@ once one provider holds the frame's depth.
 | `NightFog` | 24.2 | 90.5 |
 | `GroundFog` | 24.9 | 114.6 |
 | `RandomSnow` | 49.8 | 143.1 |
-| `RandomRain`, wet road | 63.4 | 156.6 |
+| `RandomRain`, wet road | 69.1 | 160.4 |
 
 `RandomRain` draws the wet road in 40% of frames by default
-(`wetness_probability`), so it costs about 38 ms at 512 px and 105 ms at
+(`wetness_probability`), so it costs about 40 ms at 512 px and 107 ms at
 1024 px on average.
 
 The depth map itself is estimated once per new frame on the GPU: 12 and
@@ -728,7 +728,11 @@ ladders, and `snow_cover_4` is a light fall over deep snow.
 `night_rain`, `night_snow`, `spider_web`, `night_insects`, `ir_dome_glare`
 and `night_foliage` are rendered over an IR night frame rather than the
 daylit base scene, because what they draw is lit by the camera: on a sunny road it would be as invisible as `RandomRain`'s streaks,
-which is the finding the transforms exist to answer. `night_droplets` is `WaterDroplets`
+which is the finding the transforms exist to answer. The `night_snow` row is
+drawn over a road snow has settled on, level for level: `NightSnow` draws
+the flakes the lamp lights and nothing else, and the snow on the ground is
+`RandomSnow`'s, built with `max_flakes=0` and put before `NightIrMode`, which
+is the order the pipelines use. `night_droplets` is `WaterDroplets`
 over the same frame with `illuminator_glow_range` set, which is how the
 pipelines build it at night. `night_fog` and `source_glare` act on the lights
 in a frame, which the daylit reference does not have, so they are rendered

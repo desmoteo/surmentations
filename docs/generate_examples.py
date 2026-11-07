@@ -531,6 +531,36 @@ def _night_base(
     return night(image=scene)["image"]
 
 
+def _snowy_night_base(
+    scene: np.ndarray,
+    provider: SharedDepthProvider,
+    level: int,
+    pitch_deg: tuple[float, float] = REFERENCE_PITCH_DEG,
+) -> np.ndarray:
+    """The scene with snow lying on it, as an IR camera sees it: what night snow falls over.
+
+    ``NightSnow`` draws the flakes the lamp lights and nothing else. The snow
+    on the ground is the scene's, and belongs to ``RandomSnow`` before the
+    conversion to night, built with ``max_flakes=0`` so the flakes are not
+    drawn twice: the order the ready-made pipelines use. The row used to be
+    flakes over a bare road, which is the first minute of a snowfall at every
+    level.
+    """
+    settled = RandomSnow(
+        depth_provider=provider,
+        p=1.0,
+        **{
+            **SEVERITY[level]["RandomSnow"],
+            **GROUND_SEVERITY[level]["RandomSnow"],
+            "max_flakes": 0,
+            "overcast_range": (0.0, 0.0),
+            "camera_pitch_range_deg": pitch_deg,
+        },
+    )
+    settled.set_random_seed(13)
+    return _night_base(settled(image=scene)["image"], provider, level)
+
+
 def _render_representative(
     transform: Any, scene: np.ndarray, rng: np.random.Generator
 ) -> np.ndarray:
@@ -595,6 +625,8 @@ def main() -> None:
             # sunny road would illustrate the opposite of what they do.
             lamp_lit = name in LAMP_LIT
             base = _night_base(scene, depth_provider, level) if lamp_lit else scene
+            if name == "night_snow":
+                base = _snowy_night_base(scene, depth_provider, level)
             if name in NEEDS_LAMPS:
                 base = _lamp_scene()
             out = _render_representative(transform, base, rng)

@@ -61,6 +61,7 @@ from docs.generate_examples import (  # noqa: E402
     _build,
     _night_base,
     _render_representative,
+    _snowy_night_base,
 )
 from surmentations.camera.codec import ffmpeg_path  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
@@ -478,6 +479,10 @@ def main() -> None:
             base = image
             if effect in LAMP_LIT:
                 base = _night_base(image, provider, SEVERITY_LEVEL)
+            if effect == "night_snow":
+                # Over the snow that has settled, as the pipelines draw it.
+                pitch = scene.camera_pitch_deg
+                base = _snowy_night_base(image, provider, SEVERITY_LEVEL, (pitch, pitch))
             _save(out / "effects" / f"{effect}.jpg", _render_representative(transform, base, rng))
             rendered.append(effect)
 
