@@ -289,11 +289,14 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "illuminator_gain_range": (_lerp(0.2, 0.5, t), _lerp(0.45, 1.5, t)),
             },
             "NightInsects": {
-                # More of them, and a brighter lamp to show them by. Where
-                # they fly and how fast is theirs and does not change.
-                "insect_count_range": (int(_lerp(3, 10, t)), int(_lerp(6, 40, t))),
-                "dust_count_range": (int(_lerp(4, 15, t)), int(_lerp(12, 80, t))),
-                "illuminator_gain_range": (_lerp(1.0, 1.5, t), _lerp(2.0, 4.0, t)),
+                # More of them, and a brighter lamp to show them by. They are
+                # kept beyond arm's length at every level: nearer than that
+                # a single moth fills the frame, and how bad the frame is
+                # would be decided by one draw and not by the level.
+                "insect_count_range": (int(_lerp(15, 45, t)), int(_lerp(25, 130, t))),
+                "dust_count_range": (int(_lerp(15, 30, t)), int(_lerp(30, 120, t))),
+                "illuminator_gain_range": (_lerp(3.0, 6.0, t), _lerp(5.0, 10.0, t)),
+                "distance_range_m": (0.3, 3.0),
             },
             "IrDomeGlare": {
                 # A brighter reflection over a dirtier dome: more light in
@@ -368,8 +371,8 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
             },
             "LocalPlumes": {
                 # More plumes, denser at the source.
-                "plume_count_range": (1, int(_lerp(1, 5, t))),
-                "opacity_range": (_lerp(0.3, 1.5, t), _lerp(0.8, 4.0, t)),
+                "plume_count_range": (int(_lerp(2, 3, t)), int(_lerp(3, 7, t))),
+                "opacity_range": (_lerp(0.8, 2.0, t), _lerp(1.6, 4.0, t)),
             },
             "HeatShimmer": {
                 # Hotter ground: from a mild day to tarmac at noon.

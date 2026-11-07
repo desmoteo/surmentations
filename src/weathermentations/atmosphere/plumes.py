@@ -90,6 +90,10 @@ def plume_depth(
     # The same water over a wider section, and gone by the top.
     thinning = (1.0 / (1.0 + (_SPREAD - 1.0) * climbed)) * np.sqrt(1.0 - climbed)
     depth = peak * np.exp(-0.5 * across * across) * thinning * np.clip(2.4 * billow - 0.3, 0.0, 2.0)
+    # It leaves its source as a rounded puff, not along a line: it fades in
+    # over the first tenth of its rise, from a little below the source.
+    start = np.clip((up + 0.05) / 0.15, 0.0, 1.0)
+    depth = depth * (start * start * (3.0 - 2.0 * start))
     out: np.ndarray = np.where(inside, depth, 0.0).astype(np.float32)
     return out
 
