@@ -7,6 +7,7 @@ needs a depth map.
 
 from weathermentations.lens.dirt import DirtSoil
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.focus import FocusShift
 from weathermentations.lens.foliage import FoliageIntrusion
 from weathermentations.lens.frost import FrostOnGlass
 from weathermentations.lens.occluders import HousingOccluders
@@ -19,6 +20,7 @@ from weathermentations.lens.water_droplets import WaterDroplets
 
 __all__ = [
     "DirtSoil",
+    "FocusShift",
     "FoliageIntrusion",
     "FrostOnGlass",
     "HousingOccluders",

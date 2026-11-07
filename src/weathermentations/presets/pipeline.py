@@ -44,6 +44,8 @@ _STAGE_ORDER: dict[str, int] = {
     "LensTamper": 2,
     "FoliageIntrusion": 2,
     "SunFlare": 3,
+    # Where the lens is focused, which blurs everything in front of it.
+    "FocusShift": 3,
     # The same optics, on the lights that are in the frame.
     "SourceGlare": 3,
     # Sensor: exposure, readout and their artefacts.
@@ -71,6 +73,8 @@ _STAGE_ORDER: dict[str, int] = {
     "IrDomeGlare": 5,
     "AcFlicker": 6,
     "RollingShutter": 6,
+    # The camera shaking during the exposure, read out all at once.
+    "CameraVibration": 6,
     "SensorNoise": 6,
     # The mosaic, and the interpolation that follows it.
     "DemosaicArtifacts": 6,
@@ -78,12 +82,16 @@ _STAGE_ORDER: dict[str, int] = {
     "ExposureTransient": 7,
     "WdrToneMapping": 8,
     "TemporalDenoiseArtifacts": 9,
+    # What the camera writes over the picture before encoding it. A
+    # recorder's overlay goes after the link instead: the transform says
+    # which it is through its `pipeline_stage`, read by `stage_of`.
+    "OnScreenOverlay": 10,
     # Transmission: last, because it acts on the finished picture.
-    "VideoCodecArtifacts": 10,
+    "VideoCodecArtifacts": 11,
     # An analog link, for a camera that has no codec.
-    "AnalogVideoArtifacts": 10,
+    "AnalogVideoArtifacts": 11,
     # What the link then loses of the encoded stream.
-    "TransmissionFaults": 11,
+    "TransmissionFaults": 12,
 }
 
 # Anything unknown sorts here — after the optics, before the ISP. A neutral
@@ -93,7 +101,17 @@ _DEFAULT_STAGE = 3
 
 
 def stage_of(transform: Any) -> int:
-    """Pipeline stage index for a transform instance or class."""
+    """Pipeline stage index for a transform instance or class.
+
+    By the class's name, unless the instance carries a ``pipeline_stage``
+    of its own: ``OnScreenOverlay`` does, because the same overlay belongs
+    before the codec when a camera draws it and after the link when a
+    recorder does.
+    """
+    if not isinstance(transform, type):
+        own = getattr(transform, "pipeline_stage", None)
+        if isinstance(own, int):
+            return own
     name = transform.__name__ if isinstance(transform, type) else type(transform).__name__
     return _STAGE_ORDER.get(name, _DEFAULT_STAGE)
 

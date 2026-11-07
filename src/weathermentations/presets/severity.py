@@ -344,6 +344,22 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "ghost_strength_range": (_lerp(0.0, 0.1, t), _lerp(0.06, 0.35, t)),
                 "hum_depth_range": (_lerp(0.0, 0.03, t), _lerp(0.02, 0.12, t)),
             },
+            "FocusShift": {
+                # Focused nearer and nearer: the blur of everything far is
+                # the aperture over that distance.
+                "focus_distance_range_m": (_lerp(0.2, 0.03, t), _lerp(0.35, 0.06, t)),
+            },
+            "CameraVibration": {
+                # A wider swing behind a longer shutter.
+                "amplitude_range": (_lerp(0.0006, 0.004, t), _lerp(0.0015, 0.012, t)),
+                "exposure_time_range": (_lerp(0.004, 0.02, t), _lerp(0.01, 0.04, t)),
+            },
+            "OnScreenOverlay": {
+                # Larger lettering and more of the frame blanked. Whether
+                # there is a timestamp at all stays the caller's.
+                "text_height_range": (_lerp(0.02, 0.05, t), _lerp(0.03, 0.08, t)),
+                "privacy_mask_count_range": (int(_lerp(0, 2, t)), int(_lerp(1, 5, t))),
+            },
             "CastShadows": {
                 # At least two. A figure's shadow covers a fifth of what a
                 # crown's does, so a single draw can be one thin figure on

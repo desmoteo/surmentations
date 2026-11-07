@@ -49,10 +49,13 @@ from weathermentations.camera import (
 from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.demosaic import DemosaicArtifacts
 from weathermentations.camera.ir_cut import IrCutFilterFault
+from weathermentations.camera.overlay import OnScreenOverlay
+from weathermentations.camera.vibration import CameraVibration
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.focus import FocusShift
 from weathermentations.lens.foliage import FoliageIntrusion
 from weathermentations.lens.frost import FrostOnGlass
 from weathermentations.lens.snow_cap import SnowOnHousing
@@ -119,6 +122,9 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     # severity does not control.
     "SunFlare": lambda k: SunFlare(p=1.0, flare_position=(0.75, 0.15), **k),
     "HousingOccluders": lambda k: HousingOccluders(p=1.0, **k),
+    "OnScreenOverlay": lambda k: OnScreenOverlay(p=1.0, **k),
+    "CameraVibration": lambda k: CameraVibration(p=1.0, **k),
+    "FocusShift": lambda k: FocusShift(p=1.0, **k),
     "AnalogVideoArtifacts": lambda k: AnalogVideoArtifacts(p=1.0, **k),
     "DemosaicArtifacts": lambda k: DemosaicArtifacts(p=1.0, **k),
     "IrCutFilterFault": lambda k: IrCutFilterFault(p=1.0, **k),

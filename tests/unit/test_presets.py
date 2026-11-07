@@ -27,10 +27,13 @@ from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.camera.demosaic import DemosaicArtifacts
 from weathermentations.camera.ir_cut import IrCutFilterFault
+from weathermentations.camera.overlay import OnScreenOverlay
+from weathermentations.camera.vibration import CameraVibration
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.focus import FocusShift
 from weathermentations.lens.foliage import FoliageIntrusion
 from weathermentations.lens.frost import FrostOnGlass
 from weathermentations.lens.snow_cap import SnowOnHousing
@@ -49,6 +52,9 @@ _DEPTH_FREE = {
     "SunFlare": SunFlare,
     "SourceGlare": SourceGlare,
     "HousingOccluders": HousingOccluders,
+    "OnScreenOverlay": OnScreenOverlay,
+    "CameraVibration": CameraVibration,
+    "FocusShift": FocusShift,
     "AnalogVideoArtifacts": AnalogVideoArtifacts,
     "DemosaicArtifacts": DemosaicArtifacts,
     "IrCutFilterFault": IrCutFilterFault,

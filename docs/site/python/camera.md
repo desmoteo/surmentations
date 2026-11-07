@@ -15,8 +15,10 @@ weathermentations.camera.exposure
 weathermentations.camera.flicker
 weathermentations.camera.ir_cut
 weathermentations.camera.night_ir
+weathermentations.camera.overlay
 weathermentations.camera.rolling_shutter
 weathermentations.camera.sensor_noise
 weathermentations.camera.tone_mapping
 weathermentations.camera.transmission
+weathermentations.camera.vibration
 ```
