@@ -238,3 +238,11 @@ WM_EXPORT void wm_droplet_composite(
     const float *layers, ptrdiff_t pixels) {
     active->droplet_composite(out, base, scattered, fraction, layers, pixels);
 }
+
+/** The active tier's ``splat_discs``; see ``wm_kernel_table``. */
+WM_EXPORT void wm_splat_discs(
+    double *total, ptrdiff_t height, ptrdiff_t width,
+    const float *x, const float *y, const float *radius, const float *weight,
+    const int64_t *order, ptrdiff_t count) {
+    active->splat_discs(total, height, width, x, y, radius, weight, order, count);
+}

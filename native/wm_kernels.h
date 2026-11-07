@@ -29,7 +29,7 @@
  * ``weathermentations._native`` refuses a library whose version is not its
  * own: a stale build is not called with the wrong arguments.
  */
-#define WM_ABI_VERSION 11
+#define WM_ABI_VERSION 12
 
 /** One instruction-set tier's kernels: what ``wm_kernels.c`` exports, once per tier.
  *
@@ -200,6 +200,17 @@ typedef struct {
     void (*droplet_composite)(
         float *out, const float *base, const float *scattered, const float *fraction,
         const float *layers, ptrdiff_t pixels);
+
+    /** spider_web.splat_discs: `count` discs of light, taken in `order`,
+     * added into `total`, (height, width) doubles. Disc i is centred on
+     * (x[i], y[i]) with radius[i] and an edge a pixel wide, and holds
+     * weight[i] in all. The numpy code's arithmetic, float for a pixel's
+     * share and double for the sum, in its order.
+     */
+    void (*splat_discs)(
+        double *total, ptrdiff_t height, ptrdiff_t width,
+        const float *x, const float *y, const float *radius, const float *weight,
+        const int64_t *order, ptrdiff_t count);
 } wm_kernel_table;
 
 #endif

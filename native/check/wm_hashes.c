@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same fourteen lines. It needs only a
+ * architecture, the program must print the same fifteen lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -294,5 +294,26 @@ int main(void) {
                                 ^ fnv(level, W * H * sizeof(float))
                                 ^ fnv(weighted, W * H * sizeof(float))
                                 ^ fnv(road, N * sizeof(float))));
+
+    /* Discs of light, as a web's threads are drawn: small and large, some
+     * over the frame's edge, the largest first. */
+    enum { DISCS = 5000 };
+    float *disc[4];
+    for (int k = 0; k < 4; k++) {
+        disc[k] = malloc(DISCS * sizeof(float));
+    }
+    int64_t *taken = malloc(DISCS * sizeof(int64_t));
+    for (int i = 0; i < DISCS; i++) {
+        const float big = uniform();
+        disc[0][i] = uniform() * (W + 40) - 20;
+        disc[1][i] = uniform() * (H + 40) - 20;
+        disc[2][i] = 0.5f + 20.0f * big * big;
+        disc[3][i] = 0.1f + 40.0f * uniform();
+        taken[i] = DISCS - 1 - i;
+    }
+    double *total = calloc(W * H, sizeof(double));
+    WM_TABLE.splat_discs(total, H, W, disc[0], disc[1], disc[2], disc[3], taken, DISCS);
+    printf("%-9s discs    %016llx\n", WM_TABLE.name,
+           (unsigned long long)fnv(total, W * H * sizeof(double)));
     return 0;
 }

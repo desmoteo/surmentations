@@ -83,6 +83,7 @@ LABELS = {
     "cast_shadows": "`CastShadows`",
     "night_ir": "`NightIrMode`",
     "housing_occluders": "`HousingOccluders`",
+    "spider_web": "`SpiderWeb`",
     "dirt_soil": "`DirtSoil`",
     "sun_flare": "`SunFlare`",
     "source_glare": "`SourceGlare`",

@@ -34,7 +34,7 @@ from weathermentations.camera import (
 )
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.scene import CastShadows
 
 # Scalars that are legitimately *not* ranges, with the reason each one is
@@ -50,10 +50,12 @@ ALLOWED_SCALARS = {
     "sensor_smear_probability",
     "ir_leak_probability",
     "window_ghost_probability",
+    "spider_probability",
     # Render budget / quality, not physics. Varying these would make cost and
     # fidelity random rather than the weather.
     "max_streaks",
     "max_flakes",
+    "max_discs",
     "min_streak_width_px",
     "min_flake_width_px",
     "flake_count_scale",
@@ -135,6 +137,7 @@ def _transforms() -> dict[str, Any]:
         "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts(p=1.0),
         "NightIrMode": NightIrMode(depth_provider=provider, p=1.0),
         "HousingOccluders": HousingOccluders(p=1.0, insect_count_range=(2, 5)),
+        "SpiderWeb": SpiderWeb(p=1.0),
         "CastShadows": CastShadows(depth_provider=provider, p=1.0),
     }
 

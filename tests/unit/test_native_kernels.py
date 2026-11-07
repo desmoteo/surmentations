@@ -27,8 +27,9 @@ from weathermentations.atmosphere import rain as rain_module
 from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import TemporalDenoiseArtifacts
 from weathermentations.camera import denoise as denoise_module
-from weathermentations.lens import DirtSoil, WaterDroplets
+from weathermentations.lens import DirtSoil, SpiderWeb, WaterDroplets
 from weathermentations.lens import water_droplets as droplets_module
+from weathermentations.lens.spider_web import splat_discs
 from weathermentations.utils import ground as ground_module
 from weathermentations.utils import overcast, photometry
 
@@ -860,6 +861,56 @@ def test_the_droplet_composite_is_the_numpy_arithmetic(tier: str, film: bool, dr
     assert np.array_equal(ours, expected)
 
 
+# ------------------------------------------------------------------ discs
+
+
+def _discs(seed: int, count: int = 4000, size: tuple[int, int] = (200, 300)) -> list[np.ndarray]:
+    """Discs of light from under a pixel to forty across, some over the frame's edge."""
+    rng = np.random.default_rng(seed)
+    height, width = size
+    return [
+        rng.uniform(-25.0, width + 25.0, count).astype(np.float32),
+        rng.uniform(-25.0, height + 25.0, count).astype(np.float32),
+        (0.5 + 20.0 * rng.uniform(size=count) ** 2).astype(np.float32),
+        rng.uniform(0.1, 40.0, count).astype(np.float32),
+    ]
+
+
+def _splat(discs: list[np.ndarray], size: tuple[int, int] = (200, 300)) -> np.ndarray:
+    """The field of light the discs add up to."""
+    canvas = np.zeros(size, dtype=np.float32)
+    splat_discs(canvas, *discs)
+    return canvas
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+def test_discs_of_light_are_the_numpy_sum_to_the_bit(tier: str) -> None:
+    _native.set_tier(tier)
+    discs = _discs(3)
+    ours = _splat(discs)
+    with _native.disabled():
+        theirs = _splat(discs)
+    assert ours.max() > 1.0
+    assert np.array_equal(ours, theirs)
+
+
+@requires_native
+@pytest.mark.parametrize("fast", [True, False])
+def test_a_spider_s_web_does_not_depend_on_the_kernels(fast: bool) -> None:
+    mode.set_fast(fast)
+    image = _night_street()
+    for seed in range(3):
+        frames = []
+        for kernels in (True, False):
+            _native.set_enabled(kernels)
+            transform = SpiderWeb(p=1.0, spider_probability=1.0)
+            transform.set_random_seed(seed)
+            frames.append(transform(image=image)["image"])
+        _native.set_enabled(True)
+        assert np.array_equal(frames[0], frames[1])
+
+
 # ------------------------------------------------------------------ tiers
 
 
@@ -904,6 +955,7 @@ def test_every_tier_gives_the_same_bytes() -> None:
                     dirt["linear"], dirt["spread"], dirt["mask"],
                     np.concatenate([dirt["albedo"], dirt["luma"][..., None]], axis=-1),
                 ),
+                _splat(_discs(9)),
             )
         )
     for other in results[1:]:

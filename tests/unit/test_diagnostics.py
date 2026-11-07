@@ -154,7 +154,7 @@ def test_every_depth_conditioned_transform_records_its_draws() -> None:
     from tests.unit.test_randomization import _GroundPlaneDepth
     from weathermentations.atmosphere.fog import RandomFog
     from weathermentations.depth.provider import SharedDepthProvider
-    from weathermentations.lens import DirtSoil, HousingOccluders
+    from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb
     from weathermentations.scene import CastShadows
 
     provider = SharedDepthProvider(_GroundPlaneDepth())
@@ -165,12 +165,14 @@ def test_every_depth_conditioned_transform_records_its_draws() -> None:
         "CastShadows": {"shadow_count", "penumbra_px"},
         "HousingOccluders": {"insect_count", "web_count"},
         "DirtSoil": {"smudge_count", "deposits"},
+        "SpiderWeb": {"hub_distance_m", "radial_count", "disc_count", "spider"},
     }
     builders = {
         "RandomFog": lambda: RandomFog(depth_provider=provider, p=1.0),
         "CastShadows": lambda: CastShadows(depth_provider=provider, p=1.0),
         "HousingOccluders": lambda: HousingOccluders(p=1.0, insect_count_range=(2, 4)),
         "DirtSoil": lambda: DirtSoil(p=1.0),
+        "SpiderWeb": lambda: SpiderWeb(p=1.0),
     }
 
     for name, build in builders.items():

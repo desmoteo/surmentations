@@ -1839,6 +1839,45 @@ static void WM_FN(droplet_composite)(
     }
 }
 
+/** spider_web.splat_discs: discs of light added into `total`, a
+ * (height, width) field of doubles. Disc i is centred on (x[i], y[i]), pixel
+ * centres being whole numbers, with an edge a pixel wide, and holds weight[i]
+ * in all: a pixel gains its coverage, clip(r + 0.5 - distance, 0, 1), times
+ * weight / (pi (r^2 + 1/12)). Discs are taken in `order`. Coverage is float
+ * arithmetic and the sum is double, both as the numpy code has them, so the
+ * field is the same to the last bit.
+ */
+static void WM_FN(splat_discs)(
+    double *total, ptrdiff_t height, ptrdiff_t width,
+    const float *x, const float *y, const float *radius, const float *weight,
+    const int64_t *order, ptrdiff_t count) {
+    const float pi = 3.14159274101257324f;
+    const float edge = (float)(1.0 / 12.0);
+    for (ptrdiff_t k = 0; k < count; k++) {
+        const int64_t i = order[k];
+        const float cx = x[i], cy = y[i], r = radius[i];
+        const float reach = r + 0.5f;
+        const ptrdiff_t half = (ptrdiff_t)ceilf(reach);
+        const ptrdiff_t column = (ptrdiff_t)rintf(cx), row = (ptrdiff_t)rintf(cy);
+        const float peak = weight[i] / (pi * (r * r + edge));
+        const ptrdiff_t top = row - half < 0 ? 0 : row - half;
+        const ptrdiff_t bottom = row + half >= height ? height - 1 : row + half;
+        const ptrdiff_t left = column - half < 0 ? 0 : column - half;
+        const ptrdiff_t right = column + half >= width ? width - 1 : column + half;
+        for (ptrdiff_t v = top; v <= bottom; v++) {
+            const float dy = (float)v - cy;
+            const float dy2 = dy * dy;
+            double *restrict line = total + v * width;
+            for (ptrdiff_t u = left; u <= right; u++) {
+                const float dx = (float)u - cx;
+                float cover = reach - sqrtf(dx * dx + dy2);
+                cover = cover < 0.0f ? 0.0f : (cover > 1.0f ? 1.0f : cover);
+                line[u] += (double)(cover * peak);
+            }
+        }
+    }
+}
+
 #ifdef WM_NATIVE
 /** The native tier is compiled with -march=native, for whatever the build
  * machine had. Run on a CPU without one of those instruction sets it would
@@ -1904,4 +1943,5 @@ const wm_kernel_table WM_FN(wm_table) = {
     WM_FN(place_apart),
     WM_FN(water_lobes),
     WM_FN(droplet_composite),
+    WM_FN(splat_discs),
 };

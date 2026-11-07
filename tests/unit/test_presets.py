@@ -25,7 +25,7 @@ from weathermentations.camera import (
 from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.source_glare import SourceGlare
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
@@ -40,6 +40,7 @@ _DEPTH_FREE = {
     "SunFlare": SunFlare,
     "SourceGlare": SourceGlare,
     "HousingOccluders": HousingOccluders,
+    "SpiderWeb": SpiderWeb,
     "AcFlicker": AcFlicker,
     "RollingShutter": RollingShutter,
     "SensorNoise": SensorNoise,

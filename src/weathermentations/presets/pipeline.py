@@ -54,6 +54,10 @@ _STAGE_ORDER: dict[str, int] = {
     # for the same reason as the two above: its backscatter is the camera's
     # own light.
     "NightFog": 5,
+    # A web across the housing, which shows only by the illuminator's light:
+    # in front of everything, and still after the infrared conversion, which
+    # would otherwise light it by the depth of the scene behind it.
+    "SpiderWeb": 5,
     "AcFlicker": 6,
     "RollingShutter": 6,
     "SensorNoise": 6,
