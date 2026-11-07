@@ -23,6 +23,7 @@ flowchart TD
         DS[DirtSoil]
         SF[SunFlare]
         HO[HousingOccluders]
+        SW[SpiderWeb]
         CAM["Camera / ISP / codec<br/>7 transforms"]
     end
     subgraph depthful["Depth-conditioned — needs CUDA"]
@@ -528,7 +529,7 @@ flowchart LR
     OPT --> SENS["sensor"]
     SENS --> ISP["ISP"]
     ISP --> CODEC["codec"]
-    SENS -.-> S1["NightIrMode, NightRain, NightSnow, AcFlicker, RollingShutter, SensorNoise"]
+    SENS -.-> S1["NightIrMode, NightRain, NightSnow, SpiderWeb, AcFlicker, RollingShutter, SensorNoise"]
     ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts"]
     CODEC -.-> S3["VideoCodecArtifacts, TransmissionFaults"]
 ```
@@ -668,6 +669,52 @@ the background was 0.01-0.11% that way and 2.7-6.5% with the flakes lit by
 their own distance from the lamp. So at night the snow is split: its veil and
 whatever has settled stay with `RandomSnow`, before the conversion, and the
 falling flakes come after it.
+
+### A spider's web: light, never shadow
+
+```mermaid
+flowchart TD
+    WEB["orb web: frame, radii, capture spiral, in a tilted plane"] --> PIECE["threads cut into pieces, each at its own distance z"]
+    PIECE --> DISC["blur disc: radius = A f / 2z, the aperture seen from the thread"]
+    PIECE --> LAMP["lamp: inverse square, dark in the last centimetres before the glass"]
+    PIECE --> BEAD["beads of glue and dew: a share of the thread's light, as points"]
+    DISC --> SUM["discs added, as light adds"]
+    LAMP --> SUM
+    BEAD --> SUM
+    SUM --> GLARE["veiling glare, before clipping"]
+    GLARE --> OUT["added to the frame"]
+```
+
+`SpiderWeb` is the third transform lit by the camera, and the arithmetic of
+why is the same as for a raindrop, more extreme. A thread of silk is a few
+micrometres across. Ten centimetres from a 4 mm lens it projects 0.04 px,
+spread by defocus over a disc some 15 px wide: it covers a four-hundredth of
+the pixels it touches. Under the sky that is a quarter of a percent of full
+scale, and a web is invisible by day. Under a lamp 10 cm away, against a
+scene the same lamp lights from 10 m, the thread receives ten thousand times
+the scene's irradiance, and a four-hundredth of that is 25 times a white
+wall. So the web only **adds** light; it is far too thin to hide anything.
+
+Everything else follows from where each thread is. A point out of focus is
+drawn as the aperture, a disc of radius `A f / 2z`, and brightness follows
+the lamp, so the near side of a tilted web is bright and blurred wide and
+the far side dim and fine. The beads of glue on the capture spiral, and of
+dew on everything, are points, so each is one disc; whether they merge into
+a band or stand apart as pearls is the ratio of their spacing to the
+aperture's diameter, at any distance, because both project as `1/z`. The
+lamp is a ring of LEDs around the lens, so its inverse square stops short of
+the glass: a thread lying on the dome is beside every beam and dark.
+
+A thread at the reference distance peaks at the gain it was given (within
+4%, measured), beading moves a thread's light without adding any, and the
+discs are summed, not maximised, so crossings and overlapping beads are
+brighter, as in footage. The spider is the one thing here with a surface:
+it hides what is behind it and returns the lamp's light from all of itself,
+forty times a thread's band at the same distance, which no exposure holds.
+
+It sorts **after** `NightIrMode`, with the night rain and snow and for
+their reason. `HousingOccluders` still draws its own, simpler webs as
+blurred lines; this is the web as geometry.
 
 ### Night IR
 

@@ -39,6 +39,7 @@ from weathermentations.lens import (
     DirtSoil,
     HousingOccluders,
     SourceGlare,
+    SpiderWeb,
     SunFlare,
     WaterDroplets,
 )
@@ -50,7 +51,7 @@ TRANSFORMS = {
     cls.__name__: cls
     for cls in (
         RandomFog, RandomRain, RandomSnow, NightRain, NightSnow, NightFog,
-        WaterDroplets, DirtSoil, SunFlare, SourceGlare, HousingOccluders,
+        WaterDroplets, DirtSoil, SunFlare, SourceGlare, HousingOccluders, SpiderWeb,
         CastShadows, NightIrMode, AcFlicker, RollingShutter, SensorNoise,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,
         VideoCodecArtifacts, TransmissionFaults,

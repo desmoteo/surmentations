@@ -49,6 +49,10 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![transmission_faults](effects/transmission_faults.jpg) | ![wet_ground](effects/wet_ground.jpg) | ![snow_cover](effects/snow_cover.jpg) |
 
+| spider_web |  |  |
+| --- | --- | --- |
+| ![spider_web](effects/spider_web.jpg) |  |  |
+
 Not rendered: `sun_flare`, `cast_shadows` — it needs the sun, and the scene is at night.
 
 Not rendered: `fog` — it is the daylight model, an even veil lit by the sky. `night_fog` is fog lit by the lamps.

@@ -53,7 +53,14 @@ from weathermentations.camera import (
 from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthAnythingV2Estimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SourceGlare, SunFlare, WaterDroplets
+from weathermentations.lens import (
+    DirtSoil,
+    HousingOccluders,
+    SourceGlare,
+    SpiderWeb,
+    SunFlare,
+    WaterDroplets,
+)
 from weathermentations.presets.severity import GROUND_SEVERITY, SEVERITY
 from weathermentations.scene import CastShadows
 
@@ -92,6 +99,9 @@ EFFECTS: dict[str, str] = {
     # along the row. See GROUND_ROWS.
     "wet_ground": "RandomRain",
     "snow_cover": "RandomSnow",
+    # A web across the housing, lit by the infrared ring. Last, for the
+    # reason night_snow is where it is.
+    "spider_web": "SpiderWeb",
 }
 
 # Rows that climb `GROUND_SEVERITY` and hold the weather still, and the row
@@ -382,6 +392,8 @@ def _build(
         return VideoCodecArtifacts(**kwargs)
     if name == "transmission_faults":
         return TransmissionFaults(**kwargs)
+    if name == "spider_web":
+        return SpiderWeb(**kwargs)
     return RandomSnow(depth_provider=provider, **kwargs)
 
 
@@ -475,12 +487,12 @@ def main() -> None:
         for index, level in enumerate(LEVELS):
             transform = _build(name, level, index, rng, depth_provider)
             # NightRain and NightSnow need their input already dark, and so
-            # does water lit by the infrared ring. Their
+            # do water and a web lit by the infrared ring. Their
             # particles are lit by the camera rather than the sky, so on a
             # daylit frame they are as invisible as RandomRain's -- which is
             # the finding the transforms exist to answer. Showing them over a
             # sunny road would illustrate the opposite of what they do.
-            lamp_lit = name in ("night_rain", "night_snow", "night_droplets")
+            lamp_lit = name in ("night_rain", "night_snow", "night_droplets", "spider_web")
             base = _night_base(scene, depth_provider, level) if lamp_lit else scene
             if name in NEEDS_LAMPS:
                 base = _lamp_scene()

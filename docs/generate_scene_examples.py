@@ -84,7 +84,7 @@ PIPELINE_DRAWS = 4
 
 # Lit by the camera's own illuminator, so rendered over an infrared night
 # version of the scene, as in the severity gallery.
-LAMP_LIT = ("night_rain", "night_snow", "night_droplets")
+LAMP_LIT = ("night_rain", "night_snow", "night_droplets", "spider_web")
 NEEDS_SUN = ("sun_flare", "cast_shadows")
 NEEDS_OPEN_SKY = (
     "rain", "snow", "wet_ground", "snow_cover", "night_rain", "night_snow", *NEEDS_SUN
