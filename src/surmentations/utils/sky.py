@@ -126,6 +126,35 @@ def sky_weight(
     return np.clip(cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR), 0.0, 1.0)
 
 
+# Koschmieder: visibility is the distance at which contrast falls to 2%,
+# exp(-3.912).
+KOSCHMIEDER = 3.912
+
+# Share of what is not sky that lies nearer than a scene's extent. Short of
+# all of it, so that one far pixel is not the scene.
+_EXTENT_SHARE = 98.0
+
+
+def scene_extent_m(depth_m: np.ndarray, sky: np.ndarray) -> float:
+    """How deep a scene is: the distance of the farthest thing in it that is not sky.
+
+    A fog of one visibility is a different picture on every scene: a hundred
+    metres hides nothing of a car park and all of a valley. An effect asked
+    for a visibility *relative to the scene* multiplies by this. It is the
+    98th percentile of the depth of what is not sky, and the greatest depth
+    in a frame that is all sky.
+    """
+    ground = depth_m[sky < 0.5]
+    if ground.size == 0:
+        return float(depth_m.max())
+    return float(np.percentile(ground, _EXTENT_SHARE))
+
+
+def extinction_for_visibility(visibility_m: float) -> float:
+    """The extinction coefficient, per metre, of air one can see ``visibility_m`` through."""
+    return KOSCHMIEDER / max(visibility_m, 1e-6)
+
+
 def lift_sky(depth_m: np.ndarray, sky: np.ndarray) -> np.ndarray:
     """Put the sky at the far end of a depth map.
 

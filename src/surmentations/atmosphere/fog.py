@@ -60,7 +60,13 @@ from surmentations.diagnostics import record_draw
 from surmentations.utils.channels import channel_mean
 from surmentations.utils.color import veil_radiance_linear
 from surmentations.utils.photometry import from_linear_unit, linear_to_srgb, to_linear_unit
-from surmentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
+from surmentations.utils.sky import (
+    extinction_for_visibility,
+    lift_sky,
+    scene_extent_m,
+    sky_to_depth_edge,
+    sky_weight,
+)
 
 # Rec.709 primaries' representative wavelengths, in nm.
 _RGB_WAVELENGTHS = np.array([600.0, 550.0, 450.0], dtype=np.float32)
@@ -86,6 +92,14 @@ class RandomFog(CameraTransform):
 
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
+        visibility_range_scene: visibility as a multiple of the scene's
+            depth, drawn per call, in place of ``beta_range``. A fog of one
+            extinction is a different picture on every scene: a visibility
+            of a hundred metres hides nothing of a car park and all of a
+            valley. ``(0.5, 1.0)`` is fog that takes the far half of
+            whatever scene it is given. The scene's depth is the distance
+            of the farthest thing in it that is not sky. ``None``, the
+            default, uses ``beta_range``.
         beta_range: extinction coefficient, in 1/m against ``depth_scale``'s
             pseudo-metres. Visibility is ``3.912 / beta``; 0.005 is light
             haze, 0.02 is fog, 0.06+ is dense fog.
@@ -128,6 +142,14 @@ class RandomFog(CameraTransform):
         ]
         atmospheric_light: tuple[int, int, int] | None
         depth_scale: float | None
+        visibility_range_scene: (
+            Annotated[
+                tuple[float, float],
+                AfterValidator(nondecreasing),
+                AfterValidator(check_range_bounds(0.01, 100.0)),
+            ]
+            | None
+        )
         forward_scatter_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -144,6 +166,7 @@ class RandomFog(CameraTransform):
         depth_scale: float | None = None,
         forward_scatter_range: tuple[float, float] = (0.001, 0.005),
         sky_optical_depth_cap: float = 1.6,
+        visibility_range_scene: tuple[float, float] | None = None,
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -155,6 +178,7 @@ class RandomFog(CameraTransform):
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.beta_range = beta_range
+        self.visibility_range_scene = visibility_range_scene
         self.scattering_gamma_range = scattering_gamma_range
         self.atmospheric_light = atmospheric_light
         self.depth_scale = depth_scale
@@ -190,7 +214,13 @@ class RandomFog(CameraTransform):
         )
         depth_pm = lift_sky(depth_pm, sky)
 
-        beta = self.py_random.uniform(*self.beta_range)
+        if self.visibility_range_scene is None:
+            beta = self.py_random.uniform(*self.beta_range)
+        else:
+            # Set against the scene and not in metres: the same fog on a
+            # car park and on a valley.
+            visibility = self.py_random.uniform(*self.visibility_range_scene)
+            beta = extinction_for_visibility(visibility * scene_extent_m(depth_pm, sky))
         gamma = self.py_random.uniform(*self.scattering_gamma_range)
         beta_rgb = channel_extinction(beta, gamma)
 

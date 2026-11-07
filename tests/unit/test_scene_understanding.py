@@ -542,3 +542,98 @@ def test_a_lamp_is_compact_and_a_lit_road_is_not() -> None:
     assert float(mask[125, 150]) == 0.0 and float(mask[65, 245]) == 0.0
     assert float(mask[170, 30]) == 0.0
     assert math.isclose(float(lamp_mask(np.zeros((8, 8, 3), np.float32)).max()), 0.0)
+
+
+# ------------------------------------------------------------- air against the scene
+
+
+class _TwoScales(DepthEstimator):
+    """A wall across the bottom of the frame and a far hillside above it, no sky."""
+
+    def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Relative depth 0 below the middle row, 1 above it."""
+        depth = np.ones(image.shape[:2], dtype=np.float32)
+        depth[image.shape[0] // 2 :] = 0.0
+        return depth
+
+
+@pytest.mark.parametrize("far_m", [40.0, 4000.0])
+def test_fog_set_against_the_scene_is_the_same_fog_on_any_scene(far_m: float) -> None:
+    """A visibility in metres hides nothing of a car park and all of a
+    valley. As a multiple of the scene's depth it leaves the same share of
+    either: here the far half is seen through one visibility's worth of fog
+    at half the scene's depth, whatever the scene's depth is."""
+    provider = SharedDepthProvider(_TwoScales(), depth_range_m=(far_m / 100.0, far_m))
+    image = np.full((80, 120, 3), 60, dtype=np.uint8)
+    fog = RandomFog(
+        depth_provider=provider,
+        p=1.0,
+        visibility_range_scene=(0.5, 0.5),
+        scattering_gamma_range=(0.0, 0.0),
+        forward_scatter_range=(0.0, 0.0),
+    )
+    fog.set_random_seed(0)
+    with recording() as log:
+        fog(image=image)
+    drew = log[0]["drew"]
+    assert drew["koschmieder_visibility_m"] == pytest.approx(0.5 * far_m, rel=1e-3)
+    # In metres, the default range would have been somewhere else entirely
+    # on one of these two scenes.
+    assert drew["beta"] * far_m == pytest.approx(3.912 / 0.5, rel=1e-3)
+
+
+@pytest.mark.parametrize("transform", [RandomRain, RandomSnow])
+def test_a_veil_is_kept_from_closing_the_far_end_of_a_long_view(transform: type) -> None:
+    """The veil follows from the rate, per metre. Over four kilometres that
+    hides the far end outright; with a floor on the visibility, as a multiple
+    of the scene's depth, it thins the distance and never closes it. On a
+    short scene the floor is far below the veil and changes nothing."""
+    image = np.full((80, 120, 3), 60, dtype=np.uint8)
+    heavy = {"rain_rate_range_mm_h": (60.0, 60.0)}
+    if transform is RandomSnow:
+        heavy = {"snowfall_rate_range_mm_h": (4.0, 4.0)}
+
+    def veil(far_m: float, floor: float | None) -> float:
+        """The extinction the veil was drawn with, on a scene ``far_m`` deep."""
+        provider = SharedDepthProvider(_TwoScales(), depth_range_m=(far_m / 100.0, far_m))
+        falling = transform(depth_provider=provider, p=1.0, min_visibility_scene=floor, **heavy)
+        falling.set_random_seed(0)
+        with recording() as log:
+            falling(image=image)
+        return float(log[0]["drew"]["veil_beta"])
+
+    free, held = veil(4000.0, None), veil(4000.0, 1.5)
+    assert held == pytest.approx(3.912 / (1.5 * 4000.0), rel=1e-3)
+    assert held < 0.5 * free
+    assert veil(20.0, 1.5) == veil(20.0, None)
+    with pytest.raises(ValueError):
+        transform(depth_provider=SharedDepthProvider(_TwoScales()), min_visibility_scene=0.0)
+
+
+def test_the_scene_s_depth_is_the_farthest_thing_that_is_not_sky() -> None:
+    from surmentations.utils.sky import extinction_for_visibility, scene_extent_m
+
+    depth = np.full((40, 60), 30.0, dtype=np.float32)
+    depth[:10] = 5000.0
+    sky = np.zeros((40, 60), dtype=np.float32)
+    sky[:10] = 1.0
+    assert scene_extent_m(depth, sky) == pytest.approx(30.0)
+    assert scene_extent_m(depth, np.zeros_like(sky)) == pytest.approx(5000.0)
+    assert scene_extent_m(depth, np.ones_like(sky)) == pytest.approx(5000.0)
+    # One stray far pixel is not the scene.
+    depth[20, 20] = 900.0
+    assert scene_extent_m(depth, sky) == pytest.approx(30.0)
+    assert extinction_for_visibility(391.2) == pytest.approx(0.01)
+
+
+def test_night_fog_takes_its_visibility_against_the_scene_too() -> None:
+    from surmentations.atmosphere import NightFog
+
+    image = np.full((80, 120, 3), 20, dtype=np.uint8)
+    for far_m in (60.0, 900.0):
+        provider = SharedDepthProvider(_TwoScales(), depth_range_m=(far_m / 100.0, far_m))
+        fog = NightFog(depth_provider=provider, p=1.0, visibility_range_scene=(0.6, 0.6))
+        fog.set_random_seed(0)
+        with recording() as log:
+            fog(image=image)
+        assert log[0]["drew"]["visibility_m"] == pytest.approx(0.6 * far_m, rel=1e-3)

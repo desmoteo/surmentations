@@ -134,7 +134,13 @@ from surmentations.utils.precipitation import (
     snow_physical_diameter,
     width_cut_for_budget,
 )
-from surmentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
+from surmentations.utils.sky import (
+    extinction_for_visibility,
+    lift_sky,
+    scene_extent_m,
+    sky_to_depth_edge,
+    sky_weight,
+)
 
 _ACCUMULATION_COLOR = np.array([235.0, 240.0, 245.0])
 
@@ -478,6 +484,13 @@ class RandomSnow(CameraTransform):
         focus_distance_m: what the camera is focused on. The default is far
             into the scene, which is the dashcam/surveillance case and the
             reason flakes on the front element are the defocused ones.
+        min_visibility_scene: the least visibility the veil may leave, as a
+            multiple of the scene's depth, or ``None`` for no limit. The
+            veil follows from the precipitation rate, per metre, which is
+            right and which over a long view hides the far end of the
+            scene outright: 1.5 lets the veil thin the distance without
+            ever closing it. The scene's depth is the distance of the
+            farthest thing in it that is not sky.
         veil_beta_range: extinction coefficient for the snow veil. ``None``
             (the default) derives it from ``snowfall_rate_mm_h``, which is
             the physically consistent choice — the veil is the flakes too
@@ -609,6 +622,7 @@ class RandomSnow(CameraTransform):
             ]
             | None
         )
+        min_visibility_scene: float | None = Field(default=None, gt=0.0, le=100.0)
         aperture_blades_range: Annotated[
             tuple[int, int],
             AfterValidator(nondecreasing),
@@ -674,6 +688,7 @@ class RandomSnow(CameraTransform):
         aperture_diameter_range_mm: tuple[float, float] = (4.0, 14.0),
         focus_distance_range_m: tuple[float, float] = (10.0, 45.0),
         veil_beta_range: tuple[float, float] | None = None,
+        min_visibility_scene: float | None = None,
         aperture_blades_range: tuple[int, int] = (5, 9),
         rim_gain_range: tuple[float, float] = (0.95, 1.45),
         cats_eye_strength_range: tuple[float, float] = (0.15, 0.7),
@@ -709,6 +724,7 @@ class RandomSnow(CameraTransform):
         self.aperture_diameter_range_mm = aperture_diameter_range_mm
         self.focus_distance_range_m = focus_distance_range_m
         self.veil_beta_range = veil_beta_range
+        self.min_visibility_scene = min_visibility_scene
         self.aperture_blades_range = aperture_blades_range
         self.rim_gain_range = rim_gain_range
         self.cats_eye_strength_range = cats_eye_strength_range
@@ -975,6 +991,10 @@ class RandomSnow(CameraTransform):
             beta = snow_extinction_coefficient(snowfall_rate)
             veil_bounds = (beta * 0.75, beta * 1.3)
         veil_beta = self.py_random.uniform(*veil_bounds)
+        if self.min_visibility_scene is not None:
+            # Never thicker than leaves the far end of this scene in view.
+            floor = self.min_visibility_scene * scene_extent_m(depth_pm, sky)
+            veil_beta = min(veil_beta, extinction_for_visibility(floor))
 
         record_draw(
             snowfall_rate_mm_h=snowfall_rate,
