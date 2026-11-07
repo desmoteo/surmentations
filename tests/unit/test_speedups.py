@@ -180,31 +180,44 @@ def _wet_road_over_the_whole_frame(linear, wetness, darkening, horizon_px, focal
     height, width = linear.shape[:2]
     rows = np.arange(height, dtype=np.float32)
     about_horizon, about_foot, under_object = rain._mirrored_rows(wetness, horizon_px)
-    source = linear
-    if lamp_gain > 1.0:
-        source = linear * (1.0 + (lamp_gain - 1.0) * source_mask(linear)[..., None])
     map_x = np.ascontiguousarray(
         np.broadcast_to(np.arange(width, dtype=np.float32), (height, width))
     )
-
-    def mirror(source_rows):
-        map_y = np.clip(np.broadcast_to(source_rows, (height, width)), 0.0, height - 1.0)
-        map_y = np.ascontiguousarray(map_y, dtype=np.float32)
-        linear_, edge = cv2.INTER_LINEAR, cv2.BORDER_REPLICATE
-        return cv2.remap(source, map_x, map_y, interpolation=linear_, borderMode=edge)
-
     if sky_radiance is None:
         sky_radiance = veil_radiance_linear(linear)
     margin = rain._OFF_FRAME_BLEND * height
     off_frame = np.clip((margin - about_horizon) / margin, 0.0, 1.0)[..., None]
-    distant = mirror(about_horizon) * (1.0 - off_frame) + sky_radiance.reshape(1, 1, -1) * off_frame
-    reflection = distant
-    if float(under_object.max()) > 0.0:
-        weight = under_object[..., None]
-        reflection = distant * (1.0 - weight) + mirror(about_foot) * weight
+
+    def mirrored(over):
+        source = linear
+        if lamp_gain > 1.0:
+            source = linear * (1.0 + (over - 1.0) * source_mask(linear)[..., None])
+
+        def mirror(source_rows):
+            map_y = np.clip(np.broadcast_to(source_rows, (height, width)), 0.0, height - 1.0)
+            map_y = np.ascontiguousarray(map_y, dtype=np.float32)
+            linear_, edge = cv2.INTER_LINEAR, cv2.BORDER_REPLICATE
+            return cv2.remap(source, map_x, map_y, interpolation=linear_, borderMode=edge)
+
+        sky = sky_radiance.reshape(1, 1, -1)
+        about = mirror(about_horizon) * (1.0 - off_frame) + sky * off_frame
+        if float(under_object.max()) > 0.0:
+            weight = under_object[..., None]
+            about = about * (1.0 - weight) + mirror(about_foot) * weight
+        return about
+
+    reflection = mirrored(lamp_gain)
     sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)
     smear = max(4.0, rain._FILM_SMEAR * height)
     rough = cv2.GaussianBlur(reflection, (0, 0), sigmaX=max(1.5, 0.3 * smear), sigmaY=smear)
+    if darkening < rain._DAMP_ALBEDO_RATIO:
+        # The long streak, with the lamps as far over full scale as it takes them.
+        streak = max(smear, rain._FILM_STREAK * height)
+        lit = mirrored(lamp_gain * rain._STREAK_LAMP_OVER) if lamp_gain > 1.0 else reflection
+        across = max(1.5, rain._FILM_STREAK_WIDTH * streak)
+        tail = cv2.GaussianBlur(lit, (0, 0), sigmaX=across, sigmaY=streak)
+        share = np.float32(rain._FILM_STREAK_SHARE)
+        rough = rough * np.float32(1.0 - rain._FILM_STREAK_SHARE) + tail * share
     drop = np.maximum(rows - horizon_px, 0.0)
     cos_theta = drop / np.sqrt(drop * drop + focal_px * focal_px)
     grazing = (1.0 - cos_theta).reshape(height, 1, 1)

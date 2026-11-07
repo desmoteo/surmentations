@@ -395,3 +395,124 @@ def test_the_sky_edge_is_not_drawn_round_a_distant_tower() -> None:
     assert by_depth[60:, 50:52].mean() > 0.5, "the fixture should show the failure"
     assert by_colour_too[60:, 50:70].max() < 0.05
     assert by_colour_too[60:, 49].mean() > 0.8, "the sky beside the tower is sky"
+
+
+# ------------------------------------------------- where the road ends, and what stands on it
+
+
+def _plane(height: int, width: int, horizon: float, far_m: float = 400.0) -> np.ndarray:
+    """Depth in metres of level ground under a camera whose horizon is at row ``horizon``."""
+    rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+    depth = np.clip(4.0 * 300.0 / np.maximum(rows - horizon, 1e-3), 0.0, far_m)
+    return np.ascontiguousarray(np.broadcast_to(depth, (height, width))).astype(np.float32)
+
+
+def test_the_road_is_mirrored_about_its_far_end_and_seen_from_the_horizon() -> None:
+    """Two rows, and they are not the same one. The reflectance of a wet road
+    goes by the angle it is seen at, which is measured from the horizon; what
+    it reflects stands at the road's far end and is mirrored about that."""
+    from surmentations.atmosphere.rain import ground_horizon
+
+    height, width, true_horizon = 240, 320, 60.0
+    depth = _plane(height, width, true_horizon)
+    ground = np.zeros((height, width), dtype=np.float32)
+    # The road runs from the bottom of the frame up to a wall at row 110.
+    ground[110:] = 1.0
+    horizon, far_end = ground_horizon(depth, ground)
+    assert far_end == pytest.approx(110.0, abs=1.0)
+    assert horizon == pytest.approx(true_horizon, abs=4.0), "exact depth gives the true horizon"
+
+    # A monocular depth map puts far ground too near. The horizon moves with
+    # it; the row the road is mirrored about does not.
+    compressed = 4.0 + 20.0 * (depth - 4.0) / (depth + 20.0)
+    squeezed, same_end = ground_horizon(compressed.astype(np.float32), ground)
+    assert same_end == pytest.approx(far_end, abs=1.0)
+    assert squeezed <= same_end
+
+
+def test_ground_that_fills_the_frame_has_its_horizon_above_the_picture() -> None:
+    from surmentations.atmosphere.rain import ground_horizon
+
+    depth = _plane(240, 320, -150.0)
+    horizon, far_end = ground_horizon(depth, np.ones((240, 320), dtype=np.float32))
+    assert horizon == pytest.approx(-150.0, abs=2.0)
+    assert far_end == horizon, "nothing stands at the end of a road that leaves the frame"
+
+
+def test_a_hedge_s_top_is_not_the_far_end_of_the_road() -> None:
+    """Whatever faces upwards reads as level ground: a hedge's top, a roof.
+    They stand on the ground, nearer than the ground behind them, so following
+    the road up the frame the distance stops growing where they begin. Taking
+    them for road put a night street's horizon in the crown of a tree."""
+    from surmentations.atmosphere.rain import ground_horizon
+
+    height, width = 240, 320
+    depth = _plane(height, width, 60.0, far_m=150.0)
+    ground = np.zeros((height, width), dtype=np.float32)
+    ground[120:] = 1.0
+    # A band of upward-facing surface above the road's end, twelve metres off.
+    depth[40:120] = 12.0
+    ground[40:120, :200] = 1.0
+    _horizon, far_end = ground_horizon(depth, ground)
+    assert far_end == pytest.approx(120.0, abs=2.0)
+
+
+def _road_with_a_car(height: int = 240, width: int = 320) -> tuple[np.ndarray, ...]:
+    """A grey road seen from above, a darker car on it that the depth map
+    shows only as a bump, and a pool of lamp light that is in no depth map."""
+    rng = np.random.default_rng(2)
+    depth = _plane(height, width, -40.0)
+    scene = np.full((height, width, 3), 0.2, dtype=np.float32)
+    scene += rng.normal(0.0, 0.005, scene.shape).astype(np.float32)
+    car = (slice(100, 130), slice(140, 190))
+    depth[car] *= 0.85
+    scene[car] = (0.02, 0.02, 0.03)
+    pool = (slice(170, 220), slice(40, 110))
+    scene[pool] *= 3.0
+    ground = np.ones((height, width), dtype=np.float32)
+    return depth, np.clip(scene, 0.0, 1.0), ground, car, pool
+
+
+def test_what_stands_on_the_road_is_told_by_being_nearer_and_looking_different() -> None:
+    """A car far enough off is a smooth bump in the depth map, and a wet road
+    darkened it and laid reflections over it. It is nearer than the road
+    round it *and* does not look like it. A pool of lamp light looks nothing
+    like the road beside it either, and is not nearer: it stays road."""
+    from surmentations.utils.ground import standing_objects
+
+    depth, scene, ground, car, pool = _road_with_a_car()
+    objects = standing_objects(depth, scene, ground)
+    assert objects.shape == ground.shape and objects.dtype == np.float32
+    assert float(objects[car].mean()) > 0.9, "the car is still part of the road"
+    assert float(objects[pool].max()) < 0.05, "a pool of light was taken for an object"
+    open_road = objects[200:, 200:]
+    assert float(open_road.max()) < 0.05
+    # The road at the car's foot is road: no dry rim round it.
+    rim = objects[136:140, 140:190]
+    assert float(rim.mean()) < 0.2
+
+
+def test_a_bump_the_colour_of_the_road_is_still_an_object_if_it_stands_high() -> None:
+    """A grey car on a grey road. Nothing in its look says so, and a bump of
+    a few per cent could be the depth map's own unevenness; one of fifteen
+    could not."""
+    from surmentations.utils.ground import standing_objects
+
+    depth, scene, ground, _car, _pool = _road_with_a_car()
+    # Far enough off to be a dozen pixels of the depth map.
+    car = (slice(60, 70), slice(240, 256))
+    scene[car] = 0.2
+    slight, high = depth.copy(), depth.copy()
+    slight[car] *= 0.97
+    high[car] *= 0.85
+    assert float(standing_objects(slight, scene, ground)[car].mean()) < 0.1
+    assert float(standing_objects(high, scene, ground)[car].mean()) > 0.5
+
+
+def test_a_wet_road_leaves_the_vehicles_on_it_as_they_were() -> None:
+    from surmentations.atmosphere.rain import _read_wet_ground
+
+    depth, scene, _ground, car, _pool = _road_with_a_car()
+    wetness, _horizon, _far_end = _read_wet_ground(depth, scene, 60.0, 30.0, 6.0)
+    assert float(wetness[car].mean()) < 0.1
+    assert float(wetness[200:, 200:].mean()) > 0.9

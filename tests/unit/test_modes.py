@@ -218,11 +218,17 @@ def test_the_wet_ground_read_at_the_depth_map_s_size_is_the_same_ground() -> Non
     for flag in (True, False):
         mode.set_fast(flag)
         read[flag] = rain._wet_ground(depth, scene, 60.0, 10.0, 6.0)
-    (fast_wet, fast_horizon), (exact_wet, exact_horizon) = read[True], read[False]
+    (fast_wet, fast_horizon, fast_end), (exact_wet, exact_horizon, exact_end) = (
+        read[True],
+        read[False],
+    )
     assert fast_wet.shape == exact_wet.shape == depth.shape and fast_wet.dtype == np.float32
     assert 0.2 < (exact_wet > 0.5).mean() < 0.9
     assert ((fast_wet > 0.5) == (exact_wet > 0.5)).mean() > 0.97
     assert abs(fast_horizon - exact_horizon) < 0.01 * depth.shape[0]
+    # The row the road is mirrored about is found on the reduced copy too.
+    assert abs(fast_end - exact_end) < 0.01 * depth.shape[0]
+    assert fast_horizon <= fast_end and exact_horizon <= exact_end
     # The box is dry in both, and so is the sky.
     assert fast_wet[550:650, 450:600].max() < 0.2 and fast_wet[:200].max() < 0.05
 

@@ -80,6 +80,7 @@ field be rasterised in one batch (and, on a GPU, with a plain scatter-add).
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Any
 
 import cv2
@@ -99,6 +100,7 @@ from surmentations.utils.ground import (
     fill_to_edges,
     ground_noise,
     level_ground_weight,
+    standing_objects,
     vegetation_weight,
 )
 from surmentations.utils.overcast import apply_overcast, cloud_cover
@@ -352,11 +354,14 @@ class RandomRain(CameraTransform):
             invisible, so real night rain is seen as a swarm of bright
             flecks round each lamp and nowhere else. A positive value lights
             each streak by the lamps near it in the picture, in their
-            colour, and lets a soaked road reflect them at the same
-            strength, as the long streaks of light a wet street has. A
-            clipped lamp's true brightness is not in the frame, hence a
-            range and not a measurement. Set it for night frames only; the
-            shipped pipelines do.
+            colour, and lets a soaked road reflect them: at this strength
+            close under each lamp, and many times it in the long streak the
+            lamp lays down the road towards the camera, which is the lamp
+            spread over hundreds of times its own area and still the
+            brightest thing on a wet street. A clipped lamp's true
+            brightness is not in the frame, hence a range and not a
+            measurement. Set it for night frames only; the shipped
+            pipelines do.
         wetness_falloff_range: exponent on the upward-facing cosine. Water
             sheets on horizontal surfaces and runs off anything steeper, more
             sharply than snow settles, so this sits above snow's equivalent.
@@ -372,6 +377,7 @@ class RandomRain(CameraTransform):
         """The arguments of ``RandomRain`` as Albumentations validates them: each
         range ordered low to high and within the bounds given here.
         """
+
         depth_provider: SharedDepthProvider
         rain_rate_range_mm_h: Annotated[
             tuple[float, float],
@@ -741,9 +747,9 @@ class RandomRain(CameraTransform):
         wetness_darkening = self.py_random.uniform(*self.wetness_darkening_range)
         wetness_falloff = self.py_random.uniform(*self.wetness_falloff_range)
         wetness = np.zeros((height, width), dtype=np.float32)
-        horizon = 0.0
+        horizon = far_end = 0.0
         if draw_wetness:
-            wetness, horizon = _wet_ground(
+            wetness, horizon, far_end = _wet_ground(
                 depth_pm, linear_scene, horizontal_fov, camera_pitch, wetness_falloff
             )
 
@@ -758,6 +764,7 @@ class RandomRain(CameraTransform):
             wetness_darkening=wetness_darkening,
             wetness_falloff=wetness_falloff,
             horizon_row=horizon,
+            mirror_row=far_end,
             ground_fraction=lambda: float((wetness > 0.05).mean()),
         )
 
@@ -793,6 +800,7 @@ class RandomRain(CameraTransform):
             "wetness_darkening": wetness_darkening,
             "puddles": puddles,
             "horizon_px": horizon,
+            "mirror_px": far_end,
             "focal_px": focal,
         }
 
@@ -811,6 +819,7 @@ class RandomRain(CameraTransform):
         overcast: float = 0.0,
         lamp_glint: float = 0.0,
         puddles: np.ndarray | None = None,
+        mirror_px: float | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Relight the frame for overcast, veil it, draw the streaks, and wet the road.
@@ -888,8 +897,15 @@ class RandomRain(CameraTransform):
 
         if draw_wetness:
             out = _apply_ground_wetness(
-                out, wetness, wetness_darkening, horizon_px, focal_px,
-                sky_radiance=airlight, lamp_gain=max(lamp_glint, 1.0), puddles=puddles,
+                out,
+                wetness,
+                wetness_darkening,
+                horizon_px,
+                focal_px,
+                sky_radiance=airlight,
+                lamp_gain=max(lamp_glint, 1.0),
+                puddles=puddles,
+                mirror_px=mirror_px,
             )
 
         return from_linear_unit(out, scale, is_integer, img.dtype)
@@ -1163,6 +1179,7 @@ _WET_GROUND_FAR_M = 400.0
 # mirrored picture to the sky, as its source row nears the top edge.
 _OFF_FRAME_BLEND = 0.08
 
+
 def _paved_weight(linear_rgb: np.ndarray) -> np.ndarray:
     """``[0, 1]`` weight of ground a film of water can lie on.
 
@@ -1238,6 +1255,24 @@ def wet_albedo(dry: np.ndarray, ratio: float) -> np.ndarray:
 # smooth surface's reflectance it keeps towards the camera. A puddle is
 # smooth: sharp, and the full Fresnel value.
 _FILM_SMEAR = 0.035
+# A rough surface does not smear a reflection by one amount. Most of its
+# facets lie nearly flat and a few are steep, so a light has a bright
+# reflection close under it and a long faint one running on towards the
+# camera: the streak a street lamp lays down a wet road. This share of the
+# film's reflection is in that streak, which is this fraction of the frame's
+# height long and this fraction of its own length wide. Narrow, because a
+# facet tilted sideways turns a ray seen at a grazing angle hardly at all.
+_FILM_STREAK_SHARE = 0.5
+_FILM_STREAK = 0.12
+_FILM_STREAK_WIDTH = 0.1
+# A lamp's streak is the lamp spread over a patch of road hundreds of times
+# its own size in the picture, and is still the brightest thing on the road:
+# the lamp was that many times brighter than the clipped pixels that record
+# it. The over-range factor a caller gives is for a reflection close under
+# the lamp, where being a few times short hardly shows. Spread down the
+# road, it left no streak at all, so there it is taken this many times
+# higher.
+_STREAK_LAMP_OVER = 30.0
 _FILM_GLOSS = 0.6
 _FILM_GRAZING_EXPONENT = 3.5
 
@@ -1314,8 +1349,8 @@ def _read_wet_ground(
     horizontal_fov_deg: float,
     camera_pitch_deg: float,
     falloff: float,
-) -> tuple[np.ndarray, float]:
-    """Where the ground is wet, ``(H, W)`` in ``[0, 1]``, and the horizon's row.
+) -> tuple[np.ndarray, float, float]:
+    """Where the ground is wet, ``(H, W)`` in ``[0, 1]``; the horizon's row; the ground's far end.
 
     Wet ground is *ground*, not "the bottom of the frame". The screen-space
     band this replaced covered only 49% of the reference frame's road
@@ -1356,7 +1391,121 @@ def _read_wet_ground(
     # (they carry 1-3% weight against the road's 41-73%), so fitting on the
     # same mask the renderer uses keeps the two consistent and holds the
     # estimate at 123 +- 4 rows across the whole pitch range.
-    return wetness, horizon_row(depth_m, wetness, min_weight=0.05)
+    horizon, far_end = ground_horizon(depth_m, wetness)
+    # And not on what stands on the road. A vehicle far enough off is a
+    # smooth bump in the depth map with the road's own orientation, and was
+    # darkened and reflected in with the road it stood on.
+    wetness *= 1.0 - standing_objects(depth_m, linear_scene, wetness)
+    # Nothing above the ground's far end is level ground under the camera,
+    # whatever way it faces: the water on a roof is not this road's.
+    height = depth_m.shape[0]
+    rows = np.arange(height, dtype=np.float32)[:, None]
+    wetness *= np.clip((rows - far_end) / max(0.01 * height, 1.0), 0.0, 1.0)
+    return wetness, horizon, far_end
+
+
+# Ground that reaches this near the top of the frame, as a fraction of its
+# height, fills the view: the horizon is above the picture.
+_GROUND_TO_THE_TOP = 0.03
+# A row holding less ground than this share of the widest row's is past
+# the ground's end.
+_GROUND_SLIVER = 0.15
+# Ground a row up is further off. A row whose ground is nearer than this
+# share of the furthest found beneath it is something standing on the
+# ground: the top of a hedge, a roof, a bank.
+_GROUND_RECEDES = 0.85
+# How far above the ground's far end the horizon is looked for, as a
+# fraction of the frame's height, when something stands in the way.
+_HORIZON_ABOVE_GROUND = 0.2
+
+
+def _ground_ends(depth_m: np.ndarray, mask: np.ndarray) -> tuple[int, int]:
+    """The rows the ground under the camera runs between, far end first.
+
+    Followed up the frame from its near end for as long as each row holds
+    more than a sliver of ground and that ground is further off than the
+    ground beneath it. A roof, a hedge's top or a tree's crown face upwards
+    too, and are found as level ground by anything that reads orientation;
+    but they stand *on* the ground, nearer than the ground behind them, so
+    the distance stops growing where they begin.
+    """
+    by_row = mask.sum(axis=1).astype(np.float64)
+    smooth = np.convolve(by_row, np.ones(5) / 5.0, mode="same")
+    sliver = _GROUND_SLIVER * float(smooth.max())
+    held = np.flatnonzero(smooth >= sliver)
+    bottom = int(held[-1])
+    # Each row's ground at its median distance, from every fourth column: an
+    # average is not enough, for it hardly moves where a hedge takes over
+    # half a row, and the median over every column was a fifth of the time
+    # this whole reading of the ground takes.
+    with warnings.catch_warnings():
+        # A row with no ground in it has no median, and says so.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        distance = np.nanmedian(np.where(mask[:, ::4], depth_m[:, ::4], np.nan), axis=1)
+    top = bottom
+    furthest = 0.0
+    for row in range(bottom, -1, -1):
+        if smooth[row] < sliver:
+            break
+        if np.isfinite(distance[row]):
+            if distance[row] < _GROUND_RECEDES * furthest:
+                break
+            furthest = max(furthest, float(distance[row]))
+        top = row
+    # The count was smoothed over a few rows to step over a gap, which also
+    # carries it a row or two past the end. Back to a row that holds ground.
+    while top < bottom and by_row[top] < sliver:
+        top += 1
+    return top, bottom
+
+
+def ground_horizon(depth_m: np.ndarray, ground: np.ndarray) -> tuple[float, float]:
+    """The row of the horizon, and the row the ground's far end is mirrored about.
+
+    :func:`~surmentations.depth.normals.horizon_row` fits the row at which
+    the ground's inverse depth reaches zero. That is exact for a depth map
+    in metres and badly biased for a monocular one, whose depths are right
+    in order and wrong in proportion: on the sample scenes it put the
+    horizon from forty to three hundred rows off, and a wet road then
+    mirrored the wrong part of the picture, the road itself among it.
+
+    The picture knows one thing the fit does not: **the ground is never
+    seen above the horizon.** So where the ground stops short of the top of
+    the frame, the horizon is at its far end or a little above it, by how
+    much the ground's two ends differ in depth: a road that runs twenty
+    times further than its near edge ends a twentieth of its own height
+    below the horizon. Only when the ground fills the frame to the top is
+    the horizon out of the picture and the fit all there is.
+
+    That horizon is what the angle a road is seen at is measured from. What
+    a road *mirrors* is another matter. Where the ground ends inside the
+    frame it ends at something: a bridge, a hedge, a row of houses, or the
+    horizon itself. Whatever it is stands on the ground there, and a flat
+    mirror shows a thing upside down below the line it stands on, so the
+    second row returned is the ground's far end and not the horizon. The
+    two differ by the lift above, which a monocular depth map overstates
+    (it places far ground too near): mirrored about the lifted row, a night
+    street's lamps fell above the road and left no streak on it.
+    """
+    height = depth_m.shape[0]
+    fitted = horizon_row(depth_m, ground, min_weight=0.05)
+    mask = ground >= 0.05
+    if int(mask.sum()) < 64:
+        return fitted, fitted
+    top, bottom = _ground_ends(depth_m, mask)
+    if top <= _GROUND_TO_THE_TOP * height or bottom - top < 8:
+        horizon = min(fitted, float(top))
+        return horizon, horizon
+    band = max(2, (bottom - top) // 8)
+    far = depth_m[top : top + band][mask[top : top + band]]
+    near = depth_m[bottom - band + 1 : bottom + 1][mask[bottom - band + 1 : bottom + 1]]
+    if far.size == 0 or near.size == 0:
+        return float(top), float(top)
+    # Rows below the horizon go as one over the depth: two ends, one unknown.
+    ratio = float(np.clip(np.median(near) / max(float(np.median(far)), 1e-6), 0.0, 0.9))
+    far_row, near_row = top + 0.5 * (band - 1), bottom - 0.5 * (band - 1)
+    horizon = (far_row - ratio * near_row) / (1.0 - ratio)
+    return float(np.clip(horizon, top - _HORIZON_ABOVE_GROUND * height, top)), float(top)
 
 
 def _wet_ground(
@@ -1365,7 +1514,7 @@ def _wet_ground(
     horizontal_fov_deg: float,
     camera_pitch_deg: float,
     falloff: float,
-) -> tuple[np.ndarray, float]:
+) -> tuple[np.ndarray, float, float]:
     """:func:`_read_wet_ground`, at the size the depth map was estimated at.
 
     Where the ground lies is read off the depth map, and where it stops off
@@ -1384,14 +1533,15 @@ def _wet_ground(
         )
     small_depth = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
     small_scene = cv2.resize(linear_scene, size, interpolation=cv2.INTER_AREA)
-    wetness, horizon = _read_wet_ground(
+    wetness, horizon, far_end = _read_wet_ground(
         small_depth, small_scene, horizontal_fov_deg, camera_pitch_deg, falloff
     )
     wetness = cv2.resize(wetness, (width, height), interpolation=cv2.INTER_LINEAR)
     # A row of the small frame is `height / size[1]` rows of the large one,
     # centre to centre.
     rows = height / size[1]
-    return np.clip(wetness, 0.0, 1.0).astype(np.float32), (horizon + 0.5) * rows - 0.5
+    wetness = np.clip(wetness, 0.0, 1.0).astype(np.float32)
+    return wetness, (horizon + 0.5) * rows - 0.5, (far_end + 0.5) * rows - 0.5
 
 
 def _puddles(
@@ -1471,6 +1621,7 @@ def _apply_ground_wetness(
     sky_radiance: np.ndarray | None = None,
     lamp_gain: float = 1.0,
     puddles: np.ndarray | None = None,
+    mirror_px: float | None = None,
 ) -> np.ndarray:
     """Wet ground: a darker diffuse base plus a Fresnel-weighted mirror image.
 
@@ -1505,6 +1656,10 @@ def _apply_ground_wetness(
     was many times brighter, and 2% of that is still a bright streak on the
     road where 2% of the clipped value is nothing. ``lamp_gain`` is the
     factor clipped pixels are raised by before they are reflected.
+
+    ``mirror_px`` is the row the picture is mirrored about where that is not
+    the horizon (:func:`ground_horizon`); ``horizon_px`` is always what the
+    angle of view, and with it the reflectance, is measured from.
     """
     height, width = linear.shape[:2]
 
@@ -1519,7 +1674,8 @@ def _apply_ground_wetness(
         return linear.copy()
     top, bottom = int(wet_rows[0]), int(wet_rows[-1]) + 1
     smear = max(4.0, _FILM_SMEAR * height)
-    reach = (round(smear * 8.0 + 1.0) | 1) // 2
+    streak = max(smear, _FILM_STREAK * height)
+    reach = (round(streak * 8.0 + 1.0) | 1) // 2
     band_top, band_bottom = max(0, top - reach), min(height, bottom + reach)
     band = slice(band_top, band_bottom)
     inner = slice(top - band_top, bottom - band_top)
@@ -1528,12 +1684,12 @@ def _apply_ground_wetness(
     # Mirror each point about the foot of whatever stands above it. A row
     # whose reflection looks above the top of the frame sees something the
     # picture does not contain, which under an open sky is the sky.
-    about_horizon, about_foot, under_object = _mirrored_rows(wetness, horizon_px)
+    about_horizon, about_foot, under_object = _mirrored_rows(
+        wetness, horizon_px if mirror_px is None else mirror_px
+    )
     about_horizon, about_foot = about_horizon[band], about_foot[band]
     under_object = under_object[band]
-    source = linear
-    if lamp_gain > 1.0:
-        source = linear * (1.0 + (lamp_gain - 1.0) * source_mask(linear)[..., None])
+    lamps = source_mask(linear)[..., None] if lamp_gain > 1.0 else None
     band_shape = (band_bottom - band_top, width)
 
     # A reflection that looks above the top of the frame sees something the
@@ -1543,13 +1699,15 @@ def _apply_ground_wetness(
     margin = _OFF_FRAME_BLEND * height
     off_frame = np.clip((margin - about_horizon) / margin, 0.0, 1.0)[..., None]
     footed = float(under_object.max()) > 0.0
-
     sky = sky_radiance.reshape(1, 1, -1)
-    if mode.fast():
-        reflection = _mirror_image(
-            source, about_horizon, off_frame, about_foot, under_object if footed else None, sky
-        )
-    else:
+
+    def mirrored(over: float) -> np.ndarray:
+        """The band's reflection, with the lamps in the frame ``over`` times full scale."""
+        source = linear if lamps is None else linear * (1.0 + (over - 1.0) * lamps)
+        if mode.fast():
+            return _mirror_image(
+                source, about_horizon, off_frame, about_foot, under_object if footed else None, sky
+            )
         columns = np.arange(width, dtype=np.float32)
         map_x = np.ascontiguousarray(np.broadcast_to(columns, band_shape))
 
@@ -1564,15 +1722,25 @@ def _apply_ground_wetness(
                 borderMode=cv2.BORDER_REPLICATE,
             )
 
-        reflection = mirror(about_horizon) * (1.0 - off_frame) + sky * off_frame
+        about = mirror(about_horizon) * (1.0 - off_frame) + sky * off_frame
         if footed:
             weight = under_object[..., None]
-            reflection = reflection * (1.0 - weight) + mirror(about_foot) * weight
+            about = about * (1.0 - weight) + mirror(about_foot) * weight
+        return about
+
+    reflection = mirrored(lamp_gain)
 
     # A puddle is nearly smooth. The film elsewhere is a rough mirror, which
     # smears a reflection along the line of sight far more than across it:
     # tens of pixels on a large frame, so on a reduced copy in fast mode.
     rough = wide_blur(reflection, max(1.5, 0.3 * smear), sigma_y=smear)[inner]
+    # And the long streak under whatever is bright, which only a film has:
+    # on a road that is merely damp there is nothing to weight it by.
+    if darkening < _DAMP_ALBEDO_RATIO:
+        lit = reflection if lamps is None else mirrored(lamp_gain * _STREAK_LAMP_OVER)
+        across = max(1.5, _FILM_STREAK_WIDTH * streak)
+        tail = wide_blur(lit, across, sigma_y=streak)[inner]
+        rough = rough * np.float32(1.0 - _FILM_STREAK_SHARE) + tail * np.float32(_FILM_STREAK_SHARE)
     # The sharp image is weighted by standing water alone. Where there is
     # none it is weighted by nothing, and need not be made: a damp road, or
     # one with no puddles drawn, skips a blur of the whole band.

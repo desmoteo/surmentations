@@ -313,3 +313,37 @@ def test_a_wet_road_reflects_a_lamp_at_more_than_its_clipped_value() -> None:
         return float(out[mirrored_row - 6 : mirrored_row + 6, 114:126].mean())
 
     assert reflection(8.0) > 3.0 * reflection(1.0)
+
+
+def test_a_lamp_lays_a_long_streak_down_a_soaked_road() -> None:
+    """A rough film's facets mostly lie flat and a few are steep, so a lamp
+    has a bright reflection close under it and a faint one running on down
+    the road. The streak is narrow, it needs a film (a damp road has none),
+    and it is found below the row the road is mirrored about, which is the
+    road's far end and not the horizon."""
+    size = 240
+    image = np.full((size, size, 3), 12, dtype=np.uint8)
+    cv2.circle(image, (120, 80), 4, (255, 200, 120), -1)
+    linear = srgb_to_linear(image)
+    wet = np.zeros((size, size), dtype=np.float32)
+    wet[100:] = 1.0
+
+    def road(darkening: float) -> np.ndarray:
+        return _apply_ground_wetness(
+            linear, wet, darkening, horizon_px=70.0, focal_px=300.0, lamp_gain=8.0, mirror_px=100.0
+        )
+
+    soaked = road(0.5)
+    # The lamp is 20 rows above the road's end: its image is 20 rows below it,
+    # and the streak is still there 60 rows further down, under the lamp alone.
+    far_down = slice(175, 185)
+    under_lamp = float(soaked[far_down, 116:125].mean())
+    to_one_side = float(soaked[far_down, 30:60].mean())
+    assert under_lamp > 2.0 * to_one_side
+    # Narrow: a tenth of its length to either side it has all but gone.
+    assert float(soaked[far_down, 150:160].mean()) < 0.5 * under_lamp
+    # Warm, as the lamp is.
+    assert soaked[180, 120, 0] > soaked[180, 120, 2]
+
+    damp = road(0.9)
+    assert float(damp[far_down, 116:125].mean()) < 1.2 * float(damp[far_down, 30:60].mean())
