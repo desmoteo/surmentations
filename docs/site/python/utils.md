@@ -5,19 +5,19 @@ The arithmetic the effects share: colour, photometry, filters, grids, noise, the
 ```{toctree}
 :maxdepth: 1
 
-weathermentations.utils
-weathermentations.utils.channels
-weathermentations.utils.color
-weathermentations.utils.compositing
-weathermentations.utils.filters
-weathermentations.utils.grids
-weathermentations.utils.ground
-weathermentations.utils.illuminator
-weathermentations.utils.noise
-weathermentations.utils.overcast
-weathermentations.utils.photometry
-weathermentations.utils.precipitation
-weathermentations.utils.sky
-weathermentations.utils.sources
-weathermentations.utils.spectral
+surmentations.utils
+surmentations.utils.channels
+surmentations.utils.color
+surmentations.utils.compositing
+surmentations.utils.filters
+surmentations.utils.grids
+surmentations.utils.ground
+surmentations.utils.illuminator
+surmentations.utils.noise
+surmentations.utils.overcast
+surmentations.utils.photometry
+surmentations.utils.precipitation
+surmentations.utils.sky
+surmentations.utils.sources
+surmentations.utils.spectral
 ```

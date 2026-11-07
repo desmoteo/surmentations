@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.camera import (
+from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
     NightIrMode,
@@ -19,12 +19,12 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
-from weathermentations.camera.codec import MACROBLOCK_PX, ffmpeg_path
-from weathermentations.camera.flicker import flicker_modulation_depth
-from weathermentations.camera.night_ir import near_infrared_reflectance
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.utils.photometry import srgb_to_linear
+from surmentations.camera.codec import MACROBLOCK_PX, ffmpeg_path
+from surmentations.camera.flicker import flicker_modulation_depth
+from surmentations.camera.night_ir import near_infrared_reflectance
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.utils.photometry import srgb_to_linear
 
 requires_ffmpeg = pytest.mark.skipif(
     ffmpeg_path() is None, reason="needs the ffmpeg binary"
@@ -441,7 +441,7 @@ def test_flicker_harmonics_all_cancel_at_an_anti_flicker_exposure() -> None:
 def test_flicker_lamp_waveform_harmonics_match_the_named_lamp_types() -> None:
     """The exponent is the only knob for waveform shape, so it has to land on
     the right physics at the values the docstring names."""
-    from weathermentations.camera.flicker import lamp_waveform_harmonics
+    from surmentations.camera.flicker import lamp_waveform_harmonics
 
     # sin^2 *is* a sinusoid at the flicker frequency: no harmonics at all.
     sinusoid = lamp_waveform_harmonics(2.0)
@@ -578,8 +578,8 @@ def test_wdr_base_filter_radius_never_exceeds_its_cap() -> None:
     fell in the gap, so the transform was ten times slower than documented
     for no change in what it rendered.
     """
-    from weathermentations import mode
-    from weathermentations.camera.tone_mapping import (
+    from surmentations import mode
+    from surmentations.camera.tone_mapping import (
         _BASE_FILTER_MAX_RADIUS_PX,
         _FAST_BASE_FILTER_MAX_RADIUS_PX,
         _base_filter_scale,

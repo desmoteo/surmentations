@@ -9,7 +9,7 @@ import sys
 def test_the_allocator_setting_is_made_or_declined_without_harm() -> None:
     """glibc takes it; elsewhere it says no. Either way arrays still work."""
     code = (
-        "import numpy as np, weathermentations as w;"
+        "import numpy as np, surmentations as w;"
         "made = w.keep_freed_memory(); again = w.keep_freed_memory();"
         "a = np.ones((1024, 1024, 3), np.float32) * 2; del a;"
         "b = np.zeros((1024, 1024, 3), np.float32); print(made, again, float(b.sum()))"

@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 import torch
 
-from weathermentations.depth.estimator import DepthAnythingV2Estimator, DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.depth.scale import (
+from surmentations.depth.estimator import DepthAnythingV2Estimator, DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.depth.scale import (
     DEFAULT_MAX_DISTANCE_METERS,
     DEFAULT_MIN_DISTANCE_METERS,
     to_pseudo_metric,
@@ -144,7 +144,7 @@ def test_horizon_row_recovers_a_known_ground_plane() -> None:
     this row, so an error of a few rows puts the reflection of a car
     somewhere the car is not.
     """
-    from weathermentations.depth.normals import horizon_row
+    from surmentations.depth.normals import horizon_row
 
     height = width = 240
     rows = np.arange(height, dtype=np.float64).reshape(height, 1)
@@ -162,7 +162,7 @@ def test_horizon_row_recovers_a_known_ground_plane() -> None:
 
 def test_horizon_row_falls_back_rather_than_returning_nonsense() -> None:
     """A mask that is not a ground plane must not produce a confident answer."""
-    from weathermentations.depth.normals import horizon_row
+    from surmentations.depth.normals import horizon_row
 
     height = width = 64
     flat = np.full((height, width), 10.0, dtype=np.float32)
@@ -181,7 +181,7 @@ def test_horizon_row_is_stable_against_a_distant_flat_plane() -> None:
     mirror the wet-road reflection about the wrong line — so the fit has to be
     given the same falloff-weighted mask the renderer uses, not a raw cosine.
     """
-    from weathermentations.depth.normals import horizon_row, upward_facing
+    from surmentations.depth.normals import horizon_row, upward_facing
 
     height = width = 200
     focal, camera_height, true_horizon = 250.0, 4.0, 40.0
@@ -241,7 +241,7 @@ def test_ground_reaches_up_to_an_object_instead_of_stopping_short_of_it() -> Non
     left it in a dry halo. On this scene the weight in the ring beside the box
     averaged 0.71 with a fifth percentile of 0.01; it should be 1.
     """
-    from weathermentations.depth.normals import upward_facing
+    from surmentations.depth.normals import upward_facing
 
     depth, beside, face, fov = _box_on_a_road(softness_px=1.0)
     # The exponent the wet-road pass applies; it is what turns a slightly
@@ -266,7 +266,7 @@ def test_a_silhouette_against_the_sky_is_not_a_surface(softness_px: float) -> No
     """
     import cv2
 
-    from weathermentations.depth.normals import upward_facing
+    from surmentations.depth.normals import upward_facing
 
     height = width = 200
     depth = np.full((height, width), 50.0, dtype=np.float32)
@@ -284,7 +284,7 @@ def test_surface_normals_of_planes_hold_up_to_the_frame_border() -> None:
     """One-sided differences must not cost accuracy where there is no edge,
     and the frame border — where only one neighbour exists — is where a
     difference scheme usually goes wrong."""
-    from weathermentations.depth.normals import surface_normals, upward_facing
+    from surmentations.depth.normals import surface_normals, upward_facing
 
     height, width, fov = 120, 160, 60.0
     focal = width / (2.0 * np.tan(np.deg2rad(fov) / 2.0))

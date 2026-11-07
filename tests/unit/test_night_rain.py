@@ -16,9 +16,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import NightRain
-from weathermentations.diagnostics import recording
-from weathermentations.presets.pipeline import stage_of
+from surmentations.atmosphere import NightRain
+from surmentations.diagnostics import recording
+from surmentations.presets.pipeline import stage_of
 
 
 def _night(size: int = 192) -> np.ndarray:
@@ -122,7 +122,7 @@ def test_runs_after_the_infrared_conversion() -> None:
 
 def stage_of_night_ir() -> int:
     """The pipeline stage ``NightIrMode`` belongs to."""
-    from weathermentations.camera import NightIrMode
+    from surmentations.camera import NightIrMode
 
     return stage_of(NightIrMode)
 

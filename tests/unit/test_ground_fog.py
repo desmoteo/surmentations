@@ -7,14 +7,14 @@ import math
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import GroundFog
-from weathermentations.atmosphere.ground_fog import (
+from surmentations.atmosphere import GroundFog
+from surmentations.atmosphere.ground_fog import (
     layer_optical_depth,
     open_sky_optical_depth,
     scene_points,
 )
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
 
 LAYER = {"beta_ground": 0.05, "scale_height_m": 3.0, "camera_height_m": 6.0}
 

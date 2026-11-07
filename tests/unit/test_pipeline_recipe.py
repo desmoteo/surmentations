@@ -26,10 +26,10 @@ from typing import Any
 import numpy as np
 import pytest
 
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.diagnostics import recording
-from weathermentations.presets.pipeline import stage_of
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.diagnostics import recording
+from surmentations.presets.pipeline import stage_of
 
 DOC = Path(__file__).resolve().parents[2] / "docs" / "pipelines.md"
 

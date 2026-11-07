@@ -5,9 +5,9 @@ Monocular depth, its scale, the surface normals read from it, and the provider t
 ```{toctree}
 :maxdepth: 1
 
-weathermentations.depth
-weathermentations.depth.estimator
-weathermentations.depth.normals
-weathermentations.depth.provider
-weathermentations.depth.scale
+surmentations.depth
+surmentations.depth.estimator
+surmentations.depth.normals
+surmentations.depth.provider
+surmentations.depth.scale
 ```

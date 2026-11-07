@@ -10,11 +10,11 @@ import cv2
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.rain import _apply_ground_wetness, _paved_weight
-from weathermentations.utils.color import veil_radiance_linear
-from weathermentations.utils.overcast import apply_overcast, cloud_cover
-from weathermentations.utils.photometry import luminance
-from weathermentations.utils.sky import lift_sky, sky_weight
+from surmentations.atmosphere.rain import _apply_ground_wetness, _paved_weight
+from surmentations.utils.color import veil_radiance_linear
+from surmentations.utils.overcast import apply_overcast, cloud_cover
+from surmentations.utils.photometry import luminance
+from surmentations.utils.sky import lift_sky, sky_weight
 
 H, W = 120, 160
 

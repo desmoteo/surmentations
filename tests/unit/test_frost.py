@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.lens import FrostOnGlass
-from weathermentations.lens.frost import fronds, frost_depth
+from surmentations.lens import FrostOnGlass
+from surmentations.lens.frost import fronds, frost_depth
 
 SHAPE = (240, 320)
 

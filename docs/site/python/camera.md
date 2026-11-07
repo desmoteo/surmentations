@@ -5,20 +5,20 @@ What the sensor, the image processor, the codec or the cable, and the recorder d
 ```{toctree}
 :maxdepth: 1
 
-weathermentations.camera
-weathermentations.camera._inprocess
-weathermentations.camera.analog
-weathermentations.camera.codec
-weathermentations.camera.demosaic
-weathermentations.camera.denoise
-weathermentations.camera.exposure
-weathermentations.camera.flicker
-weathermentations.camera.ir_cut
-weathermentations.camera.night_ir
-weathermentations.camera.overlay
-weathermentations.camera.rolling_shutter
-weathermentations.camera.sensor_noise
-weathermentations.camera.tone_mapping
-weathermentations.camera.transmission
-weathermentations.camera.vibration
+surmentations.camera
+surmentations.camera._inprocess
+surmentations.camera.analog
+surmentations.camera.codec
+surmentations.camera.demosaic
+surmentations.camera.denoise
+surmentations.camera.exposure
+surmentations.camera.flicker
+surmentations.camera.ir_cut
+surmentations.camera.night_ir
+surmentations.camera.overlay
+surmentations.camera.rolling_shutter
+surmentations.camera.sensor_noise
+surmentations.camera.tone_mapping
+surmentations.camera.transmission
+surmentations.camera.vibration
 ```

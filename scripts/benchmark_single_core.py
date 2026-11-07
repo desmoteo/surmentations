@@ -11,7 +11,7 @@ Run it pinned to one core, each checkout in turn, then compare::
 
     taskset -c 2 python scripts/benchmark_single_core.py run --out now.json
     taskset -c 2 python scripts/benchmark_single_core.py run \\
-        --tree ../weathermentations-original --out before.json
+        --tree ../surmentations-original --out before.json
     python scripts/benchmark_single_core.py compare --before before.json --after now.json
 
 Repeat the two ``run`` lines in turn, two or three times, with a different
@@ -26,7 +26,7 @@ discarded as a warm-up, the faster of the other two kept. The figure is the
 mean of that over four example scenes and two seeds, in milliseconds. OpenCV
 runs on one thread and so does any BLAS numpy uses. The depth map is estimated
 before timing starts and shared, as a pipeline's
-:class:`~weathermentations.depth.SharedDepthProvider` shares it, so the
+:class:`~surmentations.depth.SharedDepthProvider` shares it, so the
 depth-conditioned transforms are timed without the network; the estimate's
 own cost is a row of its own when the network is run here.
 
@@ -130,7 +130,7 @@ def _scene_image(scene: str, size: int) -> np.ndarray:
 def _fast_mode() -> bool:
     """Whether the checkout imported runs in fast mode; False if it has no modes."""
     try:
-        from weathermentations import mode
+        from surmentations import mode
     except ImportError:
         return False
     return bool(mode.fast())
@@ -144,7 +144,7 @@ def _stored_estimator(path: Path, precision: str) -> Any:
     frame's bytes: another machine's OpenCV resizes a photograph to slightly
     different ones, and the depth of the scene is what is wanted.
     """
-    from weathermentations.depth.estimator import DepthEstimator
+    from surmentations.depth.estimator import DepthEstimator
 
     stored = np.load(path)
     maps = {
@@ -169,8 +169,8 @@ def _stored_estimator(path: Path, precision: str) -> Any:
 
 def save_depth(path: Path, sizes: list[int]) -> None:
     """Estimate depth for every scene and size, in both precisions, and store it."""
-    from weathermentations import mode
-    from weathermentations.depth import DepthAnythingV2Estimator
+    from surmentations import mode
+    from surmentations.depth import DepthAnythingV2Estimator
 
     estimator = DepthAnythingV2Estimator()
     maps: dict[str, np.ndarray] = {}
@@ -201,14 +201,14 @@ def run(args: argparse.Namespace) -> None:
     cv2.setNumThreads(1)
     import benchmark as tree_benchmark
 
-    import weathermentations
+    import surmentations
 
-    if not Path(weathermentations.__file__).resolve().is_relative_to(tree):
-        raise SystemExit(f"imported {weathermentations.__file__}, not the checkout at {tree}")
-    if hasattr(weathermentations, "keep_freed_memory"):
-        weathermentations.keep_freed_memory()
-    from weathermentations.atmosphere import RandomRain
-    from weathermentations.depth import SharedDepthProvider
+    if not Path(surmentations.__file__).resolve().is_relative_to(tree):
+        raise SystemExit(f"imported {surmentations.__file__}, not the checkout at {tree}")
+    if hasattr(surmentations, "keep_freed_memory"):
+        surmentations.keep_freed_memory()
+    from surmentations.atmosphere import RandomRain
+    from surmentations.depth import SharedDepthProvider
 
     if args.load_depth:
         precision = "half" if _fast_mode() else "full"
@@ -216,7 +216,7 @@ def run(args: argparse.Namespace) -> None:
     else:
         import torch
 
-        from weathermentations.depth import DepthAnythingV2Estimator
+        from surmentations.depth import DepthAnythingV2Estimator
 
         torch.set_num_threads(1)
         estimator = DepthAnythingV2Estimator()

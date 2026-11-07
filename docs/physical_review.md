@@ -13,7 +13,7 @@ plausible-looking picture, which is the failure mode worth hunting.
 
 ## Method
 
-`src/weathermentations/diagnostics.py` records, per transform call:
+`src/surmentations/diagnostics.py` records, per transform call:
 
 - **`init`** — the constructor ranges, i.e. what each draw was supposed to
   come from.
@@ -26,7 +26,7 @@ plausible-looking picture, which is the failure mode worth hunting.
 - **`delta`** — a whole-frame summary of what the effect did to the image.
 
 Recording is opt-in and free when off (one flag check). Transforms do not opt
-in: `WeatherTransform.__init_subclass__` wraps every subclass's
+in: `CameraTransform.__init_subclass__` wraps every subclass's
 `get_params_dependent_on_data` automatically.
 
 ```bash

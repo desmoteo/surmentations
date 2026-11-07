@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import HousingOccluders
-from weathermentations.scene import CastShadows
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import HousingOccluders
+from surmentations.scene import CastShadows
 
 _FOV_DEG = 60.0
 _MAX_DEPTH_M = 50.0
@@ -168,7 +168,7 @@ def _shadow_shape(kind: str, seed: int, azimuth: float, elongation: float) -> np
     """One caster's shadow on an empty canvas, or ``None`` if it left the frame."""
     import cv2
 
-    from weathermentations.scene.shadows import _draw_cast_shape
+    from surmentations.scene.shadows import _draw_cast_shape
 
     mask = np.zeros((600, 600), dtype=np.float32)
     _draw_cast_shape(
@@ -246,7 +246,7 @@ def test_a_low_sun_throws_a_longer_shadow() -> None:
 def test_one_frame_has_one_sun() -> None:
     """Each shadow used to get its own random angle, which describes a scene
     lit from several directions at once."""
-    from weathermentations.diagnostics import recording
+    from surmentations.diagnostics import recording
 
     provider = SharedDepthProvider(_GroundPlaneDepth())
     transform = CastShadows(depth_provider=provider, p=1.0, shadow_count_range=(6, 6))

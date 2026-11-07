@@ -28,10 +28,10 @@ from tqdm import tqdm
 
 # Reuse the gallery's own construction, so what is audited is what ships.
 from docs.generate_examples import EFFECTS, LEVELS, _base_scene, _build  # noqa: E402
-from weathermentations.camera.codec import ffmpeg_path  # noqa: E402
-from weathermentations.depth.estimator import DepthAnythingV2Estimator  # noqa: E402
-from weathermentations.depth.provider import SharedDepthProvider  # noqa: E402
-from weathermentations.diagnostics import recording, write_jsonl
+from surmentations.camera.codec import ffmpeg_path  # noqa: E402
+from surmentations.depth.estimator import DepthAnythingV2Estimator  # noqa: E402
+from surmentations.depth.provider import SharedDepthProvider  # noqa: E402
+from surmentations.diagnostics import recording, write_jsonl
 
 
 def main() -> None:

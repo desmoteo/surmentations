@@ -5,17 +5,17 @@ import warnings
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.fog import RandomFog
-from weathermentations.atmosphere.ground_fog import GroundFog
-from weathermentations.atmosphere.heat_shimmer import HeatShimmer
-from weathermentations.atmosphere.night_fog import NightFog
-from weathermentations.atmosphere.night_insects import NightInsects
-from weathermentations.atmosphere.night_rain import NightRain
-from weathermentations.atmosphere.night_snow import NightSnow
-from weathermentations.atmosphere.plumes import LocalPlumes
-from weathermentations.atmosphere.rain import RandomRain
-from weathermentations.atmosphere.snow import RandomSnow
-from weathermentations.camera import (
+from surmentations.atmosphere.fog import RandomFog
+from surmentations.atmosphere.ground_fog import GroundFog
+from surmentations.atmosphere.heat_shimmer import HeatShimmer
+from surmentations.atmosphere.night_fog import NightFog
+from surmentations.atmosphere.night_insects import NightInsects
+from surmentations.atmosphere.night_rain import NightRain
+from surmentations.atmosphere.night_snow import NightSnow
+from surmentations.atmosphere.plumes import LocalPlumes
+from surmentations.atmosphere.rain import RandomRain
+from surmentations.atmosphere.snow import RandomSnow
+from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
     NightIrMode,
@@ -26,24 +26,24 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
-from weathermentations.camera.analog import AnalogVideoArtifacts
-from weathermentations.camera.codec import ffmpeg_path
-from weathermentations.camera.demosaic import DemosaicArtifacts
-from weathermentations.camera.ir_cut import IrCutFilterFault
-from weathermentations.camera.overlay import OnScreenOverlay
-from weathermentations.camera.vibration import CameraVibration
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
-from weathermentations.lens.dome_glare import IrDomeGlare
-from weathermentations.lens.focus import FocusShift
-from weathermentations.lens.foliage import FoliageIntrusion
-from weathermentations.lens.frost import FrostOnGlass
-from weathermentations.lens.snow_cap import SnowOnHousing
-from weathermentations.lens.source_glare import SourceGlare
-from weathermentations.lens.tamper import LensTamper
-from weathermentations.presets.severity import SEVERITY
-from weathermentations.scene import CastShadows
+from surmentations.camera.analog import AnalogVideoArtifacts
+from surmentations.camera.codec import ffmpeg_path
+from surmentations.camera.demosaic import DemosaicArtifacts
+from surmentations.camera.ir_cut import IrCutFilterFault
+from surmentations.camera.overlay import OnScreenOverlay
+from surmentations.camera.vibration import CameraVibration
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
+from surmentations.lens.dome_glare import IrDomeGlare
+from surmentations.lens.focus import FocusShift
+from surmentations.lens.foliage import FoliageIntrusion
+from surmentations.lens.frost import FrostOnGlass
+from surmentations.lens.snow_cap import SnowOnHousing
+from surmentations.lens.source_glare import SourceGlare
+from surmentations.lens.tamper import LensTamper
+from surmentations.presets.severity import SEVERITY
+from surmentations.scene import CastShadows
 
 _DEPTH_FREE = {
     "WaterDroplets": WaterDroplets,

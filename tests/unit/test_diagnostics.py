@@ -11,9 +11,9 @@ import json
 
 import numpy as np
 
-from weathermentations.camera import AcFlicker, ExposureTransient
-from weathermentations.diagnostics import recording, write_jsonl
-from weathermentations.lens import SunFlare
+from surmentations.camera import AcFlicker, ExposureTransient
+from surmentations.diagnostics import recording, write_jsonl
+from surmentations.lens import SunFlare
 
 
 def _image() -> np.ndarray:
@@ -126,7 +126,7 @@ def test_array_summaries_have_the_same_shape_whatever_the_array_size() -> None:
     a light one — and the light frames are precisely the ones an audit of
     "is severity 1 doing anything at all" has to read.
     """
-    from weathermentations.diagnostics import _summarise
+    from surmentations.diagnostics import _summarise
 
     keys = {"n", "shape", "min", "p50", "max", "mean"}
     for size in (1, 3, 4, 5, 1000):
@@ -151,11 +151,11 @@ def test_every_depth_conditioned_transform_records_its_draws() -> None:
     visibility → extinction → transmission derivation had to be run backwards
     out of the transmission field, and could not be closed exactly.
     """
+    from surmentations.atmosphere.fog import RandomFog
+    from surmentations.depth.provider import SharedDepthProvider
+    from surmentations.lens import DirtSoil, HousingOccluders, SpiderWeb
+    from surmentations.scene import CastShadows
     from tests.unit.test_randomization import _GroundPlaneDepth
-    from weathermentations.atmosphere.fog import RandomFog
-    from weathermentations.depth.provider import SharedDepthProvider
-    from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb
-    from weathermentations.scene import CastShadows
 
     provider = SharedDepthProvider(_GroundPlaneDepth())
     scene = np.random.default_rng(0).integers(0, 256, (96, 128, 3), dtype=np.uint8)

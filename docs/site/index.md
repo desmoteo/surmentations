@@ -1,4 +1,4 @@
-# weathermentations: code reference
+# surmentations: code reference
 
 Physically grounded weather, lens and camera augmentations for
 Albumentations. This site is the reference for the code, generated from it:

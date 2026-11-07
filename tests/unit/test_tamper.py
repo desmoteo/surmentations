@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.lens import LensTamper
-from weathermentations.lens.tamper import spray_mask, tape_mask
+from surmentations.lens import LensTamper
+from surmentations.lens.tamper import spray_mask, tape_mask
 
 SHAPE = (240, 320)
 
@@ -83,7 +83,7 @@ def test_tape_lets_light_through_and_no_image() -> None:
 
 
 def test_only_the_kinds_asked_for_are_drawn() -> None:
-    from weathermentations.diagnostics import recording
+    from surmentations.diagnostics import recording
 
     image = _scene()
     seen = set()

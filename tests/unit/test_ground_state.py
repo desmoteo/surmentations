@@ -12,12 +12,12 @@ import albumentations as A
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.rain import RandomRain
-from weathermentations.atmosphere.snow import RandomSnow
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.diagnostics import recording
-from weathermentations.presets import GROUND_SEVERITY, SEVERITY, surveillance, weather_state
+from surmentations.atmosphere.rain import RandomRain
+from surmentations.atmosphere.snow import RandomSnow
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.diagnostics import recording
+from surmentations.presets import GROUND_SEVERITY, SEVERITY, surveillance, weather_state
 
 GROUND_KEYS = {
     "RandomRain": {"wetness_probability", "wetness_darkening_range", "puddle_coverage_range"},
@@ -166,7 +166,7 @@ def test_wetting_darkens_dark_surfaces_spares_white_and_deepens_colour() -> None
     """Asphalt goes nearly black, the paint on it stays white, brick turns a
     deeper red. A flat multiplier does the first and gets the other two
     wrong: grey markings, and colour no stronger than before."""
-    from weathermentations.atmosphere.rain import wet_albedo
+    from surmentations.atmosphere.rain import wet_albedo
 
     assert float(wet_albedo(np.float32(0.1), 0.5)) == pytest.approx(0.05, rel=0.02)
     assert float(wet_albedo(np.float32(0.97), 0.5)) > 0.85
@@ -199,7 +199,7 @@ def test_a_car_s_reflection_lies_under_the_car() -> None:
     """A mirror shows a thing upside down below where it stands. Mirrored
     about the horizon instead, a car 80 rows below it is reflected 160 rows
     below it, under nothing."""
-    from weathermentations.atmosphere.rain import _apply_ground_wetness
+    from surmentations.atmosphere.rain import _apply_ground_wetness
 
     height, width, horizon = 240, 80, 40.0
     image = np.full((height, width, 3), 0.3, dtype=np.float32)
@@ -219,7 +219,7 @@ def test_a_car_s_reflection_lies_under_the_car() -> None:
 def test_wet_ground_reaches_the_foot_of_what_stands_on_it() -> None:
     """Depth is blurred at every object's edge, and the band of road in that
     blur was left dry: a pale outline round each car."""
-    from weathermentations.utils.ground import fill_to_edges
+    from surmentations.utils.ground import fill_to_edges
 
     road = np.full((240, 240, 3), 0.2, dtype=np.float32)
     road[100:140, 100:140] = (0.6, 0.1, 0.1)  # a red car
@@ -235,7 +235,7 @@ def test_wet_ground_reaches_the_foot_of_what_stands_on_it() -> None:
 
 
 def test_puddles_need_standing_water_and_cover_what_was_asked() -> None:
-    from weathermentations.atmosphere.rain import _apply_ground_wetness, _puddle_map
+    from surmentations.atmosphere.rain import _apply_ground_wetness, _puddle_map
 
     depth = _provider().to_metric(_provider().get_depth(_scene()))
     rng = np.random.default_rng(0)
@@ -267,7 +267,7 @@ def test_reflections_do_not_rule_the_road_with_stripes() -> None:
     it down to the bottom of the frame, so each car and each lamp post drew
     a stripe the height of the road. A reflection is as long as the thing
     is tall, and a post across the foreground has none."""
-    from weathermentations.atmosphere.rain import _apply_ground_wetness
+    from surmentations.atmosphere.rain import _apply_ground_wetness
 
     height, width = 240, 200
     image = np.full((height, width, 3), 0.3, dtype=np.float32)
@@ -355,7 +355,7 @@ def test_a_car_s_roof_is_told_from_the_road_by_being_an_island() -> None:
     """Level and a car's width across is a car. What an opening removes is
     not: that also takes the road between two cars, and left the open road
     as a set of discs."""
-    from weathermentations.utils.ground import small_level_areas
+    from surmentations.utils.ground import small_level_areas
 
     level = np.ones((200, 200), dtype=np.float32)
     level[:40] = 0.0
@@ -382,7 +382,7 @@ def test_the_sky_edge_is_not_drawn_round_a_distant_tower() -> None:
     """A tower a mile off is at the sky's depth as far as the network can
     tell. Redrawing the sky's edge by depth alone took the tower's edge in,
     and it came out with a pale outline."""
-    from weathermentations.utils.sky import sky_to_depth_edge
+    from surmentations.utils.sky import sky_to_depth_edge
 
     image = np.full((120, 120, 3), 0.6, dtype=np.float32)  # sky
     image[40:, 50:70] = 0.15  # a dark tower, at the same depth

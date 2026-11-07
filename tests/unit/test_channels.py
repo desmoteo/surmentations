@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.utils.channels import (
+from surmentations.utils.channels import (
     channel_max,
     channel_mean,
     channel_min,

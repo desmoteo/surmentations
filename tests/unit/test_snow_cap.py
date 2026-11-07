@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.lens import SnowOnHousing
-from weathermentations.lens.snow_cap import cap_edge
+from surmentations.lens import SnowOnHousing
+from surmentations.lens.snow_cap import cap_edge
 
 SHAPE = (240, 320)
 

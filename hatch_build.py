@@ -7,15 +7,15 @@ Two ways in:
 
 The library is optional. Without a C compiler the build goes on and the
 package runs its numpy code, which gives the same pictures, more slowly; set
-``WEATHERMENTATIONS_BUILD_NATIVE=require`` to make a failed build an error,
+``SURMENTATIONS_BUILD_NATIVE=require`` to make a failed build an error,
 or ``=0`` to skip it and build a pure-Python wheel.
 
-``wm_kernels.c`` is compiled once per instruction-set tier, each with its own
-flags, and ``wm_dispatch.c`` picks a tier when the library loads; nothing but
+``sm_kernels.c`` is compiled once per instruction-set tier, each with its own
+flags, and ``sm_dispatch.c`` picks a tier when the library loads; nothing but
 the tier's own object is compiled for more than the platform's baseline, so
 one binary runs on every CPU of the architecture. See docs/native_kernels.md.
 
-``WEATHERMENTATIONS_BUILD_MARCH=native`` adds a tier compiled with
+``SURMENTATIONS_BUILD_MARCH=native`` adds a tier compiled with
 ``-march=native -mtune=native`` (``-mcpu=native`` on arm64), for the machine
 doing the build and not for distribution.
 """
@@ -34,8 +34,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 SOURCES = ROOT / "native"
-PACKAGE_DIR = ROOT / "src" / "weathermentations" / "_native"
-LIBRARY_STEM = "_wmkernels"
+PACKAGE_DIR = ROOT / "src" / "surmentations" / "_native"
+LIBRARY_STEM = "_smkernels"
 
 # -ffp-contract=off: no fused multiply-add, so every tier and every compiler
 # rounds as numpy does. The three after it change no result and are what the
@@ -74,7 +74,7 @@ class NativeBuildError(RuntimeError):
 
 
 def library_name() -> str:
-    """The library's file name on this platform: ``_wmkernels.so``, or ``.dylib`` on macOS."""
+    """The library's file name on this platform: ``_smkernels.so``, or ``.dylib`` on macOS."""
     return LIBRARY_STEM + (".dylib" if sys.platform == "darwin" else ".so")
 
 
@@ -91,8 +91,8 @@ def tiers() -> list[tuple[str, list[str]]]:
         return [("portable", [])]
     # A third tier, for the machine this is built on and no other: see
     # "Building for one machine" in docs/native_kernels.md.
-    if os.environ.get("WEATHERMENTATIONS_BUILD_MARCH", "").lower() == "native":
-        built.append(("native", [*native, "-DWM_NATIVE"]))
+    if os.environ.get("SURMENTATIONS_BUILD_MARCH", "").lower() == "native":
+        built.append(("native", [*native, "-DSM_NATIVE"]))
     return built
 
 
@@ -130,13 +130,13 @@ def build_native(
         for name, tier_flags in built:
             obj = str(Path(scratch) / f"kernels_{name}.o")
             _run(
-                [*compiler, *flags, *tier_flags, f"-DWM_TIER={name}", "-c"]
-                + [str(SOURCES / "wm_kernels.c"), "-o", obj]
+                [*compiler, *flags, *tier_flags, f"-DSM_TIER={name}", "-c"]
+                + [str(SOURCES / "sm_kernels.c"), "-o", obj]
             )
             objects.append(obj)
         dispatch = str(Path(scratch) / "dispatch.o")
-        defines = [f"-DWM_BASE={base}"] + [f"-DWM_HAVE_{name.upper()}" for name, _ in built[1:]]
-        _run([*compiler, *flags, *defines, "-c", str(SOURCES / "wm_dispatch.c"), "-o", dispatch])
+        defines = [f"-DSM_BASE={base}"] + [f"-DSM_HAVE_{name.upper()}" for name, _ in built[1:]]
+        _run([*compiler, *flags, *defines, "-c", str(SOURCES / "sm_dispatch.c"), "-o", dispatch])
         output_dir.mkdir(parents=True, exist_ok=True)
         # Link to a temporary name and rename, so a process that has the old
         # library mapped keeps a whole file.
@@ -166,18 +166,18 @@ class NativeKernelsHook(BuildHookInterface):  # type: ignore[type-arg]
     """The Hatch build hook that compiles the kernels into a wheel.
 
     Registered in ``pyproject.toml`` as the ``custom`` hook. Building is
-    optional unless ``WEATHERMENTATIONS_BUILD_NATIVE=require``.
+    optional unless ``SURMENTATIONS_BUILD_NATIVE=require``.
     """
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
         """Build the library into the wheel being made, if a wheel is being made.
 
-        ``WEATHERMENTATIONS_BUILD_NATIVE=0`` skips it. A failure is a warning,
+        ``SURMENTATIONS_BUILD_NATIVE=0`` skips it. A failure is a warning,
         and the wheel is pure Python, unless the variable is ``require``. A
         wheel that holds the library is tagged for this platform.
         """
-        mode = os.environ.get("WEATHERMENTATIONS_BUILD_NATIVE", "auto").lower()
+        mode = os.environ.get("SURMENTATIONS_BUILD_NATIVE", "auto").lower()
         if self.target_name != "wheel" or mode in ("0", "off", "false", "no"):
             return
         try:
@@ -186,7 +186,7 @@ class NativeKernelsHook(BuildHookInterface):  # type: ignore[type-arg]
             if mode == "require":
                 raise
             self.app.display_warning(
-                f"weathermentations: native kernels not built, using numpy only.\n{error}"
+                f"surmentations: native kernels not built, using numpy only.\n{error}"
             )
             return
         # The library is git-ignored, which hatchling takes to mean "leave it

@@ -34,7 +34,7 @@ what is left is inside OpenCV filters.
 
 **Fast and exact, both.** As in Pillow-AllSIMD, the forms that are faster
 but not quite the same operation are a mode, on by default, and
-`WEATHERMENTATIONS_FAST=0` or `weathermentations.set_fast(False)` turns them
+`SURMENTATIONS_FAST=0` or `surmentations.set_fast(False)` turns them
 off. Exact mode reproduces the parent branch byte for byte on every frame
 compared. See [Fast and exact mode](#fast-and-exact-mode).
 
@@ -179,12 +179,12 @@ Python.
 ### 1. Algorithm
 
 - **Wide blurs and dilations on a reduced copy**
-  ([`utils/sky.py`](../src/weathermentations/utils/sky.py), `wide_blur` and
+  ([`utils/sky.py`](../src/surmentations/utils/sky.py), `wide_blur` and
   `wide_dilate`). The sky-edge redraw went from 875 ms to 38 ms on one
   thread, timed back to back. It alters pictures along the skyline, so it
   is fast mode only.
 - **Channel reductions as two ufunc calls**
-  ([`utils/channels.py`](../src/weathermentations/utils/channels.py)). Exact.
+  ([`utils/channels.py`](../src/surmentations/utils/channels.py)). Exact.
 - **The Bayer mosaic by strided copies.** `SensorNoise` looked each pixel's
   colour up in a frame-sized map of site labels, four times a frame. Copying
   along the mosaic's own stride gives the same arrays in 2.5 ms where the
@@ -231,7 +231,7 @@ second question, so they are spelled out.
 
 Because of the second, [`tests/unit/test_native_build.py`](../tests/unit/test_native_build.py)
 compiles the kernels for every tier and fails if any loop marked
-`WM_VECTORISED` was not vectorised. It is this branch's version of
+`SM_VECTORISED` was not vectorised. It is this branch's version of
 Pillow-AllSIMD's instruction-count gate: a timing on a CI runner is noise,
 and the compiler's own remark is not.
 
@@ -276,14 +276,14 @@ all three. What remains is listed under [Not done](#not-done).
 | Time on one pinned core, old and new interleaved, outputs hashed in the same run | Done; it is how the single-thread regression was found |
 | Fix the algorithm and the data path before the instructions | The largest gain on the branch |
 | Read the compiler's remarks before replacing it | Three fixes, above |
-| One translation unit per tier, a table of kernels chosen at load | `wm_kernels.c` compiled per tier, `wm_dispatch.c` |
+| One translation unit per tier, a table of kernels chosen at load | `sm_kernels.c` compiled per tier, `sm_dispatch.c` |
 | Plain loops compiled per tier, not only the hand-written ones | All of the kernels are that |
 | Every tier gives the same pixels, checked on every build | Tests, and hashes that match across x86-64 and arm64 |
 | A kernel takes a whole row or image, never a fragment | A whole frame or a whole field of particles per call |
 | A deterministic gate in CI for silent slow-downs | The vectorisation test |
 | Check the tails for over-reads | Address and undefined-behaviour sanitizer run |
 | Hand-written intrinsics per architecture | Not adopted: measured at 0.74x to 1.13x |
-| Fast mode on by default, exact mode on request, the bounds tested | Adopted: `weathermentations.mode` |
+| Fast mode on by default, exact mode on request, the bounds tested | Adopted: `surmentations.mode` |
 | Integer fixed-point tricks, AVX-VNNI | Not applicable: this code is float32 |
 
 ## How it is built and loaded
@@ -311,15 +311,15 @@ all three. What remains is listed under [Not done](#not-done).
 
 | Variable | Effect |
 | --- | --- |
-| `WEATHERMENTATIONS_NATIVE=0` | run the numpy code even when the library is there |
-| `WEATHERMENTATIONS_NATIVE=require` | a missing library is an `ImportError` |
-| `WEATHERMENTATIONS_ISA=sse2` | use that tier, to compare tiers on one machine |
-| `WEATHERMENTATIONS_FAST=0` | exact mode |
-| `WEATHERMENTATIONS_CODEC=ffmpeg` | encode with the ffmpeg binary even when PyAV is installed |
-| `WEATHERMENTATIONS_BUILD_NATIVE=0` / `require` | skip the build, or fail if it fails |
-| `WEATHERMENTATIONS_BUILD_MARCH=native` | at build time, add a tier compiled for this machine only |
+| `SURMENTATIONS_NATIVE=0` | run the numpy code even when the library is there |
+| `SURMENTATIONS_NATIVE=require` | a missing library is an `ImportError` |
+| `SURMENTATIONS_ISA=sse2` | use that tier, to compare tiers on one machine |
+| `SURMENTATIONS_FAST=0` | exact mode |
+| `SURMENTATIONS_CODEC=ffmpeg` | encode with the ffmpeg binary even when PyAV is installed |
+| `SURMENTATIONS_BUILD_NATIVE=0` / `require` | skip the build, or fail if it fails |
+| `SURMENTATIONS_BUILD_MARCH=native` | at build time, add a tier compiled for this machine only |
 
-`weathermentations._native` has the same switches at run time
+`surmentations._native` has the same switches at run time
 (`set_enabled`, `disabled()`, `set_tier`, `tier()`, `tiers()`).
 
 ## What was verified
@@ -370,14 +370,14 @@ Those forms are **fast mode**, which is the default. **Exact mode** computes
 what the reference numpy and OpenCV code computes.
 
 ```python
-import weathermentations
+import surmentations
 
-weathermentations.set_fast(False)      # exact from here on
-with weathermentations.exact():        # or for one block
+surmentations.set_fast(False)      # exact from here on
+with surmentations.exact():        # or for one block
     frame = transform(image=image)["image"]
 ```
 
-`WEATHERMENTATIONS_FAST=0` selects exact mode at import. Use that with a
+`SURMENTATIONS_FAST=0` selects exact mode at import. Use that with a
 `DataLoader` whose workers are spawned, since a spawned worker does not see a
 `set_fast` call made in its parent. The mode is independent of the compiled
 kernels: either mode runs with or without them, and gives the same frame
@@ -695,7 +695,7 @@ untraced.
 ### The codecs in process
 
 PyAV binds FFmpeg's libraries into Python. It is an optional extra
-(`pip install "weathermentations[codec]"`), used when present.
+(`pip install "surmentations[codec]"`), used when present.
 
 - **For H.264 it is the binary's frame to the byte.** The first probe
   differed from the binary by 2.4 to 4.7 levels on average. Three settings
@@ -730,7 +730,7 @@ PyAV binds FFmpeg's libraries into Python. It is an optional extra
 - **What it costs**: about 130 MB installed, wheels that bundle FFmpeg
   built with GPL components (libx264, libx265), which matters to anyone
   redistributing an environment, and Python 3.12 for the release tested
-  (19.0.2). `WEATHERMENTATIONS_CODEC=ffmpeg` keeps to the binary. Without
+  (19.0.2). `SURMENTATIONS_CODEC=ffmpeg` keeps to the binary. Without
   the binary PyAV alone is enough, in either mode.
 
 ## A sixth round: rain with a dry road
@@ -1073,13 +1073,13 @@ of mapping their output arrays hid the flags.
 
 ### Building for one machine
 
-`WEATHERMENTATIONS_BUILD_MARCH=native` at build time adds a third tier,
+`SURMENTATIONS_BUILD_MARCH=native` at build time adds a third tier,
 `native`, compiled with `-march=native -mtune=native` (`-mcpu=native` on
 arm64), and the library prefers it:
 
 ```bash
-WEATHERMENTATIONS_BUILD_MARCH=native python hatch_build.py
-python -c "from weathermentations import _native; print(_native.tiers(), _native.tier())"
+SURMENTATIONS_BUILD_MARCH=native python hatch_build.py
+python -c "from surmentations import _native; print(_native.tiers(), _native.tier())"
 # ('sse2', 'avx2', 'native') native
 ```
 
@@ -1199,7 +1199,7 @@ pixels.
 expression over a frame allocates a frame and frees it. glibc returns blocks
 of that size to the operating system and maps them again, and the pages are
 zeroed each time. Telling it to keep them
-(`weathermentations.keep_freed_memory()`, which sets `M_MMAP_THRESHOLD` and
+(`surmentations.keep_freed_memory()`, which sets `M_MMAP_THRESHOLD` and
 `M_TRIM_THRESHOLD`) measured:
 
 | Transform | default | kept |
@@ -1304,7 +1304,7 @@ python hatch_build.py                         # build the kernels in place
 pytest tests/unit/test_native_kernels.py tests/unit/test_native_build.py -q
 sh native/check/run.sh                        # hashes, per tier
 taskset -c 2 sh native/experiments/run.sh     # plain C against intrinsics
-WEATHERMENTATIONS_NATIVE=0 pytest tests -q    # the numpy path alone
+SURMENTATIONS_NATIVE=0 pytest tests -q    # the numpy path alone
 pip install -e ".[codec]"                     # PyAV, then:
 pytest tests/unit/test_inprocess_codec.py -q  # the codecs in process against ffmpeg
 ```

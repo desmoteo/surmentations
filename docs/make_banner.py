@@ -49,7 +49,7 @@ STRIPS = [
     ("night_insects_3", "insects"),
     ("analog_video_4", "analog link"),
 ]
-TITLE = "weathermentations"
+TITLE = "surmentations"
 SUBTITLE = "Physically grounded weather, lens and camera augmentations"
 FACTS = "37 transforms for Albumentations  ·  depth-aware  ·  linear light  ·  optional C kernels"
 

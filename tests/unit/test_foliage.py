@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.lens import FoliageIntrusion
+from surmentations.lens import FoliageIntrusion
 
 SHAPE = (240, 320)
 
@@ -120,7 +120,7 @@ def test_leaves_under_the_lamp_are_not_all_one_grey() -> None:
 
 
 def test_a_leaf_is_drawn_where_it_is_put_as_long_as_it_is_turned() -> None:
-    from weathermentations.lens.foliage import paste_leaf
+    from surmentations.lens.foliage import paste_leaf
 
     def drawn(turned: tuple[float, float]) -> np.ndarray:
         """Cover of one leaf 60 px long pointing right from (40, 60)."""

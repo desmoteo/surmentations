@@ -3,7 +3,7 @@
 # Pin it to one fast core for numbers worth reading: taskset -c 2 sh run.sh
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
-out=${TMPDIR:-/tmp}/wm_simd_explicit
+out=${TMPDIR:-/tmp}/sm_simd_explicit
 cc=${CC:-cc}
 flags="-O3 -std=c11 -ffp-contract=off -fno-math-errno -fno-trapping-math -fno-thread-jumps -funroll-loops -Wall -Wextra"
 case "$(uname -m)" in

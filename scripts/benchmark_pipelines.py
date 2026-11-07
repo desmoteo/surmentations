@@ -5,7 +5,7 @@ Run with::
     PYTHONPATH=. .venv/bin/python scripts/benchmark_pipelines.py
     PYTHONPATH=. .venv/bin/python scripts/benchmark_pipelines.py --runs 40 --size 1024
 
-For each pipeline in ``weathermentations.presets`` it renders the reference
+For each pipeline in ``surmentations.presets`` it renders the reference
 photograph N times, records how long each call took and which effects actually
 fired, and writes every frame out. Two numbers matter and they are not the
 same one: the **median** says what a typical frame costs, and the **p90** says
@@ -31,8 +31,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from weathermentations.diagnostics import recording  # noqa: E402
-from weathermentations.presets import surveillance, surveillance_lite  # noqa: E402
+from surmentations.diagnostics import recording  # noqa: E402
+from surmentations.presets import surveillance, surveillance_lite  # noqa: E402
 
 REFERENCE = Path(__file__).resolve().parent.parent / "docs" / "examples" / "reference.webp"
 
@@ -156,7 +156,7 @@ def main() -> int:
 
     builders: list[tuple[str, Any]] = [("surveillance_lite", surveillance_lite())]
     if not args.no_depth:
-        from weathermentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
+        from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
 
         provider = SharedDepthProvider(DepthAnythingV2Estimator())
         builders.append(("surveillance", surveillance(provider)))

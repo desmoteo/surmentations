@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.camera.sensor_noise import (
+from surmentations.camera.sensor_noise import (
     SensorNoise,
     _one_colour,
     bayer_sites,

@@ -14,10 +14,10 @@ import albumentations as A
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import NightSnow, RandomSnow
-from weathermentations.camera import NightIrMode
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
+from surmentations.atmosphere import NightSnow, RandomSnow
+from surmentations.camera import NightIrMode
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
 
 
 class _SkyOverGround(DepthEstimator):

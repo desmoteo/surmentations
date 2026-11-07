@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from weathermentations.camera import DemosaicArtifacts
-from weathermentations.camera.demosaic import smooth_chroma, through_mosaic
+from surmentations.camera import DemosaicArtifacts
+from surmentations.camera.demosaic import smooth_chroma, through_mosaic
 
 
 def _stripes(period: int, size: int = 96) -> np.ndarray:

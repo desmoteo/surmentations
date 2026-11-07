@@ -26,8 +26,8 @@ import numpy as np
 import pytest
 
 from docs.generate_examples import EFFECTS, LEVELS, _build
+from surmentations.depth.provider import SharedDepthProvider
 from tests.unit.test_randomization import _GroundPlaneDepth
-from weathermentations.depth.provider import SharedDepthProvider
 
 # One 8-bit level of mean absolute change, the threshold used throughout this
 # review for "this does something".

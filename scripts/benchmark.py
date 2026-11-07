@@ -44,7 +44,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from weathermentations.atmosphere import (  # noqa: E402
+from surmentations.atmosphere import (  # noqa: E402
     NightFog,
     NightRain,
     NightSnow,
@@ -52,11 +52,11 @@ from weathermentations.atmosphere import (  # noqa: E402
     RandomRain,
     RandomSnow,
 )
-from weathermentations.atmosphere.ground_fog import GroundFog  # noqa: E402
-from weathermentations.atmosphere.heat_shimmer import HeatShimmer  # noqa: E402
-from weathermentations.atmosphere.night_insects import NightInsects  # noqa: E402
-from weathermentations.atmosphere.plumes import LocalPlumes  # noqa: E402
-from weathermentations.camera import (  # noqa: E402
+from surmentations.atmosphere.ground_fog import GroundFog  # noqa: E402
+from surmentations.atmosphere.heat_shimmer import HeatShimmer  # noqa: E402
+from surmentations.atmosphere.night_insects import NightInsects  # noqa: E402
+from surmentations.atmosphere.plumes import LocalPlumes  # noqa: E402
+from surmentations.camera import (  # noqa: E402
     AcFlicker,
     ExposureTransient,
     NightIrMode,
@@ -67,17 +67,17 @@ from weathermentations.camera import (  # noqa: E402
     VideoCodecArtifacts,
     WdrToneMapping,
 )
-from weathermentations.camera.analog import AnalogVideoArtifacts  # noqa: E402
-from weathermentations.camera.codec import ffmpeg_path  # noqa: E402
-from weathermentations.camera.demosaic import DemosaicArtifacts  # noqa: E402
-from weathermentations.camera.ir_cut import IrCutFilterFault  # noqa: E402
-from weathermentations.camera.overlay import OnScreenOverlay  # noqa: E402
-from weathermentations.camera.vibration import CameraVibration  # noqa: E402
-from weathermentations.depth import (  # noqa: E402
+from surmentations.camera.analog import AnalogVideoArtifacts  # noqa: E402
+from surmentations.camera.codec import ffmpeg_path  # noqa: E402
+from surmentations.camera.demosaic import DemosaicArtifacts  # noqa: E402
+from surmentations.camera.ir_cut import IrCutFilterFault  # noqa: E402
+from surmentations.camera.overlay import OnScreenOverlay  # noqa: E402
+from surmentations.camera.vibration import CameraVibration  # noqa: E402
+from surmentations.depth import (  # noqa: E402
     DepthAnythingV2Estimator,
     SharedDepthProvider,
 )
-from weathermentations.lens import (  # noqa: E402
+from surmentations.lens import (  # noqa: E402
     DirtSoil,
     HousingOccluders,
     SourceGlare,
@@ -85,13 +85,13 @@ from weathermentations.lens import (  # noqa: E402
     SunFlare,
     WaterDroplets,
 )
-from weathermentations.lens.dome_glare import IrDomeGlare  # noqa: E402
-from weathermentations.lens.focus import FocusShift  # noqa: E402
-from weathermentations.lens.foliage import FoliageIntrusion  # noqa: E402
-from weathermentations.lens.frost import FrostOnGlass  # noqa: E402
-from weathermentations.lens.snow_cap import SnowOnHousing  # noqa: E402
-from weathermentations.lens.tamper import LensTamper  # noqa: E402
-from weathermentations.scene import CastShadows  # noqa: E402
+from surmentations.lens.dome_glare import IrDomeGlare  # noqa: E402
+from surmentations.lens.focus import FocusShift  # noqa: E402
+from surmentations.lens.foliage import FoliageIntrusion  # noqa: E402
+from surmentations.lens.frost import FrostOnGlass  # noqa: E402
+from surmentations.lens.snow_cap import SnowOnHousing  # noqa: E402
+from surmentations.lens.tamper import LensTamper  # noqa: E402
+from surmentations.scene import CastShadows  # noqa: E402
 
 DEPTH_FREE = (
     "water_droplets",

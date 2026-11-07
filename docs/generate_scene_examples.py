@@ -62,11 +62,11 @@ from docs.generate_examples import (  # noqa: E402
     _night_base,
     _render_representative,
 )
-from weathermentations.camera.codec import ffmpeg_path  # noqa: E402
-from weathermentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
-from weathermentations.presets import surveillance, surveillance_lite  # noqa: E402
-from weathermentations.presets.severity import SEVERITY  # noqa: E402
-from weathermentations.utils.precipitation import (  # noqa: E402
+from surmentations.camera.codec import ffmpeg_path  # noqa: E402
+from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
+from surmentations.presets import surveillance, surveillance_lite  # noqa: E402
+from surmentations.presets.severity import SEVERITY  # noqa: E402
+from surmentations.utils.precipitation import (  # noqa: E402
     rain_extinction_coefficient,
     snow_extinction_coefficient,
 )

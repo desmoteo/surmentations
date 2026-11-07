@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from weathermentations.atmosphere import (
+from surmentations.atmosphere import (
     GroundFog,
     HeatShimmer,
     LocalPlumes,
@@ -28,7 +28,7 @@ from weathermentations.atmosphere import (
     RandomRain,
     RandomSnow,
 )
-from weathermentations.camera import (
+from surmentations.camera import (
     AcFlicker,
     AnalogVideoArtifacts,
     CameraVibration,
@@ -44,7 +44,7 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
-from weathermentations.lens import (
+from surmentations.lens import (
     DirtSoil,
     FocusShift,
     FoliageIntrusion,
@@ -58,7 +58,7 @@ from weathermentations.lens import (
     SunFlare,
     WaterDroplets,
 )
-from weathermentations.scene import CastShadows
+from surmentations.scene import CastShadows
 
 README = Path(__file__).resolve().parents[2] / "README.md"
 

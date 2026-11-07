@@ -3,16 +3,16 @@
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.rain import (
+from surmentations.atmosphere.rain import (
     RandomRain,
     _apply_ground_wetness,
     _perspective_angles,
     render_streak_layer,
     streak_alpha,
 )
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.utils.precipitation import raindrop_terminal_velocity
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.utils.precipitation import raindrop_terminal_velocity
 
 
 class _LinearDepthEstimator(DepthEstimator):
@@ -352,7 +352,7 @@ def test_gamma_drop_size_distribution_reduces_to_marshall_palmer() -> None:
     Palmer, so the gamma generalisation has to leave that case untouched — a
     shape parameter that quietly shifts the default would invalidate the lot.
     """
-    from weathermentations.utils.precipitation import (
+    from surmentations.utils.precipitation import (
         gamma_dsd_slope,
         marshall_palmer_slope,
         rain_number_density,
@@ -384,7 +384,7 @@ def test_the_transform_samples_the_drop_size_distribution_it_was_asked_for(
     of drops above 2 mm, where the gamma has 14.8% and Marshall-Palmer 11.5%.
     The opposite of what the parameter is documented to do.
     """
-    from weathermentations.diagnostics import recording
+    from surmentations.diagnostics import recording
 
     def drawn(shape_mu: float) -> tuple[float, np.ndarray]:
         transform = RandomRain(
@@ -425,7 +425,7 @@ def test_gamma_shape_moves_mass_toward_larger_drops() -> None:
     """The point of the gamma is the large-drop end: Ulbrich (1983) fits
     observed spectra better than an exponential because a real distribution
     has a mode at a finite diameter rather than piling up at zero."""
-    from weathermentations.utils.precipitation import gamma_dsd_slope, sample_gamma_diameters
+    from surmentations.utils.precipitation import gamma_dsd_slope, sample_gamma_diameters
 
     rng = np.random.default_rng(1)
     fractions = []
@@ -445,7 +445,7 @@ def test_drop_size_distribution_is_not_the_visibility_lever() -> None:
     shape. Recording it as a test because it is the claim most likely to be
     re-litigated, and because it is cheap to check and expensive to re-derive.
     """
-    from weathermentations.utils.precipitation import (
+    from surmentations.utils.precipitation import (
         gamma_dsd_slope,
         raindrop_terminal_velocity,
     )
@@ -473,7 +473,7 @@ def _operating_points(
     provider: SharedDepthProvider, scene: np.ndarray, draws: int = 120, **kwargs: object
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(shutter time, f-number, illuminance) over ``draws`` seeds."""
-    from weathermentations.diagnostics import recording
+    from surmentations.diagnostics import recording
 
     transform = RandomRain(depth_provider=provider, p=1.0, **kwargs)  # type: ignore[arg-type]
     points = []
@@ -490,7 +490,7 @@ def _operating_points(
 def test_the_meter_trades_aperture_against_shutter() -> None:
     """Light through a lens goes as 1/N^2, so each stop the iris closes
     doubles the shutter time, and each halving of the light doubles it too."""
-    from weathermentations.atmosphere.rain import metered_exposure_s
+    from surmentations.atmosphere.rain import metered_exposure_s
 
     assert metered_exposure_s(1.6, 10_000.0) == pytest.approx(1 / 3125, rel=0.01)
     assert metered_exposure_s(8.0, 10_000.0) == pytest.approx(
@@ -507,7 +507,7 @@ def test_shutter_time_is_metered_not_drawn(
     pairs no camera would choose. Now the aperture and the light are drawn
     and the shutter follows, so a stopped-down lens comes with a long shutter
     and an open one with a short one."""
-    from weathermentations.atmosphere.rain import metered_exposure_s
+    from surmentations.atmosphere.rain import metered_exposure_s
 
     exposure, f_number, light = _operating_points(provider, scene)
     shortest, longest = 1 / 8000, 1 / 25
