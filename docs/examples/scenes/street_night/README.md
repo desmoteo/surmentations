@@ -49,13 +49,33 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![transmission_faults](effects/transmission_faults.jpg) | ![wet_ground](effects/wet_ground.jpg) | ![snow_cover](effects/snow_cover.jpg) |
 
-| spider_web |  |  |
+| spider_web | night_insects | ir_dome_glare |
 | --- | --- | --- |
-| ![spider_web](effects/spider_web.jpg) |  |  |
+| ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) | ![ir_dome_glare](effects/ir_dome_glare.jpg) |
+
+| frost_on_glass | snow_on_housing | lens_tamper |
+| --- | --- | --- |
+| ![frost_on_glass](effects/frost_on_glass.jpg) | ![snow_on_housing](effects/snow_on_housing.jpg) | ![lens_tamper](effects/lens_tamper.jpg) |
+
+| foliage_intrusion | demosaic_artifacts | analog_video |
+| --- | --- | --- |
+| ![foliage_intrusion](effects/foliage_intrusion.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) |
+
+| focus_shift | camera_vibration | on_screen_overlay |
+| --- | --- | --- |
+| ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) |
+
+| ground_fog | local_plumes | night_foliage |
+| --- | --- | --- |
+| ![ground_fog](effects/ground_fog.jpg) | ![local_plumes](effects/local_plumes.jpg) | ![night_foliage](effects/night_foliage.jpg) |
 
 Not rendered: `sun_flare`, `cast_shadows` — it needs the sun, and the scene is at night.
 
 Not rendered: `fog` — it is the daylight model, an even veil lit by the sky. `night_fog` is fog lit by the lamps.
+
+Not rendered: `ir_cut_filter_fault` — it is a fault of the colour picture by day, and the scene is at night.
+
+Not rendered: `heat_shimmer` — it is turbulence over sunlit ground, which shows over a kilometre or so by day: this scene is too short, under a roof or at night.
 
 ## `surveillance_lite` pipeline
 

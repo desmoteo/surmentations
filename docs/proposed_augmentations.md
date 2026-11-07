@@ -1,8 +1,9 @@
 # Proposed augmentations
 
-Effects the library does not have and should. Entries 1 to 5 have since
-been built and are kept here as the record of what was intended, each with a
-note on what was done differently; the rest are not implemented.
+Effects the library did not have and should. All eight have since been
+built and are kept here as the record of what was intended, each with a
+note on what was done differently. Twelve more were built straight from a
+shorter list without an entry here; they are named at the end.
 Each entry says what the effect is, why it is missing, how it would be
 modelled, where it sits in the imaging chain, and what would show that it
 works, so that any one of them can be picked up cold.
@@ -19,9 +20,9 @@ not proposed again.
 | 3 | [`SourceGlare`](#3-sourceglare) — built | optics | no | no | medium |
 | 4 | [`NightFog`](#4-nightfog) — built | atmosphere | yes | no | medium |
 | 5 | [`TransmissionFaults`](#5-transmissionfaults) — built | transmission | no | no | medium |
-| 6 | [`OnScreenOverlay`](#6-onscreenoverlay) | after transmission | no | no | small |
-| 7 | [`FocusShift` and `CameraVibration`](#7-focusshift-and-cameravibration) | optics | no | vibration does | medium |
-| 8 | [`HeatShimmer`](#8-heatshimmer) | atmosphere | yes | yes | medium |
+| 6 | [`OnScreenOverlay`](#6-onscreenoverlay) — built | after transmission | no | no | small |
+| 7 | [`FocusShift` and `CameraVibration`](#7-focusshift-and-cameravibration) — built | optics | no | vibration does | medium |
+| 8 | [`HeatShimmer`](#8-heatshimmer) — built | atmosphere | yes | yes | medium |
 
 "Chain stage" refers to `scene -> atmosphere -> optics -> sensor -> ISP ->
 transmission`, the order `presets/pipeline.py` sorts transforms into.
@@ -331,6 +332,13 @@ whichever is chosen, and is tested.
 **Open.** Fonts. Shipping one adds a licence to track; rendering a small
 built-in bitmap face avoids it.
 
+**Built** as `camera/overlay.py`, with a 5 by 7 face of its own. A box
+that privacy masks cover by `hidden_box_coverage` (0.9) of its area is
+dropped; masks and keypoints are left alone. `drawn_by` chooses the stage,
+which needed `stage_of` to read a stage from the instance: the transmission
+stages moved up one to make room before the codec. Polygonal masks were
+left out; they are rectangles.
+
 ## 7. `FocusShift` and `CameraVibration`
 
 Two effects that are both blur and have nothing else in common.
@@ -363,6 +371,15 @@ keypoints move with the frame.
 
 **Open.** Whether vibration belongs inside `RollingShutter`, which already
 has a camera motion model.
+
+**Built** as `lens/focus.py` and `camera/vibration.py`. `FocusShift` is
+parametrised by where the lens is in fact focused, drawn evenly in
+dioptres, and takes its depth provider optionally: without one the frame
+gets the blur of a distant scene. The disc convolution is still
+`water_droplets`' and was not moved. `CameraVibration` stayed separate
+from `RollingShutter`: it treats the exposure as one instant for every
+row, and says so. Its smear is the path's own distribution, not a box,
+and stops growing once the exposure holds the whole swing.
 
 ## 8. `HeatShimmer`
 
@@ -397,7 +414,26 @@ statistics do not.
 **Open.** A single frame shows shimmer only as distortion. Its signature is
 motion, which needs the per-frame variation `images=` clips do not yet have.
 
+**Built** as `atmosphere/heat_shimmer.py`, with the tilt and the blur from
+the theory of seeing (`2.91 D^(-1/3) Cn2 L` and `lambda / r0`) in place of
+a strength knob, so the test that it does nothing over 50 m is a
+consequence and not a setting. A constant `Cn2` along the path: the
+stronger turbulence near the ground was left out. Annotations do not
+follow; the displacement is a pixel or two.
+
 ---
+
+## Built without an entry
+
+`SpiderWeb`, `NightInsects`, `IrDomeGlare`, `FrostOnGlass`,
+`SnowOnHousing`, `LensTamper`, `FoliageIntrusion`, `IrCutFilterFault`,
+`DemosaicArtifacts`, `AnalogVideoArtifacts`, `GroundFog` and
+`LocalPlumes`. Each module's docstring is its entry: what the effect is
+and the model, with the tests naming what would show it wrong.
+[`how_it_works.md`](how_it_works.md) has a table of the one fact each is
+built on. None of them, and none of the eight above from entry 6 on, has
+been given a place in the ready-made pipelines: that needs a probability
+for each, which is a decision about a deployment and not about physics.
 
 ## Considered and rejected
 

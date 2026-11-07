@@ -145,6 +145,10 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `NightSnow` | Snow lit by the camera's own illuminator: each flake's brightness is set by *its* distance from the lamp, not by the scene behind it. `RandomSnow` before `NightIrMode` loses its flakes over anything distant; this is what puts them back. Needs no depth | no |
 | `NightFog` | Fog lit by the lamps in the frame: everything fades with distance into a veil as bright and as coloured as the light around it, brightest near the lamps, and each lamp gets a halo. With the illuminator on, an even wall of backscatter across the beam | yes |
 | `CastShadows` | Shadows of people, vehicles and foliage on upward-facing surfaces, all thrown by one sun — a classic false-positive source. A loss of the direct beam, so texture survives and the shadow is bluer | yes |
+| `GroundFog` | A layer of fog on the ground: extinction falling exponentially with height, integrated in closed form along each pixel's ray from the camera's height to the point's, so the road is veiled and the roofs stand clear, the horizon closes and the sky above it does not; in banks and wisps laid out on the ground plane | yes |
+| `LocalPlumes` | Steam and exhaust: plumes standing at points of the scene, sized by metres at that distance, widening and thinning as they rise, leaning with the wind, shaded underneath by their own depth, and hiding only what is behind them | yes |
+| `HeatShimmer` | Turbulent air over a long path, from the theory of seeing: each pixel moved by a smooth random field scaled to the tilt `2.91 D^(-1/3) Cn2 L` and blurred by `λ/r0`. Nothing over a street's length, which is the correct answer | yes |
+| `NightInsects` | Insects in the infrared ring's beam: each a streak as long as it flies in the exposure, holding a fixed amount of light, beaded once a wing beat, lit by its own distance from the lamp; and motes of dust near the lens, one faint disc each | no |
 
 ### Lens and housing
 
@@ -156,6 +160,12 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `SourceGlare` | The same optics on each compact light found in the frame (street lamps, headlights), with strength from the clipped area. Leaves a frame with no lights unchanged | no |
 | `HousingOccluders` | Insects and webs on the dome — hugely magnified and defocused, silhouetted by day, glowing under the IR ring | no |
 | `SpiderWeb` | An orb web a hand's width in front of the lens, lit by the infrared ring: frame, radii and capture spiral in a tilted plane, every thread drawn as the aperture's disc at its own distance, so the near side is bright and blurred wide and the beads of glue and dew read as strings of pearls; loose threads, and the spider at the hub, clipped white. Adds light and hides nothing, which is why a web is invisible by day | no |
+| `IrDomeGlare` | The ring of LEDs mirrored in a dome that is dirty or badly sealed: a soft band, usually an arc because the lens is tilted off the dome's axis, lobed where the LEDs are few, patchy where the dome is dirty, over an even veil | no |
+| `FrostOnGlass` | Ice ferns grown in from the rim, with branches at the lattice's sixty degrees, ahead of an even layer and with clear glass between them. Ice scatters and does not absorb: what it covers is replaced by a wide blur of the scene and the light the frost picks up | no |
+| `SnowOnHousing` | A cap of snow hanging into the top of the view with an uneven lobed edge, and lumps stuck to the glass: opaque, a pale blue grey lit through from above, brightest along its thin edge, and clipped under the infrared ring | no |
+| `LensTamper` | Paint from a spray can (an opaque core thinning to speckle, with runs), strips of tape, or a cover over the housing; tape and cover pass a little light and no image. Hides the scene by design | no |
+| `FoliageIntrusion` | A leafy branch in front of the lens at its own distance, which sizes its leaves, blurs them through the aperture and smears them by the wind over the exposure. Every leaf has its own turn, its midrib and veins, and is lit on its face or lit through, shading those behind it; under the infrared ring each is as bright as it faces the lamp | no |
+| `FocusShift` | A lens focused too near, as infrared, temperature and a loose ring leave it: every point the aperture's disc, `A f abs(1/s - 1/z)` across, per pixel with depth and evenly without | optional |
 
 ### Sensor, ISP and transmission
 
@@ -170,6 +180,11 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `TemporalDenoiseArtifacts` | 3D-NR's "watercolour" flattening and chroma blotching | no |
 | `VideoCodecArtifacts` | H.264/H.265 **encoded for real via ffmpeg**, so deblocking, 4:2:0 chroma and rate control come out correct rather than approximated. Optionally simulates stale macroblocks from a lost P-frame | no |
 | `TransmissionFaults` | Packet loss, **decoded for real**: a short H.264 clip is encoded, packets are removed from the bitstream in bursts, and ffmpeg decodes what is left. Stale, smeared, green and garbage bands that start mid-row and stop at a slice boundary | no |
+| `IrCutFilterFault` | The day/night filter stuck open by day: near infrared added to all three channels, then exposure and white balance correcting what they can, which leaves foliage pale against a frame that is neutral on average; or stuck half-way, with its edge across the picture | no |
+| `DemosaicArtifacts` | The frame put back through a Bayer mosaic and a cheap interpolator: false colour and zipped edges on detail as fine as the pixels, limited by the lens's blur and hidden in part by the processor's chroma filter | no |
+| `CameraVibration` | The camera swinging on its mount: the frame added up over the path its pointing took during the exposure, so the smear grows with shutter time up to the whole swing, and displaced by the path's mean. Moves pixels: masks, boxes and keypoints follow | no |
+| `AnalogVideoArtifacts` | A composite or analog-HD link: the frame **encoded onto a subcarrier and decoded**, so cross-colour and dot crawl are what a decoder leaves; with the cable's low-pass along the line, colour's narrow band and delay, a reflection, hum bars, line jitter and the comb of two fields | no |
+| `OnScreenOverlay` | Not physics: the timestamp, camera name and privacy masks that are on nearly every real frame, in a built-in bitmap face. A box that privacy masks cover is dropped | no |
 
 ---
 
@@ -211,12 +226,22 @@ and the physics behind it.
 | `NightFog` | `visibility_range_m` (read against the provider's depth range), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes` |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
+| `GroundFog` | `visibility_range_m` (at the ground), `layer_height_range_m` (how shallow the layer is), `camera_height_range_m`, `camera_pitch_range_deg`, `patchiness_range`, `patch_scale_range_m`, `depth_scale` (it shows along the distance) |
+| `LocalPlumes` | `plume_count_range`, `source_width_range_m`, `rise_range_m`, `opacity_range`, `lean_range` (wind), `brightness_range` |
+| `HeatShimmer` | `log10_cn2_range` (-14 mild, -12 hot ground), `horizontal_fov_range_deg` (a long lens), `aperture_diameter_range_mm`, `depth_scale` (it needs a path of a kilometre or so) |
+| `NightInsects` | `insect_count_range`, `distance_range_m`, `flight_speed_range_m_s` and `exposure_time_range` (streak length), `wing_beat_range_hz` (lobes), `dust_count_range`, `illuminator_gain_range` |
 | `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `aperture_diameter_range_mm` (sets how sharp the water looks), `coalescence_range`, `condensation_coverage_range`, `condensation_milkiness_range`, `illuminator_glow_range` (infrared ring on) |
 | `DirtSoil` | `coverage_range`, `dust_film_range` (even film between the patches), `ambient_light_range` (how much brighter the surroundings are than the frame), `veil_strength_range`, `highlight_boost_range`, `deposits` (which substances), `smudge_count_range` |
 | `SunFlare` | `flare_position`, `intensity_range`, `ghost_count_range`, `aperture_blades_range`, `dispersion_ring_probability`, `scratch_count_range` |
 | `SourceGlare` | `intensity_range` (stands for how far past full scale the lights were), `max_sources_range`, `ghost_count_range`, `streak_probability` |
 | `HousingOccluders` | `insect_count_range`, `insect_size_range`, `web_count_range`, `defocus_range`, `glow_range` (0 by day, >0 under the IR ring) |
 | `SpiderWeb` | `distance_range_m` (hub to lens: nearer is larger, wider-blurred and brighter), `web_radius_range_m`, `tilt_range_deg`, `mesh_spacing_range_mm`, `bead_spacing_range_mm` (against `aperture_diameter_range_mm`: band or pearls), `bead_share_range`, `damage_range`, `illuminator_gain_range`, `stray_thread_count_range`, `spider_probability` |
+| `IrDomeGlare` | `intensity_range`, `ring_radius_range`, `arc_range` (whole ring or crescent), `offset_range` (lens tilt), `led_contrast_range`, `veil_range`, `dirt_range` |
+| `FrostOnGlass` | `coverage_range` (how far in from the rim), `thickness_range`, `feather_range` (ferns or an even layer), `crystal_scale_range`, `ambient_light_range`, `illuminator_glow_range` (infrared ring on) |
+| `SnowOnHousing` | `cap_depth_range`, `lumpiness_range`, `patch_count_range`, `brightness_range` (by day), `glow_range` (infrared ring on) |
+| `LensTamper` | `kinds` (spray, tape, cover), `coverage_range`, `opacity_range`, `shade_range` (by day), `glow_range` (infrared ring on) |
+| `FoliageIntrusion` | `branch_count_range`, `distance_range_m`, `leaf_length_range_mm`, `reach_range`, `sway_speed_range_m_s`, `illuminator_gain_range` (0 by day; at night also set `leaf_light_range` to 0), `beam_falloff_range` |
+| `FocusShift` | `focus_distance_range_m` (where the lens is in fact focused; nearer is worse), `aperture_diameter_range_mm`, `depth_provider` (optional) |
 | `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range` |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
 | `RollingShutter` | `pan_shift_range_px`, `wobble_amplitude_range_px`, `wobble_cycles_range` |
@@ -226,6 +251,11 @@ and the physics behind it.
 | `TemporalDenoiseArtifacts` | `strength_range`, `iterations_range`, `edge_threshold_range`, `chroma_blur_range` |
 | `VideoCodecArtifacts` | `codec` (`"h264"` / `"h265"`), `crf_range`, `stale_block_probability` |
 | `TransmissionFaults` | `packet_loss_range`, `burst_length_range`, `scene_motion_range` (how far the picture moved since the frame the decoder falls back on: what makes loss visible), `missing_reference_probability`, `concealment_probability` (a decoder that does not conceal shows green), `slices_range`, `frames_since_keyframe_range` |
+| `IrCutFilterFault` | `leak_range`, `coverage_range` (1 is fully open; less leaves the filter's edge in the picture), `white_balance_adaptation_range` |
+| `DemosaicArtifacts` | `optical_blur_range_px` (a sharp lens is the worst case), `sensor_scale_range` (a coarser sensor, wider fringes), `chroma_filter_range_px` |
+| `CameraVibration` | `amplitude_range`, `frequency_range_hz`, `exposure_time_range` (the smear is what the camera moved meanwhile), `direction_range_deg` |
+| `AnalogVideoArtifacts` | `luma_bandwidth_range` (cable length), `chroma_bandwidth_range`, `crosstalk_range` (decoder quality), `ghost_strength_range`, `hum_depth_range`, `noise_range`, `comb_shift_range` |
+| `OnScreenOverlay` | `timestamp_probability`, `label_probability`, `text_height_range`, `privacy_mask_count_range`, `hidden_box_coverage`, `drawn_by` (camera: before the codec; recorder: after the link) |
 
 Two of these are worth singling out because their effect is not what the name
 suggests. `AcFlicker`'s `readout_time_range_s` matters more than
@@ -358,6 +388,9 @@ taskset -c 2 python scripts/benchmark_single_core.py run --out times.json
 python scripts/benchmark.py --sizes 512 1024     # parameters and rendering apart
 ```
 
+The sixteen transforms added after that run, `SpiderWeb` and the fifteen
+that followed it, were timed the same way in two runs.
+
 [`docs/native_kernels.md`](docs/native_kernels.md) has the same transforms
 against the code before the native kernels, on this machine and on a Jetson
 Orin NX, and what exact mode costs.
@@ -367,21 +400,33 @@ Orin NX, and what exact mode costs.
 | Transform | 512 px | 1024 px |
 | --- | ---: | ---: |
 | `AcFlicker` | 1.1 | 4.0 |
+| `OnScreenOverlay` | 1.4 | 6.7 |
 | `RollingShutter` | 2.0 | 7.7 |
 | `ExposureTransient` | 2.2 | 8.6 |
+| `CameraVibration` | 3.0 | 32.8 |
+| `DemosaicArtifacts` | 3.0 | 14.2 |
+| `IrDomeGlare` | 3.7 | 15.8 |
+| `NightInsects` | 4.9 | 26.7 |
 | `HousingOccluders` | 6.1 | 16.7 |
 | `SensorNoise` | 6.1 | 27.5 |
 | `NightSnow` | 6.3 | 34.8 |
 | `DirtSoil` | 6.4 | 22.9 |
+| `IrCutFilterFault` | 6.5 | 33.0 |
 | `SunFlare` | 6.7 | 21.0 |
+| `FocusShift`, without depth | 8.1 | 13.3 |
 | `VideoCodecArtifacts`, with PyAV | 9.2 | 29.5 |
 | `SpiderWeb` | 9.7 | 35.2 |
 | `SourceGlare` | 11.6 | 38.4 |
+| `LensTamper` | 12.1 | 54.8 |
 | `TemporalDenoiseArtifacts` | 14.8 | 46.0 |
+| `SnowOnHousing` | 14.9 | 52.3 |
+| `AnalogVideoArtifacts` | 20.6 | 93.7 |
 | `NightRain` | 20.7 | 53.2 |
 | `WaterDroplets` | 22.7 | 70.1 |
 | `TransmissionFaults`, with PyAV | 23.2 | 79.3 |
 | `WdrToneMapping` | 26.0 | 39.6 |
+| `FrostOnGlass` | 26.4 | 142.4 |
+| `FoliageIntrusion` | 35.2 | 121.0 |
 | `VideoCodecArtifacts`, through ffmpeg | 144.2 | 180.1 |
 | `TransmissionFaults`, through ffmpeg | 171.7 | 279.4 |
 
@@ -396,10 +441,13 @@ once one provider holds the frame's depth.
 | Transform | 512 px | 1024 px |
 | --- | ---: | ---: |
 | `NightIrMode` | 9.4 | 41.5 |
+| `LocalPlumes` | 14.1 | 74.3 |
+| `HeatShimmer`, over a long view | 14.8 | 94.0 |
 | `RandomFog` | 20.6 | 91.7 |
 | `RandomRain`, dry road | 20.6 | 70.9 |
 | `CastShadows` | 20.8 | 46.9 |
 | `NightFog` | 24.2 | 90.5 |
+| `GroundFog` | 24.9 | 114.6 |
 | `RandomSnow` | 49.8 | 143.1 |
 | `RandomRain`, wet road | 63.4 | 156.6 |
 
@@ -429,15 +477,19 @@ geometry (a colour jitter, a blur), `provider.carry(before, after)` says so.
 A `DataLoader` worker must keep ahead of the GPU. Rough guidance, at 512 px:
 
 - **Cheap enough to apply liberally** (under ~10 ms): `AcFlicker`,
-  `RollingShutter`, `ExposureTransient`, `HousingOccluders`, `SensorNoise`,
-  `NightSnow`, `DirtSoil`, `SunFlare`, `SpiderWeb`, `NightIrMode`, and
-  `VideoCodecArtifacts` with PyAV.
-- **Moderate** (10-30 ms): `SourceGlare`, `TemporalDenoiseArtifacts`,
-  `NightRain`, `WaterDroplets`, `WdrToneMapping`, `TransmissionFaults` with
-  PyAV, `CastShadows`, `RandomFog`, `NightFog`, and `RandomRain` on a dry
-  road.
-- **Expensive, keep `p` low**: `RandomSnow`, `RandomRain` on a wet road,
-  and `VideoCodecArtifacts` and `TransmissionFaults` without PyAV.
+  `OnScreenOverlay`, `RollingShutter`, `ExposureTransient`,
+  `CameraVibration`, `DemosaicArtifacts`, `IrDomeGlare`, `NightInsects`,
+  `HousingOccluders`, `SensorNoise`, `NightSnow`, `DirtSoil`,
+  `IrCutFilterFault`, `SunFlare`, `FocusShift`, `SpiderWeb`, `NightIrMode`,
+  and `VideoCodecArtifacts` with PyAV.
+- **Moderate** (10-30 ms): `SourceGlare`, `LensTamper`, `LocalPlumes`,
+  `TemporalDenoiseArtifacts`, `HeatShimmer`, `SnowOnHousing`,
+  `AnalogVideoArtifacts`, `NightRain`, `WaterDroplets`, `GroundFog`,
+  `WdrToneMapping`, `FrostOnGlass`, `TransmissionFaults` with PyAV,
+  `CastShadows`, `RandomFog`, `NightFog`, and `RandomRain` on a dry road.
+- **Expensive, keep `p` low**: `FoliageIntrusion`, `RandomSnow`,
+  `RandomRain` on a wet road, and `VideoCodecArtifacts` and
+  `TransmissionFaults` without PyAV.
 
 Cost is paid only when `p` fires, so a pipeline of ten effects at `p=0.2`
 costs about two of them per image, not ten. The depth estimate is the
@@ -589,19 +641,49 @@ full sweep.
 | --- | --- | --- |
 | ![spider web 1](docs/examples/spider_web_0.png) | ![spider web 3](docs/examples/spider_web_2.png) | ![spider web 5](docs/examples/spider_web_4.png) |
 
+| Insects in the beam | The ring in the dome | Frost | Snow on the housing |
+| --- | --- | --- | --- |
+| ![night insects](docs/examples/night_insects_3.png) | ![ir dome glare](docs/examples/ir_dome_glare_2.png) | ![frost](docs/examples/frost_on_glass_2.png) | ![snow on housing](docs/examples/snow_on_housing_3.png) |
+
+| Tampering | A branch | Filter stuck open | Demosaicing |
+| --- | --- | --- | --- |
+| ![lens tamper](docs/examples/lens_tamper_3.png) | ![foliage](docs/examples/foliage_intrusion_3.png) | ![ir cut](docs/examples/ir_cut_filter_fault_3.png) | ![demosaic](docs/examples/demosaic_artifacts_4.png) |
+
+| A branch under the infrared ring | | |
+| --- | --- | --- |
+| ![night foliage 2](docs/examples/night_foliage_1.png) | ![night foliage 3](docs/examples/night_foliage_2.png) | ![night foliage 4](docs/examples/night_foliage_3.png) |
+
+| Analog link | Focus | Vibration | Overlay |
+| --- | --- | --- | --- |
+| ![analog video](docs/examples/analog_video_3.png) | ![focus shift](docs/examples/focus_shift_3.png) | ![camera vibration](docs/examples/camera_vibration_3.png) | ![overlay](docs/examples/on_screen_overlay_2.png) |
+
+| Ground fog | Plumes | Heat shimmer, through a long lens |
+| --- | --- | --- |
+| ![ground fog](docs/examples/ground_fog_2.png) | ![plumes](docs/examples/local_plumes_3.png) | ![heat shimmer](docs/examples/heat_shimmer_4.png) |
+
 The `rain` and `snow` rows raise the ground with the weather, level for
 level, because a row has one axis. `wet_ground` and `snow_cover` hold the
 weather at level 1 and climb `GROUND_SEVERITY` alone: the two are separate
 ladders, and `snow_cover_4` is a light fall over deep snow.
 
-`night_rain`, `night_snow` and `spider_web` are rendered over an IR night
-frame rather than the daylit base scene, because what they draw is lit by the
-camera: on a sunny road it would be as invisible as `RandomRain`'s streaks,
+`night_rain`, `night_snow`, `spider_web`, `night_insects`, `ir_dome_glare`
+and `night_foliage` are rendered over an IR night frame rather than the
+daylit base scene, because what they draw is lit by the camera: on a sunny road it would be as invisible as `RandomRain`'s streaks,
 which is the finding the transforms exist to answer. `night_droplets` is `WaterDroplets`
 over the same frame with `illuminator_glow_range` set, which is how the
 pipelines build it at night. `night_fog` and `source_glare` act on the lights
 in a frame, which the daylit reference does not have, so they are rendered
 over the night street from `sample_scenes/`.
+
+`heat_shimmer` is rendered as through a 3 to 5 degree lens with the scene
+taken to reach 6 km, since that is where shimmer is: through this
+photograph's own wide lens it rightly does nothing. `ground_fog` and
+`local_plumes` are given something like the photograph's real distances in
+place of the provider's stand-in of a few tens of metres, because a layer
+on the ground shows along the distance and a vent has a size.
+`night_foliage` is `FoliageIntrusion` with the infrared ring on and no
+daylight on the leaves. `lens_tamper` shows spray, tape and a cover in
+turn along its row.
 
 The `water_droplets` row alternates a stopped-down iris with an open one
 (0.6, 2.4, 0.9, 2.8 and 0.5 mm). That is the largest single difference

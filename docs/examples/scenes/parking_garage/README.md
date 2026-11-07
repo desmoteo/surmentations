@@ -41,9 +41,27 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) |
 
-Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow`, `wet_ground`, `snow_cover` — the scene is under a roof.
+| night_insects | ir_dome_glare | lens_tamper |
+| --- | --- | --- |
+| ![night_insects](effects/night_insects.jpg) | ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![lens_tamper](effects/lens_tamper.jpg) |
+
+| ir_cut_filter_fault | demosaic_artifacts | analog_video |
+| --- | --- | --- |
+| ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) |
+
+| focus_shift | camera_vibration | on_screen_overlay |
+| --- | --- | --- |
+| ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) |
+
+| local_plumes |  |  |
+| --- | --- | --- |
+| ![local_plumes](effects/local_plumes.jpg) |  |  |
+
+Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow`, `wet_ground`, `snow_cover`, `frost_on_glass`, `snow_on_housing`, `foliage_intrusion`, `ground_fog`, `night_foliage` — the scene is under a roof.
 
 Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
+
+Not rendered: `heat_shimmer` — it is turbulence over sunlit ground, which shows over a kilometre or so by day: this scene is too short, under a roof or at night.
 
 ## `surveillance_lite` pipeline
 

@@ -33,6 +33,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+from weathermentations.atmosphere import GroundFog, HeatShimmer, LocalPlumes, NightInsects
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_rain import NightRain
@@ -41,8 +42,13 @@ from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
     AcFlicker,
+    AnalogVideoArtifacts,
+    CameraVibration,
+    DemosaicArtifacts,
     ExposureTransient,
+    IrCutFilterFault,
     NightIrMode,
+    OnScreenOverlay,
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
@@ -55,7 +61,13 @@ from weathermentations.depth.estimator import DepthAnythingV2Estimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import (
     DirtSoil,
+    FocusShift,
+    FoliageIntrusion,
+    FrostOnGlass,
     HousingOccluders,
+    IrDomeGlare,
+    LensTamper,
+    SnowOnHousing,
     SourceGlare,
     SpiderWeb,
     SunFlare,
@@ -102,6 +114,24 @@ EFFECTS: dict[str, str] = {
     # A web across the housing, lit by the infrared ring. Last, for the
     # reason night_snow is where it is.
     "spider_web": "SpiderWeb",
+    # The second round of additions, in the order they were built.
+    "night_insects": "NightInsects",
+    "ir_dome_glare": "IrDomeGlare",
+    "frost_on_glass": "FrostOnGlass",
+    "snow_on_housing": "SnowOnHousing",
+    "lens_tamper": "LensTamper",
+    "foliage_intrusion": "FoliageIntrusion",
+    "ir_cut_filter_fault": "IrCutFilterFault",
+    "demosaic_artifacts": "DemosaicArtifacts",
+    "analog_video": "AnalogVideoArtifacts",
+    "focus_shift": "FocusShift",
+    "camera_vibration": "CameraVibration",
+    "on_screen_overlay": "OnScreenOverlay",
+    "ground_fog": "GroundFog",
+    "local_plumes": "LocalPlumes",
+    "heat_shimmer": "HeatShimmer",
+    # A branch again, as the infrared ring shows it.
+    "night_foliage": "FoliageIntrusion",
 }
 
 # Rows that climb `GROUND_SEVERITY` and hold the weather still, and the row
@@ -112,6 +142,13 @@ GROUND_ROWS: dict[str, str] = {"wet_ground": "rain", "snow_cover": "snow"}
 GROUND_ROW_WEATHER_LEVEL = 1
 # Pitch of the camera in the reference photograph, estimated by eye.
 REFERENCE_PITCH_DEG = (14.0, 22.0)
+
+# Lit by the camera's own illuminator, so shown over an infrared night
+# version of the scene.
+LAMP_LIT = (
+    "night_rain", "night_snow", "night_droplets", "spider_web", "night_insects", "ir_dome_glare",
+    "night_foliage",
+)  # fmt: skip
 
 # Needs the ffmpeg binary; skipped with a warning rather than crashing the run.
 _NEEDS_FFMPEG = {"video_codec", "transmission_faults"}
@@ -283,6 +320,40 @@ def _variant_kwargs(
             "illuminator_range_m": _span(rng, 3.0, 20.0),
             "beam_falloff_range": _span(rng, 0.5, 5.0),
         }
+    if name == "heat_shimmer":
+        # A long lens over a long path, which is the only place shimmer is:
+        # across this photograph's own few hundred metres through a wide
+        # lens it rightly does nothing.
+        return {"depth_scale": 6000.0, "horizontal_fov_range_deg": (3.0, 5.0)}
+    if name == "ground_fog":
+        # Seen as this photograph was taken, from a bridge and over some
+        # hundreds of metres: it is along the distance that a layer on the
+        # ground shows, and against the provider's stand-in of a few tens
+        # of metres there is none.
+        return {
+            "depth_scale": float(rng.uniform(250.0, 450.0)),
+            "camera_pitch_range_deg": REFERENCE_PITCH_DEG,
+            "camera_height_range_m": (6.0, 9.0),
+        }
+    if name == "night_foliage":
+        # The same branch under the infrared ring: no daylight for the
+        # leaves to be green in, and the lamp's light by their distance.
+        return {
+            "leaf_light_range": (0.0, 0.0),
+            "illuminator_gain_range": _span(rng, 2.0, 5.0),
+            "exposure_time_range": (0.02, 0.04),
+        }
+    if name == "local_plumes":
+        # Nearer this photograph's own distances. Against the provider's
+        # stand-in of a few tens of metres the road in the foreground is
+        # three metres away, and a vent a metre wide fills the frame.
+        return {"depth_scale": 100.0}
+    if name == "focus_shift":
+        # An open lens: the stop is what the blur is the image of.
+        return {"aperture_diameter_range_mm": _span(rng, 1.8, 2.8)}
+    if name == "lens_tamper":
+        # One kind a cell, in turn.
+        return {"kinds": (("spray", "tape", "cover")[index % 3],)}
     if name == "housing_occluders":
         # Day (silhouettes) or night under the IR ring (glowing).
         return {"glow_range": (0.0, 0.0) if index % 2 == 0 else _span(rng, 0.8, 2.0)}
@@ -394,6 +465,36 @@ def _build(
         return TransmissionFaults(**kwargs)
     if name == "spider_web":
         return SpiderWeb(**kwargs)
+    if name == "night_insects":
+        return NightInsects(**kwargs)
+    if name == "ir_dome_glare":
+        return IrDomeGlare(**kwargs)
+    if name == "frost_on_glass":
+        return FrostOnGlass(**kwargs)
+    if name == "snow_on_housing":
+        return SnowOnHousing(**kwargs)
+    if name == "lens_tamper":
+        return LensTamper(**kwargs)
+    if name in ("foliage_intrusion", "night_foliage"):
+        return FoliageIntrusion(**kwargs)
+    if name == "ir_cut_filter_fault":
+        return IrCutFilterFault(**kwargs)
+    if name == "demosaic_artifacts":
+        return DemosaicArtifacts(**kwargs)
+    if name == "analog_video":
+        return AnalogVideoArtifacts(**kwargs)
+    if name == "focus_shift":
+        return FocusShift(**kwargs)
+    if name == "camera_vibration":
+        return CameraVibration(**kwargs)
+    if name == "on_screen_overlay":
+        return OnScreenOverlay(**kwargs)
+    if name == "ground_fog":
+        return GroundFog(depth_provider=provider, **kwargs)
+    if name == "local_plumes":
+        return LocalPlumes(depth_provider=provider, **kwargs)
+    if name == "heat_shimmer":
+        return HeatShimmer(depth_provider=provider, **kwargs)
     return RandomSnow(depth_provider=provider, **kwargs)
 
 
@@ -492,7 +593,7 @@ def main() -> None:
             # daylit frame they are as invisible as RandomRain's -- which is
             # the finding the transforms exist to answer. Showing them over a
             # sunny road would illustrate the opposite of what they do.
-            lamp_lit = name in ("night_rain", "night_snow", "night_droplets", "spider_web")
+            lamp_lit = name in LAMP_LIT
             base = _night_base(scene, depth_provider, level) if lamp_lit else scene
             if name in NEEDS_LAMPS:
                 base = _lamp_scene()

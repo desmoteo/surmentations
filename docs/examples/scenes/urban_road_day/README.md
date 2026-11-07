@@ -49,9 +49,29 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![wet_ground](effects/wet_ground.jpg) |
 
-| snow_cover | spider_web |  |
+| snow_cover | spider_web | night_insects |
 | --- | --- | --- |
-| ![snow_cover](effects/snow_cover.jpg) | ![spider_web](effects/spider_web.jpg) |  |
+| ![snow_cover](effects/snow_cover.jpg) | ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) |
+
+| ir_dome_glare | frost_on_glass | snow_on_housing |
+| --- | --- | --- |
+| ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![frost_on_glass](effects/frost_on_glass.jpg) | ![snow_on_housing](effects/snow_on_housing.jpg) |
+
+| lens_tamper | foliage_intrusion | ir_cut_filter_fault |
+| --- | --- | --- |
+| ![lens_tamper](effects/lens_tamper.jpg) | ![foliage_intrusion](effects/foliage_intrusion.jpg) | ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) |
+
+| demosaic_artifacts | analog_video | focus_shift |
+| --- | --- | --- |
+| ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) | ![focus_shift](effects/focus_shift.jpg) |
+
+| camera_vibration | on_screen_overlay | ground_fog |
+| --- | --- | --- |
+| ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) | ![ground_fog](effects/ground_fog.jpg) |
+
+| local_plumes | heat_shimmer | night_foliage |
+| --- | --- | --- |
+| ![local_plumes](effects/local_plumes.jpg) | ![heat_shimmer](effects/heat_shimmer.jpg) | ![night_foliage](effects/night_foliage.jpg) |
 
 Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
 
