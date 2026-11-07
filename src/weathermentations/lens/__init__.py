@@ -6,10 +6,19 @@ needs a depth map.
 """
 
 from weathermentations.lens.dirt import DirtSoil
+from weathermentations.lens.dome_glare import IrDomeGlare
 from weathermentations.lens.occluders import HousingOccluders
 from weathermentations.lens.source_glare import SourceGlare
 from weathermentations.lens.spider_web import SpiderWeb
 from weathermentations.lens.sun_flare import SunFlare
 from weathermentations.lens.water_droplets import WaterDroplets
 
-__all__ = ["DirtSoil", "HousingOccluders", "SourceGlare", "SpiderWeb", "SunFlare", "WaterDroplets"]
+__all__ = [
+    "DirtSoil",
+    "HousingOccluders",
+    "IrDomeGlare",
+    "SourceGlare",
+    "SpiderWeb",
+    "SunFlare",
+    "WaterDroplets",
+]

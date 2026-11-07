@@ -29,9 +29,9 @@ from weathermentations.camera import TemporalDenoiseArtifacts
 from weathermentations.camera import denoise as denoise_module
 from weathermentations.lens import DirtSoil, SpiderWeb, WaterDroplets
 from weathermentations.lens import water_droplets as droplets_module
-from weathermentations.lens.spider_web import splat_discs
 from weathermentations.utils import ground as ground_module
 from weathermentations.utils import overcast, photometry
+from weathermentations.utils.illuminator import splat_discs
 
 # Built and switched on: with WEATHERMENTATIONS_NATIVE=0 the library is there
 # and every comparison below would be numpy against itself.

@@ -7,6 +7,7 @@ What is on the glass, and what the lens does with bright light.
 
 weathermentations.lens
 weathermentations.lens.dirt
+weathermentations.lens.dome_glare
 weathermentations.lens.occluders
 weathermentations.lens.source_glare
 weathermentations.lens.spider_web

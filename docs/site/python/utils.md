@@ -12,6 +12,7 @@ weathermentations.utils.compositing
 weathermentations.utils.filters
 weathermentations.utils.grids
 weathermentations.utils.ground
+weathermentations.utils.illuminator
 weathermentations.utils.noise
 weathermentations.utils.overcast
 weathermentations.utils.photometry

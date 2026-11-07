@@ -1839,7 +1839,7 @@ static void WM_FN(droplet_composite)(
     }
 }
 
-/** spider_web.splat_discs: discs of light added into `total`, a
+/** illuminator.splat_discs: discs of light added into `total`, a
  * (height, width) field of doubles. Disc i is centred on (x[i], y[i]), pixel
  * centres being whole numbers, with an edge a pixel wide, and holds weight[i]
  * in all: a pixel gains its coverage, clip(r + 0.5 - distance, 0, 1), times

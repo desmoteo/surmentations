@@ -32,6 +32,7 @@ import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_fog import NightFog
+from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
@@ -48,6 +49,7 @@ from weathermentations.camera import (
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
+from weathermentations.lens.dome_glare import IrDomeGlare
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
 
@@ -110,6 +112,8 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     # severity does not control.
     "SunFlare": lambda k: SunFlare(p=1.0, flare_position=(0.75, 0.15), **k),
     "HousingOccluders": lambda k: HousingOccluders(p=1.0, **k),
+    "IrDomeGlare": lambda k: IrDomeGlare(p=1.0, **k),
+    "NightInsects": lambda k: NightInsects(p=1.0, **k),
     # Lit by the camera like the night rain and snow below, and measured on
     # the daylit reference for their reason: its light adds whatever is
     # behind it.

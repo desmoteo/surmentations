@@ -21,6 +21,7 @@ import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_fog import NightFog
+from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -35,6 +36,7 @@ from weathermentations.camera import (
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
+from weathermentations.lens.dome_glare import IrDomeGlare
 from weathermentations.scene import CastShadows
 
 # Scalars that are legitimately *not* ranges, with the reason each one is
@@ -137,6 +139,8 @@ def _transforms() -> dict[str, Any]:
         "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts(p=1.0),
         "NightIrMode": NightIrMode(depth_provider=provider, p=1.0),
         "HousingOccluders": HousingOccluders(p=1.0, insect_count_range=(2, 5)),
+        "IrDomeGlare": IrDomeGlare(p=1.0),
+        "NightInsects": NightInsects(p=1.0),
         "SpiderWeb": SpiderWeb(p=1.0),
         "CastShadows": CastShadows(depth_provider=provider, p=1.0),
     }

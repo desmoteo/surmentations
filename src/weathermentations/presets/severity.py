@@ -288,6 +288,19 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "distance_range_m": (_lerp(0.12, 0.04, t), _lerp(0.22, 0.09, t)),
                 "illuminator_gain_range": (_lerp(0.2, 0.5, t), _lerp(0.45, 1.5, t)),
             },
+            "NightInsects": {
+                # More of them, and a brighter lamp to show them by. Where
+                # they fly and how fast is theirs and does not change.
+                "insect_count_range": (int(_lerp(3, 10, t)), int(_lerp(6, 40, t))),
+                "dust_count_range": (int(_lerp(4, 15, t)), int(_lerp(12, 80, t))),
+                "illuminator_gain_range": (_lerp(1.0, 1.5, t), _lerp(2.0, 4.0, t)),
+            },
+            "IrDomeGlare": {
+                # A brighter reflection over a dirtier dome: more light in
+                # the ring and more of it spread as a veil.
+                "intensity_range": (_lerp(0.03, 0.3, t), _lerp(0.1, 0.9, t)),
+                "veil_range": (_lerp(0.0, 0.02, t), _lerp(0.005, 0.08, t)),
+            },
             "CastShadows": {
                 # At least two. A figure's shadow covers a fifth of what a
                 # crown's does, so a single draw can be one thin figure on

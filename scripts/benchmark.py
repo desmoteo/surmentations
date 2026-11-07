@@ -52,6 +52,7 @@ from weathermentations.atmosphere import (  # noqa: E402
     RandomRain,
     RandomSnow,
 )
+from weathermentations.atmosphere.night_insects import NightInsects  # noqa: E402
 from weathermentations.camera import (  # noqa: E402
     AcFlicker,
     ExposureTransient,
@@ -76,6 +77,7 @@ from weathermentations.lens import (  # noqa: E402
     SunFlare,
     WaterDroplets,
 )
+from weathermentations.lens.dome_glare import IrDomeGlare  # noqa: E402
 from weathermentations.scene import CastShadows  # noqa: E402
 
 DEPTH_FREE = (
@@ -139,6 +141,8 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "night_rain": NightRain(p=1.0),
         "night_snow": NightSnow(p=1.0),
         "spider_web": SpiderWeb(p=1.0),
+        "ir_dome_glare": IrDomeGlare(p=1.0),
+        "night_insects": NightInsects(p=1.0),
     }
     # Two ffmpeg subprocesses per call, so it is both the slowest transform
     # here and the one whose cost is least about this library.

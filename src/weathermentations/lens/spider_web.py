@@ -68,21 +68,13 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from weathermentations import _native
 from weathermentations.atmosphere.night_rain import _beam_profile
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
-from weathermentations.utils.filters import wide_blur
+from weathermentations.utils.illuminator import lamp_falloff, splat_discs, veiling_glare
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import focal_length_px
 
-# Where ``illuminator_gain_range`` is stated: a web's hub is typically this far
-# from the lens.
-_REFERENCE_DISTANCE_M = 0.1
-# Radius of the ring of LEDs around the lens. A thread on the axis at distance
-# z is sqrt(z^2 + ring^2) from each of them and that far off their beams,
-# which is what stops 1/z^2 from running away in the last centimetres.
-_RING_RADIUS_M = 0.025
 # The dome's glass: nothing is nearer the lens than this.
 _NEAREST_M = 0.012
 # A disc is not drawn smaller than this: a pixel is the least a point covers.
@@ -109,12 +101,6 @@ _KINDS = {
     "hub": (0.6, 0.25),
     "stray": (1.0, 1.0),
 }
-
-# Veiling glare: the scale of most of it and of its wide tail, as fractions
-# of the diagonal, and the tail's share.
-_GLARE_SIGMA = 0.006
-_HALO_SIGMA = 0.03
-_HALO_SHARE = 0.25
 
 Threads = dict[str, np.ndarray]
 
@@ -285,30 +271,6 @@ def _pieces(threads: Threads) -> Threads:
     }
 
 
-def lamp_falloff(distance_m: np.ndarray | float) -> np.ndarray:
-    """The illuminator's irradiance at a distance, relative to the reference distance.
-
-    A ring of LEDs ``_RING_RADIUS_M`` off the axis, facing forwards and
-    radiating as a Lambertian emitter does, by the cosine of the angle off
-    its own axis, onto silk that scatters the same from any side. A point on
-    the lens's axis at distance ``z`` is ``sqrt(z^2 + ring^2)`` from each LED
-    and ``atan(ring / z)`` off its beam, so it receives ``z / (z^2 +
-    ring^2)^1.5``: inverse square from afar, greatest about ``0.7 ring`` out
-    and falling to nothing at the glass. Scaled to ``1`` at
-    ``_REFERENCE_DISTANCE_M``.
-    """
-    distance = np.asarray(distance_m, dtype=np.float64)
-    ring = _RING_RADIUS_M**2
-
-    def received(z: np.ndarray | float) -> np.ndarray:
-        """Irradiance on the axis at ``z``, unscaled."""
-        value: np.ndarray = np.asarray(z / (z * z + ring) ** 1.5)
-        return value
-
-    falloff: np.ndarray = received(distance) / received(_REFERENCE_DISTANCE_M)
-    return falloff
-
-
 def _glints(
     rng: np.random.Generator,
     pieces: Threads,
@@ -420,64 +382,6 @@ def _glints(
         "radius": radius[owner].astype(np.float32),
         "weight": np.concatenate([band_weight, bead_weight]).astype(np.float32),
     }
-
-
-# Discs are drawn in batches of at most this many pixels, to bound the memory
-# a batch's patches take.
-_BATCH_PIXELS = 2_000_000
-
-
-def splat_discs(
-    canvas: np.ndarray, x: np.ndarray, y: np.ndarray, radius: np.ndarray, weight: np.ndarray
-) -> None:
-    """Add a field of discs of light to ``canvas``, ``(H, W)`` float32.
-
-    Disc ``i`` is centred on ``(x[i], y[i])``, pixel centres being whole
-    numbers, with radius ``radius[i]`` and an edge one pixel wide, and holds
-    ``weight[i]`` in all: every pixel it covers gains its coverage times
-    ``weight / (pi (r^2 + 1/12))``, the area of a disc with that edge. They
-    add, as light does, so where threads cross and where beads overlap the
-    picture is brighter.
-
-    The compiled kernel draws the field in one pass when it is installed.
-    This is the same picture without it, to the last bit: discs taken in
-    order of size, a batch of one patch size at a time, a pixel's share
-    worked out in float32 and summed in double.
-    """
-    if len(x) == 0:
-        return
-    height, width = canvas.shape
-    half = np.ceil(radius + np.float32(0.5)).astype(np.int64)
-    field = np.zeros((height, width), dtype=np.float64)
-    if _native.splat_discs(field, x, y, radius, weight, np.argsort(half, kind="stable")):
-        canvas += field.astype(np.float32)
-        return
-    total = field.reshape(-1)
-    column = np.rint(x).astype(np.int64)
-    row = np.rint(y).astype(np.int64)
-    peak = weight / (np.float32(np.pi) * (radius * radius + np.float32(1.0 / 12.0)))
-    for size in np.unique(half):
-        chosen = np.flatnonzero(half == size)
-        span = np.arange(-size, size + 1)
-        batch = max(1, _BATCH_PIXELS // (len(span) ** 2))
-        for begin in range(0, len(chosen), batch):
-            which = chosen[begin : begin + batch]
-            columns = column[which, None] + span[None, :]
-            rows = row[which, None] + span[None, :]
-            dx = columns.astype(np.float32) - x[which, None]
-            dy = rows.astype(np.float32) - y[which, None]
-            distance = np.sqrt((dx * dx)[:, None, :] + (dy * dy)[:, :, None])
-            reach = radius[which, None, None] + np.float32(0.5)
-            cover = np.clip(reach - distance, np.float32(0.0), np.float32(1.0))
-            cover *= peak[which, None, None]
-            inside = ((rows >= 0) & (rows < height))[:, :, None] & (
-                (columns >= 0) & (columns < width)
-            )[:, None, :]
-            index = (rows[:, :, None] * width + columns[:, None, :])[inside]
-            # In place, disc by disc and pixel by pixel in this order: the
-            # sum a pixel ends with depends on it in the last bit.
-            np.add.at(total, index, cover[inside].astype(np.float64))
-    canvas += field.astype(np.float32)
 
 
 def _disc_kernel(radius_px: float) -> np.ndarray:
@@ -934,19 +838,7 @@ class SpiderWeb(WeatherTransform):
                 lit[rows, columns] *= 1.0 - cover
                 lit[rows, columns] += cover * np.float32(spider["brightness"])
 
-        if glare > 0.0:
-            # Veiling glare, on the unclipped light: what spills is a share
-            # of what the web returned, not of what the sensor could record.
-            # Most of it stays close; a little goes wide, which is nothing
-            # around a thread and a halo around a body forty times as bright.
-            diagonal = float(np.hypot(width, height))
-            near = wide_blur(lit, max(1.0, _GLARE_SIGMA * diagonal))
-            wide = wide_blur(lit, max(1.0, _HALO_SIGMA * diagonal))
-            near *= np.float32((1.0 - _HALO_SHARE) * glare)
-            wide *= np.float32(_HALO_SHARE * glare)
-            lit *= np.float32(1.0 - glare)
-            lit += near
-            lit += wide
+        lit = veiling_glare(lit, glare)
 
         lit *= beam
         # Nothing here is negative, so there is nothing to clip from below;

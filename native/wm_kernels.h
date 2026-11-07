@@ -201,7 +201,7 @@ typedef struct {
         float *out, const float *base, const float *scattered, const float *fraction,
         const float *layers, ptrdiff_t pixels);
 
-    /** spider_web.splat_discs: `count` discs of light, taken in `order`,
+    /** illuminator.splat_discs: `count` discs of light, taken in `order`,
      * added into `total`, (height, width) doubles. Disc i is centred on
      * (x[i], y[i]) with radius[i] and an edge a pixel wide, and holds
      * weight[i] in all. The numpy code's arithmetic, float for a pixel's

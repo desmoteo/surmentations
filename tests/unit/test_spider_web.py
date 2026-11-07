@@ -14,13 +14,10 @@ import pytest
 
 from weathermentations import mode
 from weathermentations.lens import SpiderWeb
-from weathermentations.lens.spider_web import (
-    _NEAREST_M,
-    _REFERENCE_DISTANCE_M,
-    _RING_RADIUS_M,
-    _glints,
-    _orb_web,
-    _pieces,
+from weathermentations.lens.spider_web import _NEAREST_M, _glints, _orb_web, _pieces
+from weathermentations.utils.illuminator import (
+    REFERENCE_DISTANCE_M,
+    RING_RADIUS_M,
     lamp_falloff,
     splat_discs,
 )
@@ -81,17 +78,17 @@ def _night() -> np.ndarray:
 
 
 def test_the_lamp_is_inverse_square_far_away_and_dark_at_the_glass() -> None:
-    assert lamp_falloff(_REFERENCE_DISTANCE_M) == pytest.approx(1.0)
+    assert lamp_falloff(REFERENCE_DISTANCE_M) == pytest.approx(1.0)
     assert lamp_falloff(2.0) / lamp_falloff(1.0) == pytest.approx(0.25, rel=2e-3)
     assert lamp_falloff(0.0) == 0.0
     near = np.linspace(0.001, 0.1, 2000)
     brightest = near[np.argmax(lamp_falloff(near))]
-    assert brightest == pytest.approx(_RING_RADIUS_M / math.sqrt(2.0), rel=0.01)
+    assert brightest == pytest.approx(RING_RADIUS_M / math.sqrt(2.0), rel=0.01)
 
 
 def test_a_bare_thread_at_the_reference_distance_peaks_at_the_gain() -> None:
     for gain in (0.3, 1.7):
-        lit, _ = _drawn(_thread(_REFERENCE_DISTANCE_M), gain=gain)
+        lit, _ = _drawn(_thread(REFERENCE_DISTANCE_M), gain=gain)
         across = lit[:, WIDTH // 2 - 40 : WIDTH // 2 + 40].max(axis=0)
         assert across.mean() == pytest.approx(gain, rel=0.04)
 
