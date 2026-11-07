@@ -67,6 +67,21 @@ def test_what_is_not_covered_is_untouched() -> None:
         assert np.array_equal(out[clear], image[clear])
 
 
+def test_tape_lets_light_through_and_no_image() -> None:
+    image = _scene()
+    transform = LensTamper(
+        p=1.0, kinds=("tape",), coverage_range=(1.0, 1.0), opacity_range=(0.5, 0.5)
+    )
+    transform.set_random_seed(4)
+    params = transform.get_params_dependent_on_data({"shape": image.shape}, {})
+    out = transform.apply(image, **params)
+    under = params["extent"] > 0.99
+    assert under.mean() > 0.2
+    rows = np.nonzero(under.any(axis=1))[0]
+    strip = out[rows[len(rows) // 2]][under[rows[len(rows) // 2]]]
+    assert float(np.abs(np.diff(strip.astype(np.float32), axis=0)).mean()) < 0.15 * _detail(image)
+
+
 def test_only_the_kinds_asked_for_are_drawn() -> None:
     from weathermentations.diagnostics import recording
 
@@ -99,7 +114,7 @@ def test_less_opaque_lets_more_of_the_scene_through() -> None:
     details = []
     for opacity in (1.0, 0.6):
         transform = LensTamper(
-            p=1.0, kinds=("tape",), coverage_range=(1.0, 1.0), opacity_range=(opacity, opacity)
+            p=1.0, kinds=("spray",), coverage_range=(1.0, 1.0), opacity_range=(opacity, opacity)
         )
         transform.set_random_seed(4)
         details.append(_detail(transform(image=image)["image"]))

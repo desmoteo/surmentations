@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from weathermentations.lens import FoliageIntrusion
 
@@ -84,12 +85,14 @@ def test_under_the_lamp_leaves_are_bright_by_their_own_distance() -> None:
     night = np.full((*SHAPE, 3), 15, dtype=np.uint8)
 
     def brightness(distance: float) -> float:
-        """Mean level of the leaves of a branch at a distance, under the ring."""
+        """Mean level of the leaves of a branch at a distance, under an even beam."""
         transform = FoliageIntrusion(
             p=1.0,
             distance_range_m=(distance, distance),
             leaf_light_range=(0.0, 0.0),
             illuminator_gain_range=(0.2, 0.2),
+            beam_falloff_range=(0.0, 0.0),
+            glare_range=(0.0, 0.0),
             reach_range=(0.8, 0.8),
         )
         transform.set_random_seed(1)
@@ -97,8 +100,47 @@ def test_under_the_lamp_leaves_are_bright_by_their_own_distance() -> None:
         out = transform.apply(night, **params)
         return float(out[params["cover"] > 0.95].mean())
 
-    assert brightness(0.25) == 255.0
+    assert brightness(0.25) > 150.0
     assert 15.0 < brightness(1.2) < 0.7 * brightness(0.25)
+
+
+def test_leaves_under_the_lamp_are_not_all_one_grey() -> None:
+    params = _params(
+        2,
+        distance_range_m=(0.3, 0.3),
+        leaf_light_range=(0.0, 0.0),
+        illuminator_gain_range=(0.05, 0.05),
+        beam_falloff_range=(0.0, 0.0),
+        glare_range=(0.0, 0.0),
+        aperture_diameter_range_mm=(0.5, 0.5),
+    )
+    lit = params["lamp"][params["cover"] > 0.98]
+    # Each leaf faces the lamp its own way, and has a midrib and a fold.
+    assert float(lit.std() / lit.mean()) > 0.15
+
+
+def test_a_leaf_is_drawn_where_it_is_put_as_long_as_it_is_turned() -> None:
+    from weathermentations.lens.foliage import paste_leaf
+
+    def drawn(turned: tuple[float, float]) -> np.ndarray:
+        """Cover of one leaf 60 px long pointing right from (40, 60)."""
+        layers = {
+            "cover": np.zeros((120, 160), dtype=np.float32),
+            "colour": np.zeros((120, 160, 3), dtype=np.float32),
+            "lamp": np.zeros((120, 160), dtype=np.float32),
+        }
+        colour = np.array([0.1, 0.2, 0.05], dtype=np.float32)
+        paste_leaf(layers, np.array([40.0, 60.0]), 0.0, 60.0, turned, colour, 1.0)
+        return layers["cover"]
+
+    whole = drawn((1.0, 1.0))
+    columns = np.nonzero(whole.max(axis=0) > 0.5)[0]
+    rows = np.nonzero(whole.max(axis=1) > 0.5)[0]
+    assert columns.min() == pytest.approx(41, abs=3) and columns.max() == pytest.approx(99, abs=3)
+    assert rows.mean() == pytest.approx(60.0, abs=1.5)
+    assert rows.max() - rows.min() == pytest.approx(0.45 * 60.0, abs=6)
+    edge_on = drawn((1.0, 0.3))
+    assert edge_on.sum() == pytest.approx(0.3 * whole.sum(), rel=0.25)
 
 
 def test_no_branches_leave_the_frame_alone() -> None:
@@ -113,5 +155,5 @@ def test_cover_and_colour_stay_within_what_can_be() -> None:
         params = _params(seed, branch_count_range=(3, 3))
         assert 0.0 <= params["cover"].min() and params["cover"].max() <= 1.0
         # Premultiplied: a pixel's colour is at most its cover times the
-        # brightest a leaf can be.
-        assert (params["reflectance"].max(axis=2) <= params["cover"] * 0.2 + 1e-4).all()
+        # brightest a leaf can be, lit through and on its midrib.
+        assert (params["reflectance"].max(axis=2) <= params["cover"] * 0.7 + 1e-3).all()

@@ -28,6 +28,17 @@ night picture, by the lamp's inverse square at its own distance.
 **It moves.** Wind sways it during the exposure, which at night is long,
 so the leaves are smeared along the sway by its speed times the shutter
 time, as seen from where they are.
+
+**A leaf is not a green shape.** What makes foliage read as foliage, at
+the few pixels of blur it has by day, is that no two leaves look alike.
+Each is turned its own way, so it is foreshortened along or across its
+midrib; each is either catching light on the side the camera sees or
+letting it through from behind, which are different colours, a dull blue
+green and a bright yellow green; it has a midrib and veins, and one half
+of the blade a little darker than the other; and the leaves in front
+shade the ones behind. Under the lamp the same turning decides how bright
+a leaf is, by the cosine of how far it faces away, and the nearer leaves
+of a branch are brighter than the further ones.
 """
 
 from __future__ import annotations
@@ -41,122 +52,218 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
+from weathermentations.atmosphere.night_rain import _beam_profile
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 from weathermentations.lens.water_droplets import _aperture_blur
 from weathermentations.utils.color import illuminant_radiance_linear
 from weathermentations.utils.compositing import directional_blur_kernel
-from weathermentations.utils.illuminator import lamp_falloff
+from weathermentations.utils.illuminator import lamp_falloff, veiling_glare
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import focal_length_px
 
-# A leaf in visible light, linear: green, and dark.
-_LEAF_ALBEDO = np.array([0.055, 0.13, 0.035], dtype=np.float32)
+# A leaf seen by the light it reflects, and by the light that comes through
+# it, in linear light: a dull blue green, and a bright yellow green.
+_LEAF_REFLECTS = np.array([0.045, 0.105, 0.035], dtype=np.float32)
+_LEAF_PASSES = np.array([0.24, 0.42, 0.05], dtype=np.float32)
 # Bark.
 _TWIG_ALBEDO = np.array([0.06, 0.05, 0.04], dtype=np.float32)
 # What leaves and bark return of the near infrared.
 _LEAF_NIR, _TWIG_NIR = 0.5, 0.25
 # Where ``illuminator_gain_range`` is stated.
 _GAIN_DISTANCE_M = 1.0
+# How much a leaf darkens the foliage just behind and below it.
+_SHADE = 0.35
+# The leaf every leaf is drawn from: this long, in pixels, and half as wide.
+_LEAF_PX = 128
 
 
-def _leaf(centre: np.ndarray, along: np.ndarray, length: float) -> np.ndarray:
-    """The outline of a leaf: pointed at both ends, a third as wide as it is long."""
-    across = np.array([-along[1], along[0]])
-    t = np.linspace(0.0, 1.0, 9)
-    # Widest a little before the middle, as most leaves are.
-    half_width = 0.33 * length * np.sin(np.pi * t**0.8) ** 0.8
-    spine = centre[None, :] + (t[:, None] - 0.5) * length * along[None, :]
-    outline: np.ndarray = np.concatenate(
-        [spine + half_width[:, None] * across, (spine - half_width[:, None] * across)[::-1]]
+def _leaf_template() -> tuple[np.ndarray, np.ndarray]:
+    """One leaf, tip to the right: how much of each pixel it covers, and its markings.
+
+    ``(H, W)`` each. The outline is ovate, widest before the middle and
+    pointed at the tip. The markings are a factor about one on its colour:
+    a pale midrib, fainter veins running forward from it, one half of the
+    blade a little darker than the other, and the edge a little darker
+    than the middle.
+    """
+    width, height = _LEAF_PX, _LEAF_PX // 2
+    u = (np.arange(width, dtype=np.float32)[None, :] + 0.5) / width
+    v = ((np.arange(height, dtype=np.float32)[:, None] + 0.5) / height - 0.5) * 2.0
+    half_width = np.sin(np.pi * u**0.72) ** 0.85 * (1.0 - 0.25 * u)
+    across = np.abs(v) / np.maximum(half_width, 1e-3)
+    cover = np.clip((1.0 - across) * half_width * height * 0.25, 0.0, 1.0)
+
+    midrib = np.exp(-((v / 0.05) ** 2))
+    # Veins leave the midrib every eighth of the leaf and run forwards.
+    along = (u * 8.0 - np.abs(v) * 2.2) % 1.0
+    veins = np.exp(-((np.minimum(along, 1.0 - along) / 0.09) ** 2)) * (1.0 - midrib)
+    fold = np.where(v > 0.0, 0.86, 1.0)
+    markings = fold * (1.0 - 0.18 * across**2) * (1.0 + 0.3 * midrib + 0.1 * veins)
+    return cover.astype(np.float32), markings.astype(np.float32)
+
+
+_LEAF_COVER, _LEAF_MARKINGS = _leaf_template()
+
+
+def paste_leaf(
+    layers: dict[str, np.ndarray],
+    base: np.ndarray,
+    direction: float,
+    length_px: float,
+    turned: tuple[float, float],
+    colour: np.ndarray,
+    lamp: float,
+) -> None:
+    """Draw one leaf over what is already in ``layers``, in place.
+
+    Its stalk end is at ``base`` (x, y) and it points along ``direction``,
+    ``length_px`` long before it is ``turned``: foreshortened to that share
+    of its length and of its width, each 0 to 1. ``layers`` holds
+    ``cover``, ``colour`` (premultiplied by cover) and ``lamp`` (likewise).
+    The leaf first shades whatever foliage is just below it, then covers
+    what is behind it.
+    """
+    height, width = layers["cover"].shape
+    long, wide = length_px * turned[0], 0.5 * length_px * turned[1]
+    cos, sin = math.cos(direction), math.sin(direction)
+    reach = int(math.ceil(max(long, wide))) + 3
+    centre = base + 0.5 * long * np.array([cos, sin])
+    left, top = int(centre[0]) - reach, int(centre[1]) - reach
+    x0, y0, x1, y1 = (
+        max(0, left),
+        max(0, top),
+        min(width, left + 2 * reach),
+        min(height, top + 2 * reach),
     )
-    return outline
+    if x1 <= x0 or y1 <= y0 or long < 1.0 or wide < 0.5:
+        return
+    # Template pixels to the patch: scale, turn, and put the stalk at `base`.
+    scale_x, scale_y = long / _LEAF_PX, wide / (_LEAF_PX // 2)
+    matrix = np.array(
+        [
+            [cos * scale_x, -sin * scale_y, base[0] - x0 + sin * scale_y * (_LEAF_PX // 4)],
+            [sin * scale_x, cos * scale_y, base[1] - y0 - cos * scale_y * (_LEAF_PX // 4)],
+        ],
+        dtype=np.float32,
+    )
+    size = (x1 - x0, y1 - y0)
+    cover = cv2.warpAffine(_LEAF_COVER, matrix, size, flags=cv2.INTER_LINEAR)
+    if float(cover.max()) <= 0.0:
+        return
+    markings = cv2.warpAffine(_LEAF_MARKINGS, matrix, size, flags=cv2.INTER_LINEAR, borderValue=1.0)
+    region = (slice(y0, y1), slice(x0, x1))
+    # The shadow it casts on the foliage behind: its own outline, a little
+    # way down. Empty pixels hold no colour, so only foliage is darkened.
+    drop = max(1, int(0.1 * length_px))
+    shadow = np.zeros_like(cover)
+    shadow[drop:] = cover[:-drop]
+    dim = 1.0 - _SHADE * shadow
+    layers["colour"][region] *= dim[..., None]
+    layers["lamp"][region] *= dim
+
+    clear = 1.0 - cover
+    layers["colour"][region] = layers["colour"][region] * clear[..., None] + (
+        (cover * markings)[..., None] * colour[None, None, :]
+    )
+    layers["lamp"][region] = layers["lamp"][region] * clear + cover * markings * lamp
+    layers["cover"][region] = layers["cover"][region] * clear + cover
 
 
 def draw_branch(
     rng: np.random.Generator,
-    layer: np.ndarray,
-    cover: np.ndarray,
+    layers: dict[str, np.ndarray],
     *,
     leaf_px: float,
     reach_px: float,
     light: tuple[float, float],
-    leaf_colour: np.ndarray,
-    twig_colour: np.ndarray,
+    lamp: float,
 ) -> int:
-    """Draw one branch into ``layer`` (colour) and ``cover`` (how much it hides).
+    """Draw one branch into ``layers``, as :func:`paste_leaf` takes them, in place.
 
     It enters from the top or a side and runs ``reach_px`` into the frame,
-    bending, with twigs off it to either side and leaves along all of it,
-    ``leaf_px`` long. Each leaf's colour is ``leaf_colour`` times a draw
-    from ``light``, a ``(low, high)`` pair: leaves are not evenly lit.
-    Returns how many leaves were drawn.
+    drooping, with twigs off it to either side and leaves on stalks along
+    all of them, ``leaf_px`` long. ``light`` is the range a leaf's daylight
+    is drawn from and ``lamp`` what a leaf facing the infrared ring
+    returns of it. Returns how many leaves were drawn.
     """
-    height, width = cover.shape
+    height, width = layers["cover"].shape
     side = rng.choice(4, p=[0.5, 0.2, 0.2, 0.1])
     if side == 0:
-        start, inward = np.array([rng.uniform(0, width), -leaf_px]), 0.5 * math.pi
+        start, inward = np.array([rng.uniform(0, width), -0.5 * leaf_px]), 0.5 * math.pi
     elif side == 1:
-        start, inward = np.array([-leaf_px, rng.uniform(0, 0.7 * height)]), 0.0
+        start, inward = np.array([-0.5 * leaf_px, rng.uniform(0, 0.7 * height)]), 0.0
     elif side == 2:
-        start, inward = np.array([width + leaf_px, rng.uniform(0, 0.7 * height)]), math.pi
+        start, inward = np.array([width + 0.5 * leaf_px, rng.uniform(0, 0.7 * height)]), math.pi
     else:
-        start, inward = np.array([rng.uniform(0, width), height + leaf_px]), -0.5 * math.pi
+        start, inward = np.array([rng.uniform(0, width), height + 0.5 * leaf_px]), -0.5 * math.pi
     heading = inward + rng.uniform(-0.6, 0.6)
+    # Whether this branch is seen against the light, its leaves lit through,
+    # or with the light on the side the camera sees.
+    against_light = rng.uniform(0.0, 1.0)
 
     def twig(origin: np.ndarray, direction: float, length: float, thickness: float) -> list:
-        """A bending twig as a list of points, drawn into both layers."""
+        """A drooping twig as a list of points, drawn into the layers, thinner along its length."""
         points = [origin]
-        steps = max(2, int(length / (0.8 * leaf_px)))
-        for _ in range(steps):
-            direction += rng.uniform(-0.25, 0.25)
-            step = (length / steps) * np.array([math.cos(direction), math.sin(direction)])
-            points.append(points[-1] + step)
-        line = np.rint(points).astype(np.int32)
-        width_px = max(1, int(round(thickness)))
-        cv2.polylines(cover, [line], False, 1.0, width_px, cv2.LINE_AA)
-        cv2.polylines(layer, [line], False, twig_colour.tolist(), width_px, cv2.LINE_AA)
+        steps = max(3, int(length / (0.6 * leaf_px)))
+        for step in range(steps):
+            # Bends at random, and a little further downwards at every step.
+            direction += rng.uniform(-0.2, 0.2) + 0.12 * math.cos(direction)
+            stride = (length / steps) * np.array([math.cos(direction), math.sin(direction)])
+            points.append(points[-1] + stride)
+            a = tuple(int(round(v)) for v in points[-2])
+            b = tuple(int(round(v)) for v in points[-1])
+            width_px = max(1, int(round(thickness * (1.0 - 0.7 * step / steps))))
+            bark = _TWIG_ALBEDO * float(np.mean(light))
+            for name, value in (
+                ("cover", 1.0),
+                ("lamp", lamp * _TWIG_NIR / _LEAF_NIR),
+            ):
+                cv2.line(layers[name], a, b, value, width_px, cv2.LINE_AA)
+            cv2.line(layers["colour"], a, b, bark.tolist(), width_px, cv2.LINE_AA)
         return points
 
-    stems = [twig(start, heading, reach_px, 0.09 * leaf_px)]
-    for point in stems[0][1:-1]:
-        if rng.uniform() < 0.7:
-            turn = rng.choice([-1.0, 1.0]) * rng.uniform(0.5, 1.1)
+    stems = [twig(start, heading, reach_px, 0.1 * leaf_px)]
+    for index, point in enumerate(stems[0][1:-1], start=1):
+        if rng.uniform() < 0.75:
+            turn = (1.0 if index % 2 else -1.0) * rng.uniform(0.5, 1.0)
             stems.append(
                 twig(point, heading + turn, reach_px * rng.uniform(0.2, 0.5), 0.05 * leaf_px)
             )
 
-    leaves = 0
+    leaves = []
     for stem in stems:
         for index, point in enumerate(stem[1:], start=1):
-            for sign in (-1.0, 1.0):
-                if rng.uniform() < 0.25:
+            before = stem[index - 1]
+            run = math.atan2(point[1] - before[1], point[0] - before[0])
+            # One leaf to either side of each joint, and one at the tip.
+            sides = [-1.0, 1.0] + ([0.0] if index == len(stem) - 1 else [])
+            for sign in sides:
+                if sign and rng.uniform() < 0.15:
                     continue
-                before = stem[index - 1]
-                run = math.atan2(point[1] - before[1], point[0] - before[0])
-                angle = run + sign * rng.uniform(0.5, 1.2)
-                direction = np.array([math.cos(angle), math.sin(angle)])
-                length = leaf_px * rng.uniform(0.7, 1.2)
-                outline = np.rint(_leaf(point + 0.55 * length * direction, direction, length))
-                colour = leaf_colour * rng.uniform(*light)
-                points = outline.astype(np.int32)
-                cv2.fillPoly(cover, [points], 1.0, cv2.LINE_AA)
-                cv2.fillPoly(layer, [points], colour.tolist(), cv2.LINE_AA)
-                # One half of the blade a little darker than the other, and
-                # a paler midrib: a leaf is folded along it, not flat.
-                half = len(points) // 2
-                fold = np.concatenate([points[:half], points[[half - 1, 0]]])
-                cv2.fillPoly(layer, [fold], (colour * rng.uniform(0.6, 0.9)).tolist(), cv2.LINE_AA)
-                cv2.line(
-                    layer,
-                    tuple(int(v) for v in points[0]),
-                    tuple(int(v) for v in points[half - 1]),
-                    (colour * 1.5).tolist(),
-                    max(1, int(0.03 * length)),
-                    cv2.LINE_AA,
+                leaves.append(
+                    (point, run + sign * rng.uniform(0.5, 1.1) + rng.uniform(-0.15, 0.15))
                 )
-                leaves += 1
-    return leaves
+    for index in rng.permutation(len(leaves)):
+        point, angle = leaves[index]
+        # A leaf hangs: its direction is pulled towards straight down.
+        angle += 0.25 * math.cos(angle)
+        turned = (float(rng.uniform(0.55, 1.0)), float(rng.uniform(0.3, 1.0)))
+        lit_through = float(np.clip(against_light + rng.normal(0.0, 0.3), 0.0, 1.0))
+        colour = (1.0 - lit_through) * _LEAF_REFLECTS + lit_through * _LEAF_PASSES
+        colour = colour * rng.uniform(*light) * rng.uniform(0.9, 1.1, 3).astype(np.float32)
+        stalk = 0.12 * leaf_px * np.array([math.cos(angle), math.sin(angle)])
+        paste_leaf(
+            layers,
+            point + stalk,
+            angle,
+            leaf_px * float(rng.uniform(0.7, 1.2)),
+            turned,
+            colour.astype(np.float32),
+            # Facing the lamp squarely it returns the most; turned away, less.
+            lamp * turned[0] * turned[1] * float(rng.uniform(0.8, 1.25)),
+        )
+    return len(leaves)
 
 
 class FoliageIntrusion(WeatherTransform):
@@ -185,6 +292,9 @@ class FoliageIntrusion(WeatherTransform):
         illuminator_gain_range: radiance of a white surface one metre from
             the infrared ring, in units of full scale; leaves return half
             of it. Zero by day.
+        beam_falloff_range: how sharply the ring's beam dims off-axis.
+        glare_range: fraction of the lamp-lit foliage's light that the dome
+            and the lens scatter into a glow around it.
         horizontal_fov_range_deg: field of view, which projects metres to
             pixels.
         aperture_diameter_range_mm: the lens's stop, which sets the blur.
@@ -242,6 +352,16 @@ class FoliageIntrusion(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 50.0)),
         ]
+        beam_falloff_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 10.0)),
+        ]
+        glare_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
         horizontal_fov_range_deg: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -268,6 +388,8 @@ class FoliageIntrusion(WeatherTransform):
         sway_speed_range_m_s: tuple[float, float] = (0.0, 0.4),
         exposure_time_range: tuple[float, float] = (0.001, 0.04),
         illuminator_gain_range: tuple[float, float] = (0.0, 0.0),
+        beam_falloff_range: tuple[float, float] = (0.6, 2.2),
+        glare_range: tuple[float, float] = (0.05, 0.25),
         horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
         aperture_diameter_range_mm: tuple[float, float] = (0.9, 2.6),
         focus_distance_range_m: tuple[float, float] = (8.0, 40.0),
@@ -283,6 +405,8 @@ class FoliageIntrusion(WeatherTransform):
         self.sway_speed_range_m_s = sway_speed_range_m_s
         self.exposure_time_range = exposure_time_range
         self.illuminator_gain_range = illuminator_gain_range
+        self.beam_falloff_range = beam_falloff_range
+        self.glare_range = glare_range
         self.horizontal_fov_range_deg = horizontal_fov_range_deg
         self.aperture_diameter_range_mm = aperture_diameter_range_mm
         self.focus_distance_range_m = focus_distance_range_m
@@ -319,33 +443,41 @@ class FoliageIntrusion(WeatherTransform):
         for distance in sorted(
             (self.py_random.uniform(*self.distance_range_m) for _ in range(branches)), reverse=True
         ):
-            one = np.zeros((height, width), dtype=np.float32)
-            colour = np.zeros((height, width, 3), dtype=np.float32)
+            layers = {
+                "cover": np.zeros((height, width), dtype=np.float32),
+                "colour": np.zeros((height, width, 3), dtype=np.float32),
+                "lamp": np.zeros((height, width), dtype=np.float32),
+            }
             leaf_px = self.py_random.uniform(*self.leaf_length_range_mm) * 1e-3 * focal / distance
+            lit = gain * _LEAF_NIR * float(lamp_falloff(distance) / lamp_falloff(_GAIN_DISTANCE_M))
             leaves += draw_branch(
                 rng,
-                colour,
-                one,
+                layers,
                 leaf_px=leaf_px,
                 reach_px=self.py_random.uniform(*self.reach_range) * min(height, width),
                 light=self.leaf_light_range,
-                leaf_colour=_LEAF_ALBEDO,
-                twig_colour=_TWIG_ALBEDO * float(np.mean(self.leaf_light_range)),
+                lamp=lit,
             )
-            # Premultiplied, so that blurring mixes colour by coverage.
-            colour *= one[..., None]
+            # Colour and lamp are premultiplied by cover, so that blurring
+            # mixes them by how much of each pixel is leaf.
             blur = aperture_m * focal * abs(1.0 / distance - 1.0 / focus)
             smear = int(round(focal * sway * exposure / distance))
-            stack = np.dstack([colour, one])
+            stack = np.dstack([layers["colour"], layers["cover"]])
             stack = _aperture_blur(stack, blur)
+            lit_layer = _aperture_blur(layers["lamp"], blur)
             if smear >= 3:
-                stack = cv2.filter2D(stack, -1, directional_blur_kernel(smear, sway_angle))
+                kernel = directional_blur_kernel(smear, sway_angle)
+                stack = cv2.filter2D(stack, -1, kernel)
+                lit_layer = cv2.filter2D(lit_layer, -1, kernel)
             one = np.clip(stack[..., 3], 0.0, 1.0)
-            lit = gain * _LEAF_NIR * float(lamp_falloff(distance) / lamp_falloff(_GAIN_DISTANCE_M))
             reflectance = reflectance * (1.0 - one[..., None]) + stack[..., :3]
-            lamp = lamp * (1.0 - one) + one * lit
+            lamp = lamp * (1.0 - one) + lit_layer
             cover = cover + one * (1.0 - cover)
             distances.append(distance)
+
+        if gain > 0.0:
+            lamp = veiling_glare(lamp, self.py_random.uniform(*self.glare_range))
+            lamp *= _beam_profile(height, width, self.py_random.uniform(*self.beam_falloff_range))
 
         record_draw(
             branch_count=branches,

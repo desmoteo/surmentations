@@ -13,12 +13,15 @@ the edge and on whatever dirt is there and spreads inwards, so the frost is
 a border whose inner edge is ragged, with the middle of the view the last
 to go.
 
-**It is feathered.** Ice on glass grows as fern-like plumes along the
-direction it is spreading, so the border is not an even grey but a field of
-streaks pointing at the centre. They are on the glass, centimetres inside
-the lens's near focus limit, so they are seen blurred: what survives of a
-crystal a tenth of a millimetre wide is the texture of the plumes, not
-their edges.
+**It is feathered.** Ice on glass grows as ferns: a stem along the
+direction it is spreading, side branches off it at sixty degrees, the
+angle of the ice crystal's own lattice, and smaller branches off those.
+So the border is not an even grey but a field of fronds pointing inwards,
+longest where they started first. They are on the glass, centimetres
+inside the lens's near focus limit, which does two things at once: it
+magnifies them, a frond a centimetre long being a fifth of the frame, and
+it blurs them by the aperture's disc. What is seen is the frond's shape,
+soft, without the crystal's edges.
 
 **It scatters; it does not absorb.** Ice is clear. A layer of small
 crystals passes nearly all the light that reaches it, in the wrong
@@ -32,6 +35,7 @@ deposit that has no colour of its own.
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any
 
 import cv2
@@ -52,9 +56,95 @@ from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 # how much of it: the rest is scattered back out of the glass.
 _DIFFUSE_SIGMA = 0.08
 _DIFFUSE_SHARE = 0.7
-# The plumes are drawn in polar coordinates, this many samples round the
-# frame by this many from rim to centre, and wound back onto the frame.
-_PLUME_TURN, _PLUME_DEPTH = 720, 96
+# The angle between a frond's stem and its branches: the ice lattice's.
+_BRANCH_ANGLE = math.radians(60.0)
+# Fronds are drawn on a canvas this many times smaller than the frame and
+# enlarged: they are blurred by the lens afterwards, by more than that.
+_FROND_REDUCTION = 2
+
+
+def _frond(
+    canvas: np.ndarray,
+    rng: np.random.Generator,
+    start: np.ndarray,
+    direction: float,
+    length: float,
+    thickness: float,
+    depth: int,
+) -> None:
+    """Draw one frond into ``canvas``, in place: a stem with branches either side, and theirs.
+
+    The stem runs ``length`` from ``start`` along ``direction``, bending a
+    little, and thins towards its tip. Branches leave it at sixty degrees,
+    alternately, shorter the further along they start, and each is a
+    frond of its own, ``depth`` levels down.
+    """
+    steps = max(2, int(length / max(2.8 * thickness, 3.0)))
+    stride = length / steps
+    point = start.astype(np.float64)
+    for step in range(steps):
+        direction += rng.uniform(-0.06, 0.06)
+        following = point + stride * np.array([math.cos(direction), math.sin(direction)])
+        along = step / steps
+        width = max(1, int(round(thickness * (1.0 - 0.6 * along))))
+        cv2.line(
+            canvas,
+            (int(round(point[0])), int(round(point[1]))),
+            (int(round(following[0])), int(round(following[1]))),
+            1.0,
+            width,
+            cv2.LINE_AA,
+        )
+        if depth > 0 and step > 0:
+            side = 1.0 if step % 2 else -1.0
+            reach = length * (0.45 - 0.4 * along) * rng.uniform(0.6, 1.1)
+            if reach > 3.0 * thickness:
+                _frond(
+                    canvas,
+                    rng,
+                    following,
+                    direction + side * _BRANCH_ANGLE,
+                    reach,
+                    max(1.0, 0.6 * thickness),
+                    depth - 1,
+                )
+        point = following
+
+
+def fronds(
+    rng: np.random.Generator, height: int, width: int, *, reach: float, scale: float
+) -> np.ndarray:
+    """Ice ferns grown in from the frame's edge: where there is crystal, ``(H, W)`` 0 to 1.
+
+    Stems start at points round the rim and head for the centre, each as
+    long as ``reach`` of the way there, more or less. ``scale`` is the
+    thickness of a stem at its root as a fraction of the frame's diagonal,
+    which sets the size of everything else about a frond.
+    """
+    small_h, small_w = max(8, height // _FROND_REDUCTION), max(8, width // _FROND_REDUCTION)
+    diagonal = math.hypot(small_h, small_w)
+    thickness = max(1.0, scale * diagonal)
+    canvas = np.zeros((small_h, small_w), dtype=np.float32)
+    centre = np.array([small_w / 2.0, small_h / 2.0])
+    # One stem every twenty-odd thicknesses of rim, on average: far enough
+    # apart that the glass shows between their branches.
+    perimeter = 2.0 * (small_h + small_w)
+    for _ in range(max(6, int(perimeter / (24.0 * thickness)))):
+        along = rng.uniform(0.0, perimeter)
+        if along < small_w:
+            start = np.array([along, 0.0])
+        elif along < small_w + small_h:
+            start = np.array([small_w - 1.0, along - small_w])
+        elif along < 2 * small_w + small_h:
+            start = np.array([along - small_w - small_h, small_h - 1.0])
+        else:
+            start = np.array([0.0, along - 2 * small_w - small_h])
+        inward = centre - start
+        length = float(np.linalg.norm(inward)) * reach * rng.uniform(0.4, 1.15)
+        direction = math.atan2(inward[1], inward[0]) + rng.uniform(-0.45, 0.45)
+        _frond(canvas, rng, start, direction, length, thickness, depth=2)
+    crystal: np.ndarray = cv2.resize(canvas, (width, height), interpolation=cv2.INTER_LINEAR)
+    return np.clip(crystal, 0.0, 1.0)
 
 
 def frost_depth(
@@ -65,13 +155,15 @@ def frost_depth(
     coverage: float,
     thickness: float,
     feather: float,
+    crystal_scale: float = 0.006,
 ) -> np.ndarray:
     """Optical depth of a border of frost, ``(H, W)`` float32, before defocus.
 
     ``coverage`` is how far the frost has grown in from the rim, as a share
     of the way to the centre; ``thickness`` its optical depth where it is
-    established; ``feather`` how much of it is in plumes pointing inwards,
-    0 to 1, the rest being an even layer.
+    established; ``feather`` how much of it is in ferns, 0 to 1, the rest
+    being an even layer behind their front; ``crystal_scale`` the
+    thickness of a fern's stem as a fraction of the diagonal.
     """
     rows = (np.arange(height, dtype=np.float32) - (height - 1) / 2.0) / (height / 2.0)
     columns = (np.arange(width, dtype=np.float32) - (width - 1) / 2.0) / (width / 2.0)
@@ -79,30 +171,22 @@ def frost_depth(
     # rounded rectangle, which is what a rectangular view of a round patch
     # on a dome is.
     inward = 1.0 - (np.abs(rows[:, None]) ** 4 + np.abs(columns[None, :]) ** 4) ** 0.25
-    angle = np.arctan2(rows[:, None], columns[None, :])
 
-    # Plumes: noise that changes quickly round the frame and slowly along
-    # the way in, which drawn on the frame are streaks towards the centre.
-    polar = value_noise(_PLUME_DEPTH, _PLUME_TURN, rng=rng, octaves=3, base_cells=6)
-    fine = rng.random((6, _PLUME_TURN // 2)).astype(np.float32)
-    polar = 0.5 * polar + 0.5 * cv2.resize(
-        fine, (_PLUME_TURN, _PLUME_DEPTH), interpolation=cv2.INTER_CUBIC
-    )
-    # Stretched to its full range: a plume is ice or it is clear glass.
-    low, high = np.percentile(polar, (5.0, 95.0))
-    polar = np.clip((polar - low) / max(float(high - low), 1e-3), 0.0, 1.0)
-    # The front: how far in the ice has reached, ragged by a slow noise and
-    # by the plumes, which run ahead of the layer between them. The same
-    # noise bends the plumes, which do not grow dead straight.
+    # The even layer: established frost, behind a ragged front.
     ragged = value_noise(height, width, rng=rng, octaves=3, base_cells=3)
-    map_x = ((angle / (2.0 * np.pi) + 0.5) * (_PLUME_TURN - 1)).astype(np.float32)
-    map_x += (0.06 * _PLUME_TURN) * (ragged - 0.5)
-    map_y = (np.clip(inward, 0.0, 1.0) * (_PLUME_DEPTH - 1)).astype(np.float32)
-    plumes = cv2.remap(polar, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    reach = coverage * (0.7 + 0.6 * ragged) + 0.25 * feather * coverage * (plumes - 0.5)
-    grown = np.clip((reach - inward) / max(0.12 * coverage, 1e-3), 0.0, 1.0)
-    grown = grown * grown * (3.0 - 2.0 * grown)
-    depth: np.ndarray = thickness * grown * ((1.0 - feather) + feather * 2.0 * plumes * plumes)
+    front = coverage * (0.2 + 0.4 * ragged)
+    layer = np.clip((front - inward) / max(0.15 * coverage, 1e-3), 0.0, 1.0)
+    layer = layer * layer * (3.0 - 2.0 * layer)
+    if feather <= 0.0:
+        return (thickness * layer).astype(np.float32)
+
+    # The ferns run ahead of it, and where they crowd together the fine
+    # crystals between them, too small to draw, thicken the ice as well.
+    crystal = fronds(rng, height, width, reach=coverage, scale=crystal_scale)
+    crowd_sigma = max(1.0, 3.0 * crystal_scale * math.hypot(height, width))
+    crowd = cv2.GaussianBlur(crystal, (0, 0), sigmaX=crowd_sigma)
+    ferns = np.clip(1.4 * crystal + 0.5 * crowd, 0.0, 1.6)
+    depth: np.ndarray = thickness * np.maximum((1.0 - 0.6 * feather) * layer, feather * ferns)
     return depth.astype(np.float32)
 
 
@@ -117,8 +201,11 @@ class FrostOnGlass(WeatherTransform):
             share of the way to the centre of the frame.
         thickness_range: optical depth of established frost. At 1 it passes
             a third of the scene directly; at 3, a twentieth.
-        feather_range: how much of the frost is in plumes pointing inwards,
-            0 to 1.
+        feather_range: how much of the frost is in ferns growing inwards,
+            0 to 1. Zero is an even layer with a ragged edge.
+        crystal_scale_range: thickness of a fern's stem where it starts, as
+            a fraction of the diagonal. The glass is centimetres from the
+            lens, so a stem a millimetre thick is several pixels.
         defocus_range: blur of the frost's pattern, as a fraction of the
             diagonal. It is on the glass, far inside the near focus limit.
         ambient_light_range: light the frost picks up from in front of the
@@ -154,6 +241,11 @@ class FrostOnGlass(WeatherTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        crystal_scale_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.001, 0.05)),
+        ]
         defocus_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -173,9 +265,10 @@ class FrostOnGlass(WeatherTransform):
     def __init__(
         self,
         coverage_range: tuple[float, float] = (0.25, 0.9),
-        thickness_range: tuple[float, float] = (0.4, 2.5),
-        feather_range: tuple[float, float] = (0.3, 0.9),
-        defocus_range: tuple[float, float] = (0.002, 0.012),
+        thickness_range: tuple[float, float] = (0.8, 3.0),
+        feather_range: tuple[float, float] = (0.4, 1.0),
+        crystal_scale_range: tuple[float, float] = (0.006, 0.014),
+        defocus_range: tuple[float, float] = (0.002, 0.006),
         ambient_light_range: tuple[float, float] = (0.05, 0.3),
         illuminator_glow_range: tuple[float, float] = (0.0, 0.0),
         p: float = 0.5,
@@ -185,6 +278,7 @@ class FrostOnGlass(WeatherTransform):
         self.coverage_range = coverage_range
         self.thickness_range = thickness_range
         self.feather_range = feather_range
+        self.crystal_scale_range = crystal_scale_range
         self.defocus_range = defocus_range
         self.ambient_light_range = ambient_light_range
         self.illuminator_glow_range = illuminator_glow_range
@@ -204,6 +298,7 @@ class FrostOnGlass(WeatherTransform):
         coverage = self.py_random.uniform(*self.coverage_range)
         thickness = self.py_random.uniform(*self.thickness_range)
         feather = self.py_random.uniform(*self.feather_range)
+        crystal_scale = self.py_random.uniform(*self.crystal_scale_range)
         sigma = self.py_random.uniform(*self.defocus_range) * diagonal
 
         depth = frost_depth(
@@ -213,6 +308,7 @@ class FrostOnGlass(WeatherTransform):
             coverage=coverage,
             thickness=thickness,
             feather=feather,
+            crystal_scale=crystal_scale,
         )
         scattered = -np.expm1(-depth)
         if sigma > 0.3:
@@ -221,6 +317,7 @@ class FrostOnGlass(WeatherTransform):
             coverage=coverage,
             thickness=thickness,
             feather=feather,
+            crystal_scale=crystal_scale,
             defocus_sigma_px=sigma,
             frosted_fraction=lambda: float((scattered > 0.5).mean()),
         )

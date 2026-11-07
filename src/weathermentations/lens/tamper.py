@@ -10,7 +10,8 @@ cases a tamper detector is built to recognise:
   where the cone hit, thinning to a speckle of separate droplets around it,
   and runs where it went on thick enough to flow.
 * **Tape or a sticker.** One or a few straight strips across the glass,
-  opaque or nearly so, with clean parallel edges.
+  opaque or nearly so, with clean parallel edges. What light a strip of
+  masking tape lets through is diffused, as through a cover.
 * **A cover.** A bag, a cloth or a cap over the whole housing. A little
   light comes through fabric or polythene, with no image in it, and the
   cover's folds show as slow changes in how much.
@@ -218,9 +219,11 @@ class LensTamper(WeatherTransform):
     ) -> dict[str, Any]:
         """Choose what was done to the lens and draw it as the lens sees it.
 
-        Returns ``cover``, how much of each pixel is hidden; the ``albedo``
-        of what hides it; whether it ``passes_light`` as a cover does; and
-        its ``shade`` by day and ``glow`` under the lamp.
+        Returns ``extent``, how much of each pixel is behind it, and
+        ``cover``, how much of each pixel's light it stops, which is less
+        where it is not opaque; the ``albedo`` of what it is; whether what
+        gets through it ``passes_light`` only, without an image, as cloth
+        and tape do; and its ``shade`` by day and ``glow`` under the lamp.
         """
         del data
         height, width = params["shape"][:2]
@@ -234,15 +237,19 @@ class LensTamper(WeatherTransform):
         albedo = _ALBEDOS[int(rng.integers(len(_ALBEDOS)))]
 
         if kind == "spray":
-            cover = wide_blur(spray_mask(rng, height, width, coverage), sigma)
+            extent = wide_blur(spray_mask(rng, height, width, coverage), sigma)
+            cover = extent * opacity
         elif kind == "tape":
-            cover = wide_blur(tape_mask(rng, height, width, coverage), sigma)
+            extent = wide_blur(tape_mask(rng, height, width, coverage), sigma)
+            cover = extent * opacity
         else:
             # Everything, a little less where the cover is one layer thick:
             # folds show as slow changes in how much light comes through.
             folds = value_noise(height, width, rng=rng, octaves=3, base_cells=3)
-            cover = 1.0 - 0.3 * (1.0 - opacity + 0.1) * folds
-        cover = np.clip(cover * opacity, 0.0, 1.0).astype(np.float32)
+            extent = np.ones((height, width), dtype=np.float32)
+            cover = (1.0 - 0.3 * (1.0 - opacity + 0.1) * folds) * opacity
+        extent = np.clip(extent, 0.0, 1.0).astype(np.float32)
+        cover = np.clip(cover, 0.0, extent).astype(np.float32)
 
         record_draw(
             kind=kind,
@@ -253,9 +260,12 @@ class LensTamper(WeatherTransform):
             covered_fraction=lambda: float((cover > 0.5).mean()),
         )
         return {
+            "extent": extent,
             "cover": cover,
             "albedo": albedo,
-            "passes_light": kind == "cover",
+            # Paint between its droplets is clear glass; tape and cloth are
+            # not, and what little comes through them carries no image.
+            "passes_light": kind in ("cover", "tape"),
             "shade": self.py_random.uniform(*self.shade_range),
             "glow": self.py_random.uniform(*self.glow_range),
         }
@@ -263,6 +273,7 @@ class LensTamper(WeatherTransform):
     def apply(
         self,
         img: np.ndarray,
+        extent: np.ndarray,
         cover: np.ndarray,
         albedo: np.ndarray,
         passes_light: bool,
@@ -279,10 +290,15 @@ class LensTamper(WeatherTransform):
         """
         linear, scale, is_integer = to_linear_unit(img)
         surface = albedo * (shade * illuminant_radiance_linear(linear) + glow)
-        behind = linear
-        if passes_light:
-            height, width = img.shape[:2]
-            behind = wide_blur(linear, _COVER_SIGMA * float(np.hypot(width, height)))
         alpha = cover[..., None]
-        out = behind * (1.0 - alpha) + alpha * surface[None, None, :]
+        if passes_light:
+            # Beside it the scene is untouched; through it comes a share
+            # of the scene's light with no image left in it.
+            height, width = img.shape[:2]
+            diffuse = wide_blur(linear, _COVER_SIGMA * float(np.hypot(width, height)))
+            behind = extent[..., None]
+            out = linear * (1.0 - behind) + diffuse * (behind - alpha)
+        else:
+            out = linear * (1.0 - alpha)
+        out = out + alpha * surface[None, None, :]
         return from_linear_unit(out, scale, is_integer, img.dtype)

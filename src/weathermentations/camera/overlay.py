@@ -145,6 +145,11 @@ def timestamp(rng: np.random.Generator) -> str:
     )[int(rng.integers(0, 5))]
 
 
+def margin_px(height: int, margin: float) -> int:
+    """A margin given as a fraction of the frame's height, in whole pixels."""
+    return round(margin * height)
+
+
 def stamp(
     image: np.ndarray, dots: np.ndarray, corner: str, margin: int, style: str, scale: int
 ) -> None:
@@ -302,7 +307,11 @@ class OnScreenOverlay(WeatherTransform):
         rng = self.random_generator
 
         scale = max(1, round(self.py_random.uniform(*self.text_height_range) * height / GLYPH_ROWS))
-        margin = round(self.py_random.uniform(*self.margin_range) * height)
+        # A recorder does not write off the edge of its own picture: the
+        # longest line it has, a date with the day of the week, must fit.
+        longest = (GLYPH_COLUMNS + 1) * 23 + 2
+        scale = max(1, min(scale, (width - 2 * margin_px(height, self.margin_range[1])) // longest))
+        margin = margin_px(height, self.py_random.uniform(*self.margin_range))
         style = ("outline", "outline", "bar", "plain")[int(rng.integers(0, 4))]
         corners = [_CORNERS[index] for index in rng.permutation(4)]
         lines = []

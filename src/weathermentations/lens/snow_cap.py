@@ -17,10 +17,14 @@ wide and its surface is featureless. What identifies it is the outline: an
 uneven lobed edge hanging from the top of the frame.
 
 **How bright it is depends on what lights it.** By day the camera looks at
-the cap's underside, which is in its own shade and lit through the snow
-and from the ground: a pale grey, a good deal darker than the sky, darker
-where the cap is thickest. At night under the infrared ring it is a white
-diffuser a hand's width from the lamp, and clips.
+the cap's underside, which is in its own shade and lit two ways: through
+the snow from above, and by the sky and the ground from below. Light
+through snow is what makes it glow at its thin edge and dull in its
+thick middle, and it comes through bluer than it went in, snow absorbing
+red a little more than blue; so the mass is a pale blue grey, brightest
+along its lower edge, and its surface is never quite even. At night under
+the infrared ring it is a white diffuser a hand's width from the lamp,
+and clips.
 """
 
 from __future__ import annotations
@@ -37,11 +41,16 @@ from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import illuminant_radiance_linear
 from weathermentations.utils.filters import wide_blur
+from weathermentations.utils.noise import value_noise
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
 # How much darker the thickest part of the cap is than its edge, by day:
 # less of the sky's light comes through more snow.
 _THICK_SHADE = 0.45
+# What comes through, per channel, relative to green: snow passes blue best.
+_THROUGH_SNOW = np.array([0.93, 1.0, 1.08], dtype=np.float32)
+# How uneven the surface's brightness is, as a share of it.
+_SURFACE_RELIEF = 0.12
 
 
 def cap_edge(rng: np.random.Generator, width: int, lumpiness: float) -> np.ndarray:
@@ -137,7 +146,7 @@ class SnowOnHousing(WeatherTransform):
         patch_count_range: tuple[int, int] = (0, 4),
         patch_size_range: tuple[float, float] = (0.03, 0.14),
         defocus_range: tuple[float, float] = (0.01, 0.04),
-        brightness_range: tuple[float, float] = (0.25, 0.7),
+        brightness_range: tuple[float, float] = (0.55, 1.0),
         glow_range: tuple[float, float] = (0.0, 0.0),
         p: float = 0.5,
     ):
@@ -157,8 +166,9 @@ class SnowOnHousing(WeatherTransform):
         """Shape the cap and the patches and blur them as the lens sees them.
 
         Returns ``cover``, how much of each pixel the snow hides; ``thick``,
-        how deep into the snow each pixel looks, 0 at its edge to 1; and the
-        snow's ``brightness`` by day and ``glow`` under the lamp.
+        how deep into the snow each pixel looks, 0 at its edge to 1; the
+        ``relief`` of its surface, a factor about one; and the snow's
+        ``brightness`` by day and ``glow`` under the lamp.
         """
         del data
         height, width = params["shape"][:2]
@@ -191,6 +201,9 @@ class SnowOnHousing(WeatherTransform):
         # Depth into the snow: the same shape blurred much wider, which is
         # small near any edge and large in the middle of a mass.
         thick = np.clip(wide_blur(solid, 4.0 * sigma), 0.0, 1.0) * cover
+        # The surface's own lumps, a few to the frame, seen as soft shading.
+        relief = value_noise(height, width, rng=rng, octaves=3, base_cells=5)
+        relief = 1.0 + _SURFACE_RELIEF * 2.0 * (relief - float(relief.mean()))
 
         record_draw(
             cap_depth=cap_depth,
@@ -203,6 +216,7 @@ class SnowOnHousing(WeatherTransform):
         return {
             "cover": cover,
             "thick": thick,
+            "relief": relief.astype(np.float32),
             "brightness": self.py_random.uniform(*self.brightness_range),
             "glow": self.py_random.uniform(*self.glow_range),
         }
@@ -212,6 +226,7 @@ class SnowOnHousing(WeatherTransform):
         img: np.ndarray,
         cover: np.ndarray,
         thick: np.ndarray,
+        relief: np.ndarray,
         brightness: float,
         glow: float,
         **params: Any,
@@ -220,9 +235,11 @@ class SnowOnHousing(WeatherTransform):
         if float(cover.max()) < 1e-3:
             return img
         linear, scale, is_integer = to_linear_unit(img)
-        daylight = brightness * illuminant_radiance_linear(linear)
-        shade = (1.0 - _THICK_SHADE * thick)[..., None]
-        snow = daylight[None, None, :] * shade + glow
+        daylight = brightness * illuminant_radiance_linear(linear) * _THROUGH_SNOW
+        # Daylight comes through the snow, so less of it where the snow is
+        # thick; the lamp lights the face the camera sees, thick or thin.
+        through = ((1.0 - _THICK_SHADE * thick) * relief)[..., None]
+        snow = daylight[None, None, :] * through + glow * relief[..., None]
         alpha = cover[..., None]
         out = linear * (1.0 - alpha) + alpha * snow
         return from_linear_unit(out, scale, is_integer, img.dtype)
