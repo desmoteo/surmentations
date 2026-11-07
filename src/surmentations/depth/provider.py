@@ -684,10 +684,15 @@ def settled_view(
     transform earlier in the pipeline settled for this scene, and is given
     its own two numbers back when no provider holds the scene or has a
     geometry for it. Never estimates anything.
+
+    A provider that holds the scene and has no geometry for it is passed
+    over: with two providers alive on one frame, one of which knows the
+    camera, the one that knows it answers.
     """
     for provider in list(_LIVE_PROVIDERS):
         with provider._lock:
-            if provider._find(image) is None:
+            scene = provider._find(image)
+            if scene is None or scene.geometry is None:
                 continue
             return provider.settle_view(image, horizontal_fov_deg, pitch_deg)
     return horizontal_fov_deg, pitch_deg
@@ -700,7 +705,8 @@ def settled_fov(image: np.ndarray, horizontal_fov_deg: float) -> float:
     """
     for provider in list(_LIVE_PROVIDERS):
         with provider._lock:
-            if provider._find(image) is None:
+            scene = provider._find(image)
+            if scene is None or scene.geometry is None:
                 continue
             return provider.settle_fov(image, horizontal_fov_deg)
     return horizontal_fov_deg

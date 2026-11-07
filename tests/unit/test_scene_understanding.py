@@ -260,6 +260,18 @@ def test_a_transform_with_no_provider_is_told_the_scene_s_field_of_view() -> Non
     assert scene_fov({}, 48.0) == 48.0, "a transform asked without a frame keeps its draw"
 
 
+def test_of_two_providers_on_a_frame_the_one_that_knows_the_camera_answers() -> None:
+    """A provider that holds the frame and has no geometry for it has nothing
+    to say about the lens, and must not be taken as saying "none"."""
+    plain = SharedDepthProvider(_World())
+    knowing = SharedDepthProvider(_World(), geometry=KNOWN)
+    image = _image()
+    plain.get_depth(image)
+    assert scene_fov({"image": image}, 48.0) == 48.0
+    knowing.get_depth(image)
+    assert scene_fov({"image": image}, 48.0) == 60.0
+
+
 def test_the_estimator_s_reading_of_the_frame_becomes_the_scene_s_camera() -> None:
     estimator = GroundPlaneGeometryEstimator(horizontal_fov_deg=60.0, estimate_height=False)
     provider = SharedDepthProvider(_World(), labels=_Named(_labels()), geometry=estimator)
