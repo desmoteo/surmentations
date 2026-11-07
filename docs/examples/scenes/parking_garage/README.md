@@ -14,8 +14,8 @@ Source: [Interior of Rupert Street parking garage - DSC 8051.jpg](https://common
 | Camera pitch below level | 4 degrees |
 | Lighting | day, under a roof |
 | Sky in frame | no |
-| Fog | visibility 27 m (0.6 x the farthest point) |
-| Rain and snow veils | capped so visibility stays above 67.5 m and 45 m |
+| Fog | visibility 0.6 x the scene's depth: about 27 m by eye |
+| Rain and snow veils | visibility kept above 1.5 x and 1 x the scene's depth: about 67.5 m and 45 m |
 
 ## What a provider with scene labels and geometry read off it
 

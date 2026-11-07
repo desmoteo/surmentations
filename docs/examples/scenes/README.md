@@ -63,9 +63,13 @@ picture of each pair shows it:
 - **Depth is relative and stretched to the range it is given.** The facades in
   `urban_street_wet` are placed further away than they are, so its fog is
   heavier than the stated visibility would make it. Where the estimator finds
-  the camera's height, depth is in metres measured from it instead, and a
-  veil set for the by-eye range can then be far too thick or too thin: the
-  parameters of each pair are deliberately the same.
+  the camera's height, depth is in metres measured from it instead. Fog and
+  the veils are set against the scene's depth as each provider has it, and
+  the two still differ: the by-eye range spreads a scene evenly between its
+  nearest and farthest point, where measured depth puts most of the frame
+  near and a little of it very far, so the same fog leaves the foreground
+  clearer and takes the skyline. What is in metres outright, an infrared
+  lamp's reach or a ground fog's few metres of height, differs more.
 - **Wet ground stops at a few hundred metres.** Beyond that, level ground is
   taken to be terrain; a distant wet road loses its sheen with it, unless it
   is labelled as a road.

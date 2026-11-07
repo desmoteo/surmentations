@@ -288,12 +288,12 @@ and the physics behind it.
 
 | Transform | Start with |
 | --- | --- |
-| `RandomFog` | `beta_range` (extinction, 1/m), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were) |
+| `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view) |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
-| `NightFog` | `visibility_range_m` (read against the provider's depth range), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
-| `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes` |
+| `NightFog` | `visibility_range_m` (read against the provider's depth range), `visibility_range_scene` (as a multiple of the scene's depth instead), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
+| `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes`, `min_visibility_scene` (keeps the veil from hiding the far end of a long view) |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `GroundFog` | `visibility_range_m` (at the ground), `layer_height_range_m` (how shallow the layer is), `camera_height_range_m`, `camera_pitch_range_deg`, `patchiness_range`, `patch_scale_range_m`, `depth_scale` (it shows along the distance) |
 | `LocalPlumes` | `plume_count_range`, `source_width_range_m`, `rise_range_m`, `opacity_range`, `lean_range` (wind), `brightness_range` |
@@ -642,9 +642,15 @@ camera, frame by frame, and `depth_range_m` is not used.
 The presets suit the default 3-50 m. Calibrate a provider to a landscape and
 the same fog or snow hides everything past a few hundred metres, and heavy
 rain everything past a kilometre or two — which is what that weather does,
-and leaves a blank frame. For long views, set fog
-by visibility (`beta = 3.912 / visibility_m`) and cap the precipitation veils
-with `veil_beta_range`, as `docs/generate_scene_examples.py` does.
+and leaves a blank frame. For long views, or a dataset that mixes scales,
+set the air against the scene and not in metres: `visibility_range_scene`
+on `RandomFog` and `NightFog` is visibility as a multiple of the scene's
+depth, and `min_visibility_scene` on `RandomRain` and `RandomSnow` keeps
+their veils from closing its far end. The transforms measure the scene's
+depth themselves, as the distance of the farthest thing that is not sky, so
+the setting holds whether the provider's distances are given or measured;
+`docs/generate_scene_examples.py` uses 0.6 for fog and 1.5 and 1.0 for rain
+and snow on scenes from thirty metres to six kilometres deep.
 
 **The scene's own conditions are mostly not detected.** Nothing here knows
 that a frame is under a roof, so snow settles indoors if you ask it to.

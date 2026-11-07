@@ -14,8 +14,8 @@ Source: [Baldy Hill from Snowslide Valley, Craigieburn Range, Canterbury, New Ze
 | Camera pitch below level | 0 degrees |
 | Lighting | day, open to the sky |
 | Sky in frame | yes |
-| Fog | visibility 1800 m (0.6 x the farthest point) |
-| Rain and snow veils | capped so visibility stays above 4500 m and 3000 m |
+| Fog | visibility 0.6 x the scene's depth: about 1800 m by eye |
+| Rain and snow veils | visibility kept above 1.5 x and 1 x the scene's depth: about 4500 m and 3000 m |
 
 ## What a provider with scene labels and geometry read off it
 

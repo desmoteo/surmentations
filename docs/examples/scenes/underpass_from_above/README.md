@@ -14,8 +14,8 @@ Source: [Cars on the Albany Road underpass in HK Central.jpg](https://commons.wi
 | Camera pitch below level | 25 degrees |
 | Lighting | day, open to the sky |
 | Sky in frame | no |
-| Fog | visibility 96 m (0.6 x the farthest point) |
-| Rain and snow veils | capped so visibility stays above 240 m and 160 m |
+| Fog | visibility 0.6 x the scene's depth: about 96 m by eye |
+| Rain and snow veils | visibility kept above 1.5 x and 1 x the scene's depth: about 240 m and 160 m |
 
 ## What a provider with scene labels and geometry read off it
 

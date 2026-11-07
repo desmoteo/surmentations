@@ -81,6 +81,7 @@ inside it all the same.
 | `glow_radius_range` | `(0.02, 0.06)` | how far the glow round a light spreads, as a fraction of the image diagonal, for fog one optical depth thick. It widens with the fog in front of each light. |
 | `illuminator_backscatter_range` | `(0.0, 0.0)` | brightness of the wall of light the camera's own illuminator raises in the fog, relative to full scale. Zero — the default — means the illuminator is off. Set it only for frames in infrared mode, and apply this transform *after* `NightIrMode`; the shipped pipelines do both. |
 | `beam_falloff_range` | `(0.6, 2.2)` | how sharply the illuminator's beam dims off-axis. |
+| `visibility_range_scene` | `None` | visibility as a multiple of the scene's depth, in place of `visibility_range_m`: the same fog on a courtyard and on a long street. See `RandomFog`. `None`, the default, uses `visibility_range_m`. |
 | `p` | `0.5` | probability that the transform is applied |
 
 ## Samples
