@@ -104,7 +104,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Poplin, D. (2006). An automatic flicker detection method for embedded camera systems. *IEEE Transactions on Consumer Electronics* 52(2), 308-311.
+- Poplin, D. (2006). An automatic flicker detection method for embedded camera systems. *IEEE Transactions on Consumer Electronics* 52(2), 308-311. [doi:10.1109/TCE.2006.1649642](https://doi.org/10.1109/TCE.2006.1649642)
 
 ---
 

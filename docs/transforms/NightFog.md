@@ -95,9 +95,9 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beiträge zur Physik der freien Atmosphäre* 12, 33-53.
-- Narasimhan, S. G. and Nayar, S. K. (2003). Shedding light on the weather. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*.
-- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254.
+- Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beiträge zur Physik der freien Atmosphäre* 12, 33-53. [link](https://library.metoffice.gov.uk/portal/Default/en-GB/RecordView/Index/457195)
+- Narasimhan, S. G. and Nayar, S. K. (2003). Shedding light on the weather. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*, I-665-I-672. [doi:10.1109/CVPR.2003.1211417](https://doi.org/10.1109/CVPR.2003.1211417)
+- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254. [doi:10.1023/A:1016328200723](https://doi.org/10.1023/A:1016328200723)
 
 ---
 

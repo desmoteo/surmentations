@@ -130,7 +130,12 @@ def test_effect_tables_mark_the_depth_requirement_correctly(name: str) -> None:
     """A reader assembling a CPU-only pipeline relies on the "Needs depth"
     column, and a GPU requirement discovered at runtime is a bad surprise."""
     text = README.read_text()
-    row = re.search(rf"^\|\s*`{name}`\s*\|.*\|\s*(yes|no|optional)\s*\|\s*$", text, re.M)
+    # The name is a link to the transform's own page.
+    row = re.search(
+        rf"^\|\s*\[`{name}`\]\(docs/transforms/{name}\.md\)\s*\|.*\|\s*(yes|no|optional)\s*\|\s*$",
+        text,
+        re.M,
+    )
     assert row, f"{name} has no row in the effect tables, or no depth column"
     provider = inspect.signature(TRANSFORMS[name].__init__).parameters.get("depth_provider")
     # A provider that may be left out is neither: the transform runs without
@@ -172,3 +177,14 @@ def test_how_it_works_is_linked_from_the_readme() -> None:
     """It is the entry point for understanding the models; an unlinked
     document is one nobody reads."""
     assert "docs/how_it_works.md" in README.read_text()
+
+
+def test_the_readme_links_every_transform_s_page() -> None:
+    """The effect tables are the way in to the pages under ``docs/transforms``."""
+    text = README.read_text()
+    pages = README.parent / "docs" / "transforms"
+    for name in TRANSFORMS:
+        assert f"](docs/transforms/{name}.md)" in text, f"{name} is not linked from the README"
+        assert (pages / f"{name}.md").exists(), f"{name} has no page"
+    assert "](docs/transforms/README.md)" in text
+

@@ -80,8 +80,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Ribnick, E., Atev, S., Masoud, O., Papanikolopoulos, N. and Voyles, R. (2006). Real-time detection of camera tampering. *IEEE International Conference on Advanced Video and Signal Based Surveillance (AVSS)*.
-- Saglam, A. and Temizel, A. (2009). Real-time adaptive camera tamper detection for video surveillance. *IEEE International Conference on Advanced Video and Signal Based Surveillance (AVSS)*.
+- Ribnick, E., Atev, S., Masoud, O., Papanikolopoulos, N. and Voyles, R. (2006). Real-time detection of camera tampering. *IEEE International Conference on Video and Signal Based Surveillance (AVSS)*. [doi:10.1109/AVSS.2006.94](https://doi.org/10.1109/AVSS.2006.94)
+- Saglam, A. and Temizel, A. (2009). Real-time adaptive camera tamper detection for video surveillance. *IEEE International Conference on Advanced Video and Signal Based Surveillance (AVSS)*. [doi:10.1109/AVSS.2009.29](https://doi.org/10.1109/AVSS.2009.29)
 
 ---
 

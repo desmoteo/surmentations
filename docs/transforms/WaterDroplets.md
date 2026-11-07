@@ -161,10 +161,13 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Roser, M. and Geiger, A. (2009). Video-based raindrop detection for improved image registration. *IEEE International Conference on Computer Vision Workshops*.
-- Halimeh, J. C. and Roser, M. (2009). Raindrop detection on car windshields using geometric-photometric environment construction and intensity-based correlation. *IEEE Intelligent Vehicles Symposium*.
-- You, S., Tan, R. T., Kawakami, R., Mukaigawa, Y. and Ikeuchi, K. (2016). Adherent raindrop modeling, detection and removal in video. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 38(9), 1721-1733.
-- Born, M. and Wolf, E. (1999). *Principles of Optics*, 7th edition. Cambridge University Press.
+- You, S., Tan, R. T., Kawakami, R. and Ikeuchi, K. (2013). Adherent raindrop detection and removal in video. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*, 1035-1042. [doi:10.1109/CVPR.2013.138](https://doi.org/10.1109/CVPR.2013.138)
+- You, S., Tan, R. T., Kawakami, R., Mukaigawa, Y. and Ikeuchi, K. (2016). Adherent raindrop modeling, detection and removal in video. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 38(9), 1721-1733. [doi:10.1109/TPAMI.2015.2491937](https://doi.org/10.1109/TPAMI.2015.2491937)
+- Halimeh, J. C. and Roser, M. (2009). Raindrop detection on car windshields using geometric-photometric environment construction and intensity-based correlation. *IEEE Intelligent Vehicles Symposium*. [doi:10.1109/IVS.2009.5164347](https://doi.org/10.1109/IVS.2009.5164347)
+- Roser, M. and Geiger, A. (2009). Video-based raindrop detection for improved image registration. *IEEE International Conference on Computer Vision Workshops*. [doi:10.1109/ICCVW.2009.5457650](https://doi.org/10.1109/ICCVW.2009.5457650)
+- Qian, R., Tan, R. T., Yang, W., Su, J. and Liu, J. (2018). Attentive generative adversarial network for raindrop removal from a single image. *IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)*, 2482-2491. [doi:10.1109/CVPR.2018.00263](https://doi.org/10.1109/CVPR.2018.00263)
+- Bebber, L. (2015). Rain & water effect experiments. Article, Codrops, 4 November 2015. [link](https://tympanus.net/codrops/2015/11/04/rain-water-effect-experiments/)
+- Born, M. and Wolf, E. (1999). *Principles of Optics*, 7th edition. Cambridge University Press. [doi:10.1017/CBO9781139644181](https://doi.org/10.1017/CBO9781139644181)
 
 ---
 

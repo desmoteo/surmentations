@@ -85,8 +85,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Fergus, R., Singh, B., Hertzmann, A., Roweis, S. T. and Freeman, W. T. (2006). Removing camera shake from a single photograph. *ACM Transactions on Graphics* 25(3) (SIGGRAPH).
-- Liang, C.-K., Chang, L.-W. and Chen, H. H. (2008). Analysis and compensation of rolling shutter effect. *IEEE Transactions on Image Processing* 17(8), 1323-1330.
+- Fergus, R., Singh, B., Hertzmann, A., Roweis, S. T. and Freeman, W. T. (2006). Removing camera shake from a single photograph. *ACM Transactions on Graphics* 25(3) (SIGGRAPH). [doi:10.1145/1179352.1141956](https://doi.org/10.1145/1179352.1141956)
+- Liang, C.-K., Chang, L.-W. and Chen, H. H. (2008). Analysis and compensation of rolling shutter effect. *IEEE Transactions on Image Processing* 17(8), 1323-1330. [doi:10.1109/TIP.2008.925384](https://doi.org/10.1109/TIP.2008.925384)
 
 ---
 

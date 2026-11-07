@@ -95,10 +95,10 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Kolmogorov, A. N. (1941). The local structure of turbulence in incompressible viscous fluid for very large Reynolds numbers. *Doklady Akademii Nauk SSSR* 30, 301-305.
-- Tatarskii, V. I. (1961). *Wave Propagation in a Turbulent Medium*. McGraw-Hill.
-- Fried, D. L. (1966). Optical resolution through a randomly inhomogeneous medium for very long and very short exposures. *Journal of the Optical Society of America* 56(10), 1372-1379.
-- Roggemann, M. C. and Welsh, B. M. (1996). *Imaging Through Turbulence*. CRC Press.
+- Kolmogorov, A. N. (1941). The local structure of turbulence in incompressible viscous fluid for very large Reynolds numbers. *Doklady Akademii Nauk SSSR* 30(4). English translation: *Proceedings of the Royal Society A* 434, 9-13 (1991). [doi:10.1098/rspa.1991.0075](https://doi.org/10.1098/rspa.1991.0075)
+- Tatarskii, V. I. (1961). *Wave Propagation in a Turbulent Medium*. McGraw-Hill. [link](https://openlibrary.org/works/OL187452W)
+- Fried, D. L. (1966). Optical resolution through a randomly inhomogeneous medium for very long and very short exposures. *Journal of the Optical Society of America* 56(10), 1372. [doi:10.1364/JOSA.56.001372](https://doi.org/10.1364/JOSA.56.001372)
+- Roggemann, M. C. and Welsh, B. M. (1996). *Imaging Through Turbulence*. CRC Press. [doi:10.1201/9780203751282](https://doi.org/10.1201/9780203751282)
 
 ---
 

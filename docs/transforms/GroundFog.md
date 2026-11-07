@@ -109,9 +109,10 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beiträge zur Physik der freien Atmosphäre* 12, 33-53.
-- Gultepe, I. et al. (2007). Fog research: a review of past achievements and future perspectives. *Pure and Applied Geophysics* 164, 1121-1159.
-- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254.
+- Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beiträge zur Physik der freien Atmosphäre* 12, 33-53. [link](https://library.metoffice.gov.uk/portal/Default/en-GB/RecordView/Index/457195)
+- Gultepe, I. et al. (2007). Fog research: a review of past achievements and future perspectives. *Pure and Applied Geophysics* 164, 1121-1159. [doi:10.1007/s00024-007-0211-x](https://doi.org/10.1007/s00024-007-0211-x)
+- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254. [doi:10.1023/A:1016328200723](https://doi.org/10.1023/A:1016328200723)
+- Quilez, I. Better fog. Article, iquilezles.org. [link](https://iquilezles.org/articles/fog/)
 
 ---
 

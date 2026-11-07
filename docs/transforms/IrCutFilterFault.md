@@ -85,8 +85,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Brown, M. and Süsstrunk, S. (2011). Multi-spectral SIFT for scene category recognition. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*.
-- Gates, D. M., Keegan, H. J., Schleter, J. C. and Weidner, V. R. (1965). Spectral properties of plants. *Applied Optics* 4(1), 11-20.
+- Brown, M. and Süsstrunk, S. (2011). Multi-spectral SIFT for scene category recognition. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*. [doi:10.1109/CVPR.2011.5995637](https://doi.org/10.1109/CVPR.2011.5995637)
+- Gates, D. M., Keegan, H. J., Schleter, J. C. and Weidner, V. R. (1965). Spectral properties of plants. *Applied Optics* 4(1), 11. [doi:10.1364/AO.4.000011](https://doi.org/10.1364/AO.4.000011)
 
 ---
 

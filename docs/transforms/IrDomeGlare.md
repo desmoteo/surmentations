@@ -86,8 +86,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Talvala, E.-V., Adams, A., Horowitz, M. and Levoy, M. (2007). Veiling glare in high dynamic range imaging. *ACM Transactions on Graphics* 26(3) (SIGGRAPH).
-- McCann, J. J. and Rizzi, A. (2007). Veiling glare: the dynamic range limit of HDR images. *Proceedings of SPIE* 6492, Human Vision and Electronic Imaging XII.
+- Talvala, E.-V., Adams, A., Horowitz, M. and Levoy, M. (2007). Veiling glare in high dynamic range imaging. *ACM Transactions on Graphics* 26(3) (SIGGRAPH). [doi:10.1145/1275808.1276424](https://doi.org/10.1145/1275808.1276424)
+- McCann, J. J. and Rizzi, A. (2007). Veiling glare: the dynamic range limit of HDR images. *Proceedings of SPIE* 6492, Human Vision and Electronic Imaging XII. [doi:10.1117/12.703042](https://doi.org/10.1117/12.703042)
 
 ---
 

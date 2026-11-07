@@ -99,9 +99,9 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Greenewalt, C. H. (1962). Dimensional relationships for flying animals. *Smithsonian Miscellaneous Collections* 144(2).
-- Fabian, S. T. et al. (2024). Why flying insects gather at artificial light. *Nature Communications* 15, 689.
-- Potmesil, M. and Chakravarty, I. (1981). A lens and aperture camera model for synthetic image generation. *ACM SIGGRAPH Computer Graphics* 15(3), 297-305.
+- Greenewalt, C. H. (1962). Dimensional relationships for flying animals. *Smithsonian Miscellaneous Collections* 144(2). [link](https://librarycatalog.ecu.edu/catalog/62078)
+- Fabian, S. T. et al. (2024). Why flying insects gather at artificial light. *Nature Communications* 15, 689. [doi:10.1038/s41467-024-44785-3](https://doi.org/10.1038/s41467-024-44785-3)
+- Potmesil, M. and Chakravarty, I. (1981). A lens and aperture camera model for synthetic image generation. *ACM SIGGRAPH Computer Graphics* 15(3), 297-305. [doi:10.1145/965161.806818](https://doi.org/10.1145/965161.806818)
 
 ---
 

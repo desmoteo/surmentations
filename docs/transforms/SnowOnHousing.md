@@ -79,8 +79,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Warren, S. G. (1982). Optical properties of snow. *Reviews of Geophysics* 20(1), 67-89.
-- Bohren, C. F. (1983). Colors of snow, frozen waterfalls, and icebergs. *Journal of the Optical Society of America* 73(12), 1646-1652.
+- Warren, S. G. (1982). Optical properties of snow. *Reviews of Geophysics* 20(1), 67-89. [doi:10.1029/RG020i001p00067](https://doi.org/10.1029/RG020i001p00067)
+- Bohren, C. F. (1983). Colors of snow, frozen waterfalls, and icebergs. *Journal of the Optical Society of America* 73(12), 1646. [doi:10.1364/JOSA.73.001646](https://doi.org/10.1364/JOSA.73.001646)
 
 ---
 

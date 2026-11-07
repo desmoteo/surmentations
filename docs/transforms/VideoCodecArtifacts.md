@@ -97,9 +97,9 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Wiegand, T., Sullivan, G. J., Bjøntegaard, G. and Luthra, A. (2003). Overview of the H.264/AVC video coding standard. *IEEE Transactions on Circuits and Systems for Video Technology* 13(7), 560-576.
-- Sullivan, G. J., Ohm, J.-R., Han, W.-J. and Wiegand, T. (2012). Overview of the High Efficiency Video Coding (HEVC) standard. *IEEE Transactions on Circuits and Systems for Video Technology* 22(12), 1649-1668.
-- List, P., Joch, A., Lainema, J., Bjøntegaard, G. and Karczewicz, M. (2003). Adaptive deblocking filter. *IEEE Transactions on Circuits and Systems for Video Technology* 13(7), 614-619.
+- Wiegand, T., Sullivan, G. J., Bjøntegaard, G. and Luthra, A. (2003). Overview of the H.264/AVC video coding standard. *IEEE Transactions on Circuits and Systems for Video Technology* 13(7), 560-576. [doi:10.1109/TCSVT.2003.815165](https://doi.org/10.1109/TCSVT.2003.815165)
+- Sullivan, G. J., Ohm, J.-R., Han, W.-J. and Wiegand, T. (2012). Overview of the High Efficiency Video Coding (HEVC) standard. *IEEE Transactions on Circuits and Systems for Video Technology* 22(12), 1649-1668. [doi:10.1109/TCSVT.2012.2221191](https://doi.org/10.1109/TCSVT.2012.2221191)
+- List, P., Joch, A., Lainema, J., Bjøntegaard, G. and Karczewicz, M. (2003). Adaptive deblocking filter. *IEEE Transactions on Circuits and Systems for Video Technology* 13(7), 614-619. [doi:10.1109/TCSVT.2003.815175](https://doi.org/10.1109/TCSVT.2003.815175)
 
 ---
 

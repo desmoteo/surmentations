@@ -90,8 +90,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Morton, B. R., Taylor, G. I. and Turner, J. S. (1956). Turbulent gravitational convection from maintained and instantaneous sources. *Proceedings of the Royal Society A* 234, 1-23.
-- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254.
+- Morton, B. R., Taylor, G. I. and Turner, J. S. (1956). Turbulent gravitational convection from maintained and instantaneous sources. *Proceedings of the Royal Society A* 234, 1-23. [doi:10.1098/rspa.1956.0011](https://doi.org/10.1098/rspa.1956.0011)
+- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254. [doi:10.1023/A:1016328200723](https://doi.org/10.1023/A:1016328200723)
 
 ---
 

@@ -94,8 +94,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Wang, Y. and Zhu, Q.-F. (1998). Error control and concealment for video communication: a review. *Proceedings of the IEEE* 86(5), 974-997.
-- Wiegand, T., Sullivan, G. J., Bjøntegaard, G. and Luthra, A. (2003). Overview of the H.264/AVC video coding standard. *IEEE Transactions on Circuits and Systems for Video Technology* 13(7), 560-576.
+- Wang, Y. and Zhu, Q.-F. (1998). Error control and concealment for video communication: a review. *Proceedings of the IEEE* 86(5), 974-997. [doi:10.1109/5.664283](https://doi.org/10.1109/5.664283)
+- Wiegand, T., Sullivan, G. J., Bjøntegaard, G. and Luthra, A. (2003). Overview of the H.264/AVC video coding standard. *IEEE Transactions on Circuits and Systems for Video Technology* 13(7), 560-576. [doi:10.1109/TCSVT.2003.815165](https://doi.org/10.1109/TCSVT.2003.815165)
 
 ---
 

@@ -89,8 +89,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Prati, A., Mikic, I., Trivedi, M. M. and Cucchiara, R. (2003). Detecting moving shadows: algorithms and evaluation. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 25(7), 918-923.
-- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. (2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*.
+- Prati, A., Mikic, I., Trivedi, M. M. and Cucchiara, R. (2003). Detecting moving shadows: algorithms and evaluation. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 25(7), 918-923. [doi:10.1109/TPAMI.2003.1206520](https://doi.org/10.1109/TPAMI.2003.1206520)
+- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. (2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*. [link](https://arxiv.org/abs/2406.09414)
 
 ---
 

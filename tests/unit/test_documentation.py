@@ -144,7 +144,7 @@ def test_every_transform_has_a_page_that_matches_its_source() -> None:
 
 
 def test_every_page_has_a_diagram_and_its_references_are_known() -> None:
-    from docs.make_transform_pages import PAGES, SOURCES, pages
+    from docs.make_transform_pages import LINKS, PAGES, SOURCES, pages
 
     written = pages()
     for name, text in written.items():
@@ -152,6 +152,9 @@ def test_every_page_has_a_diagram_and_its_references_are_known() -> None:
             assert "```mermaid" in text and "## References" in text, name
     cited = {key for _diagram, references in PAGES.values() for key in references}
     assert cited <= set(SOURCES)
+    # Every source says where it can be found, and none is kept that no page cites.
+    assert set(LINKS) == set(SOURCES) == cited
+    assert all(link.startswith("https://") for link in LINKS.values())
     # Diagrams must parse: a label holding brackets or parentheses is quoted.
     for name, text in written.items():
         for block in re.findall(r"```mermaid\n(.*?)```", text, re.S):
