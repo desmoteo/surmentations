@@ -677,19 +677,43 @@ def wheel_tracks(
 # pixels one covers to be given any.
 _MOST_SPRAYING = 48
 _FEWEST_SPRAY_PIXELS = 40
-# The wake behind a vehicle: how many puffs it is drawn as; its length in
-# vehicle lengths, at the slowest and the fastest (some twenty metres at
-# motorway speed); how fast it thins along its
-# length, as the exponent over the whole of it; and how dense the tufts at
-# the wheels are against the wake at its thickest.
+# The wake behind a vehicle: how many puffs it is drawn as; how long the
+# cloud hangs, in seconds, which with the speed is its length (some twenty
+# metres at motorway speed); the length of a car, by which that is turned
+# into lengths of the outline; the longest it is drawn, in those; how fast
+# it thins along its length, as the exponent over the whole of it; and how
+# dense the tufts at the wheels are against the wake at its thickest.
 _WAKE_PUFFS = 14
-_WAKE_LENGTHS = (1.5, 5.0)
+_WAKE_SECONDS = 0.75
+_CAR_LENGTH_M = 4.5
+_LONGEST_WAKE = 6.0
 _WAKE_DECAY = 2.6
 _TUFT = 0.9
-# The slowest a road's traffic is taken to be moving, as a share of the
-# fastest: below it nothing is thrown up, and that is a queue, which this
-# does not draw.
-_SLOWEST_TRAFFIC = 0.45
+# The tallest a vehicle is taken to be, in its own widths.
+_TALLEST = 1.6
+# Spray against speed: the speed at which the amount is 1, the power it
+# goes by, the most it is taken to, and the least that is drawn at all.
+_FULL_SPRAY_KMH = 110.0
+_SPRAY_POWER = 2.8
+_MOST_AMOUNT = 1.6
+_LEAST_AMOUNT = 0.01
+# Speeds. How far one road's mean lies from the frame's, as a standard
+# deviation; the spread of the vehicles of one road about its mean, as a
+# share of it, drawn between these; and what a lorry keeps to, a lorry
+# being a vehicle this many times wider than the rest.
+_ROADS_DIFFER = 0.08
+_SPEED_SPREAD = (0.11, 0.18)
+_LORRY_KMH = 90.0
+_LORRY_GIRTH = 1.35
+# What is nearer the camera than this share of the distance to the vehicle
+# a puff trails from stands in front of the puff.
+_STANDS_NEARER = 0.7
+# An outline this many times wider than the rest is several vehicles, and
+# its showing no red is not heard. And what a front seen counts for against
+# a rear seen: a front is only red not seen, and a rear in shade shows none
+# either.
+_SEVERAL_VEHICLES = 1.5
+_FRONT_COUNTS = 0.3
 # The most spray counted in front of one pixel, in plumes at their densest:
 # ten cars abreast do not make ten times the mist of one.
 _MOST_SPRAY = 2.5
@@ -703,18 +727,273 @@ _HEADING_NEAR_ROAD = 0.82
 _HEADING_ACROSS = 0.7
 _LEAST_ROAD_FOR_SPRAY = 0.05
 # A tail lamp's lens: red at this level, in linear light, and this many
-# times its other channels.
+# times its other channels, which is what keeps an amber indicator out: the
+# front of a car has those, and they were read as its tail lamps.
 _LENS_LEVEL = 0.05
-_LENS_RED = 1.8
+_LENS_RED = 2.8
 # A rear's lenses are between these shares of the vehicle's outline; below
 # the third, on a vehicle of at least so many pixels, there are none and it
 # is a front.
 _LENS_SHARE = (0.004, 0.09)
 _NO_LENS = 0.001
 _SHOWS_LENSES = 250
+# One lens is a patch of red of at most this share of the vehicle.
+_LENS_PATCH = 0.04
+# How much more of the evidence two-way traffic has to explain than
+# one-way, as a share of all of it, to be believed.
+_TWO_WAYS_EARNS = 0.05
 # A headlamp: every channel at this level, in a frame darker than the second.
 _HEAD_LAMP_LEVEL = 0.8
 _NIGHT_FRAME = 0.08
+
+
+def vehicle_facing(
+    colour: np.ndarray,
+    rows: np.ndarray,
+    columns: np.ndarray,
+    night: bool,
+) -> float | None:
+    """Which end of a vehicle its own picture shows: 1 its rear, -1 its front, ``None`` unknown.
+
+    ``colour`` holds the vehicle's pixels in linear light and ``rows`` and
+    ``columns`` where they are.
+
+    * **A rear has red lenses**, lit or not: a few small patches of red,
+      each a small part of the vehicle. One is enough, because the other
+      is as often hidden, in shade or lost to the outline.
+    * **A front has none.** A vehicle large enough to show lenses and
+      showing no red at all is seen from the front.
+    * **A red vehicle says nothing.** Its red is its bodywork, in one large
+      patch or in the many the glass and the trim cut it into.
+    * At night, white lamps burning are headlamps.
+
+    This is weak evidence, a handful of pixels on each vehicle, and it is
+    meant to be pooled over a road (:func:`traffic_directions`) and not
+    believed one vehicle at a time. Unlit headlamps are not looked for:
+    pale and colourless at the corners of the near end is also every white
+    car seen from behind.
+    """
+    top, left = int(rows.min()), int(columns.min())
+    size = len(rows)
+    if size < 6:
+        return None
+    red = (colour[:, 0] > _LENS_LEVEL) & (colour[:, 0] > _LENS_RED * colour[:, 1:].max(axis=1))
+    if night and int((colour.min(axis=1) > _HEAD_LAMP_LEVEL).sum()) >= 2 and not red.any():
+        return -1.0
+    if float(red.mean()) > _LENS_SHARE[1]:
+        return None
+    box = np.zeros((int(rows.max()) - top + 1, int(columns.max()) - left + 1), dtype=np.uint8)
+    box[rows[red] - top, columns[red] - left] = 1
+    count, _parts, stats, _centres = cv2.connectedComponentsWithStats(box, connectivity=8)
+    areas = stats[1:count, cv2.CC_STAT_AREA]
+    lenses = int(areas[(areas >= 2) & (areas <= max(4.0, _LENS_PATCH * size))].sum())
+    if lenses >= max(3.0, _LENS_SHARE[0] * size):
+        return 1.0
+    if int(red.sum()) <= _NO_LENS * size and size >= _SHOWS_LENSES:
+        return -1.0
+    return None
+
+
+def traffic_directions(
+    at: np.ndarray, faces: np.ndarray, weight: np.ndarray, rng: np.random.Generator
+) -> np.ndarray:
+    """Which way each vehicle of one road is going, from what a few of them show.
+
+    ``at`` is each vehicle's position across the road, ``faces`` what its
+    own picture says of it (:func:`vehicle_facing`; 0 for nothing) and
+    ``weight`` how much its word counts. The result is 1 for driving away
+    from the camera and -1 for coming on.
+
+    One vehicle's picture is poor evidence, and a road's traffic is not a
+    set of independent choices. It all goes one way; or it goes one way on
+    one side of the road and the other way on the other, and then what
+    divides it is the widest strip across the road with no vehicle in it,
+    which is where a reserve or a barrier would be. Those are the only
+    answers considered, and the one chosen is the one the most evidence
+    agrees with, two ways only when it explains more than one way does by
+    a margin. With no evidence at all the road's one direction is drawn.
+
+    The divide used to be put wherever suited the evidence best, between
+    any two vehicles. Two rears in shade, showing no red, then cut a
+    carriageway in two between its lanes.
+    """
+    said = faces != 0.0
+    if not said.any():
+        return np.full(len(at), float(rng.choice([-1.0, 1.0])))
+    total = float(weight[said].sum())
+
+    def explained(ways: np.ndarray) -> float:
+        """The share of the evidence that agrees with these directions."""
+        return float(weight[said & (faces == ways)].sum()) / total
+
+    one_way = max((np.full(len(at), sign) for sign in (1.0, -1.0)), key=explained)
+    order = np.sort(np.unique(at))
+    if len(order) < 2:
+        return one_way
+    widest = int(np.argmax(np.diff(order)))
+    divide = 0.5 * float(order[widest] + order[widest + 1])
+    two_ways = max((np.where(at < divide, sign, -sign) for sign in (1.0, -1.0)), key=explained)
+    if explained(two_ways) > explained(one_way) + _TWO_WAYS_EARNS:
+        return two_ways
+    return one_way
+
+
+class RoadVehicle(NamedTuple):
+    """One vehicle on a road, as far as its outline and its picture tell.
+
+    The fields:
+
+    * ``road``: which of the frame's roads it is on, counted from 1.
+    * ``rows``, ``columns``: its pixels.
+    * ``foot``: the row and the column where it stands on its road.
+    * ``girth``: its width across the road, as a share of the road's.
+    * ``shows``: what its own picture says of it
+      (:func:`vehicle_facing`): 1 its rear, -1 its front, 0 nothing.
+    * ``away``: which way it is taken to be going, once its road's traffic
+      has been heard together: 1 away from the camera, its rear to it, and
+      -1 coming on.
+    * ``speed_kmh``: how fast it is taken to be going.
+    """
+
+    road: int
+    rows: np.ndarray
+    columns: np.ndarray
+    foot: tuple[int, int]
+    girth: float
+    shows: float
+    away: float
+    speed_kmh: float
+
+
+def spray_amount(speed_kmh: float) -> float:
+    """How much spray a vehicle throws up at a speed, against what it does on a motorway.
+
+    As the 2.8th power of the speed: the fit of the Road Research
+    Laboratory's measurements of spray density behind cars and lorries
+    (1965, as reported at the time; met in a summary and not checked at
+    source). Half the speed is a seventh of the spray, and a queue throws
+    up none.
+    """
+    return float(min((max(speed_kmh, 0.0) / _FULL_SPRAY_KMH) ** _SPRAY_POWER, _MOST_AMOUNT))
+
+
+def road_vehicles(
+    frame: RoadFrame,
+    vehicles: np.ndarray,
+    rng: np.random.Generator,
+    linear_rgb: np.ndarray | None = None,
+    speed_kmh: float = 100.0,
+) -> list[RoadVehicle]:
+    """The vehicles on a frame's roads: where each stands, which way it goes and how fast.
+
+    **Which road** a vehicle is on is the road most of the ground about its
+    foot belongs to.
+
+    **Which way** is a vote. Each vehicle's own picture says a little
+    (:func:`vehicle_facing`, from ``linear_rgb``), and a road's traffic is
+    heard together (:func:`traffic_directions`). A rear seen counts for
+    more than a front, which is only red not seen; and an outline much
+    wider than the rest is several vehicles run together or a lorry far
+    off, whose lenses are under a pixel each, so its showing no red is not
+    heard at all.
+
+    **How fast** is drawn about ``speed_kmh``, the speed of the frame's
+    traffic. Each road's own mean is a little either side of it, as two
+    carriageways never quite agree; and each vehicle's speed is normal
+    about its road's mean with a spread of 11 to 18 % of it, which is what
+    free-flowing traffic is usually taken to be (Leong, 1968, as cited in
+    reviews of speed distributions; not checked at source). A lorry keeps
+    to its limit.
+    """
+    height, width = vehicles.shape
+    mask = (vehicles > 0.5).astype(np.uint8)
+    count, parts, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    order = sorted(range(1, count), key=lambda index: -int(stats[index, cv2.CC_STAT_AREA]))
+    order = [index for index in order if stats[index, cv2.CC_STAT_AREA] >= _FEWEST_SPRAY_PIXELS]
+    night = linear_rgb is not None and float(linear_rgb.mean()) < _NIGHT_FRAME
+    found: list[tuple[int, np.ndarray, np.ndarray, tuple[int, int], float, float]] = []
+    for index in order[:_MOST_SPRAYING]:
+        left, top, wide, tall, _area = (int(value) for value in stats[index])
+        rows, columns = np.nonzero(parts[top : top + tall, left : left + wide] == index)
+        rows, columns = rows + top, columns + left
+        # Its foot is the lowest of it, and its road is the one most of
+        # the ground about its foot belongs to: the one pixel under the
+        # middle of its box is as often a kerb, a shadow or another car.
+        low = rows >= top + 0.6 * tall
+        row = min(top + tall - 1, height - 1)
+        column = min(int(np.median(columns[low])), width - 1)
+        reach = max(2, tall // 4)
+        first_row, first_column = max(0, row - reach), max(0, left - reach)
+        about = frame.piece[first_row : row + reach + 1, first_column : left + wide + reach + 1]
+        counts = np.bincount(about.ravel(), minlength=2)[1:]
+        if int(counts.sum()) == 0:
+            continue
+        road = int(np.argmax(counts)) + 1
+        if int(frame.piece[row, column]) != road:
+            near_rows, near_columns = np.nonzero(about == road)
+            off = np.hypot(near_rows + first_row - row, near_columns + first_column - column)
+            row = first_row + int(near_rows[int(np.argmin(off))])
+            column = first_column + int(near_columns[int(np.argmin(off))])
+        centre = centres[index]
+        offsets = np.stack([columns - centre[0], rows - centre[1]], axis=1)
+        way = frame.along[row, column].astype(np.float64)
+        across = float(np.percentile(np.abs(offsets @ np.array([-way[1], way[0]])), 90.0))
+        girth = across / max(float(frame.width_px[row, column]), 1.0)
+        shows = None
+        if linear_rgb is not None:
+            shows = vehicle_facing(linear_rgb[rows, columns], rows, columns, night)
+        found.append((road, rows, columns, (row, column), girth, 0.0 if shows is None else shows))
+    if not found:
+        return []
+    typical = float(np.median([girth for _road, _rows, _columns, _foot, girth, _shows in found]))
+    traffic: list[RoadVehicle] = []
+    for road in sorted({one[0] for one in found}):
+        here = [one for one in found if one[0] == road]
+        at = np.array([float(frame.across[one[3]]) for one in here])
+        girths = np.array([one[4] for one in here])
+        said = np.array([one[5] for one in here])
+        said[(said < 0.0) & (girths > _SEVERAL_VEHICLES * typical)] = 0.0
+        weight = np.array([float(np.sqrt(len(one[1]))) for one in here])
+        weight = weight * np.where(said < 0.0, _FRONT_COUNTS, 1.0)
+        ways = traffic_directions(at, said, weight, rng)
+        mean = speed_kmh * float(np.clip(rng.normal(1.0, _ROADS_DIFFER), 0.7, 1.3))
+        spread = float(rng.uniform(*_SPEED_SPREAD)) * mean
+        speeds = np.clip(rng.normal(mean, spread, size=len(here)), 0.0, None)
+        speeds = np.where(girths > _LORRY_GIRTH * typical, np.minimum(speeds, _LORRY_KMH), speeds)
+        for one, shown, away, speed in zip(here, said, ways, speeds, strict=True):
+            traffic.append(
+                RoadVehicle(
+                    one[0], one[1], one[2], one[3], one[4], float(shown), float(away), speed
+                )
+            )
+    return traffic
+
+
+def _vehicle_lie(
+    frame: RoadFrame, vehicle: RoadVehicle
+) -> tuple[tuple[float, float], np.ndarray, np.ndarray] | None:
+    """How a vehicle lies on its road: its centre, its pixels about it, and its heading.
+
+    The heading is the road's direction at its foot, turned to the long way
+    of its own outline where that is long and close to the road's: a car
+    changing lanes or taking a bend points along its own line. It is given
+    in the road's sense, towards the camera, whichever way the vehicle is
+    going. ``None`` for a vehicle whose long way lies across the road: it
+    is crossing, turning or parked, or the road was read wrong there, and
+    it is no car at speed.
+    """
+    row, column = vehicle.foot
+    along_road = frame.along[row, column].astype(np.float64)
+    centre = (float(vehicle.columns.mean()), float(vehicle.rows.mean()))
+    offsets = np.stack([vehicle.columns - centre[0], vehicle.rows - centre[1]], axis=1)
+    values, vectors = np.linalg.eigh(np.cov(offsets.T) + 1e-6 * np.eye(2))
+    own = vectors[:, 1] * (1.0 if float(vectors[:, 1] @ along_road) >= 0.0 else -1.0)
+    long_way = float(np.sqrt(values[1] / max(values[0], 1e-6)))
+    agrees = float(own @ along_road)
+    if long_way > _HEADING_ELONGATION and agrees < _HEADING_ACROSS:
+        return None
+    turned = long_way > _HEADING_ELONGATION and agrees > _HEADING_NEAR_ROAD
+    return centre, offsets, own if turned else along_road
 
 
 def vehicle_spray(
@@ -722,127 +1001,87 @@ def vehicle_spray(
     vehicles: np.ndarray,
     rng: np.random.Generator,
     linear_rgb: np.ndarray | None = None,
+    traffic: list[RoadVehicle] | None = None,
+    depth_m: np.ndarray | None = None,
 ) -> np.ndarray:
     """How much spray hangs in front of each pixel, ``(H, W)`` float32, 0 and up.
 
     A vehicle at speed on a wet road lifts the water off it and trails it
-    as a low cloud of mist that lies on the road behind it: densest at the
-    wheels and no higher than they are there, as wide as the vehicle, then
-    a little wider, hanging up to about its roof and thinning out over a
-    length and a half. It is a thing
-    in the scene: the plume of a vehicle driving away hangs between it and
-    the camera and takes its wheels and its bumper with it, while that of a
-    vehicle coming on is hidden by the vehicle itself.
+    as a low cloud that lies on the road behind it: two dense tufts at the
+    rear wheels, and a wake of fine spray as wide as the vehicle, then a
+    little wider, as tall as the vehicle a length back, and thinning out
+    over some lengths.
 
-    **Where the plume lies is the vehicle's own heading.** Its outline in
+    **Where the wake lies is the vehicle's own heading.** Its outline in
     the picture is longer one way than the other, and where that way is
     near the road's it is the vehicle's heading: a car changing lanes or
     taking a bend trails its spray along its own line and not the road's.
     A vehicle too small or too square to say is given the road's direction.
-    The plume starts at the end of the outline it trails from, and is as
-    wide there as the vehicle is across its heading.
+
+    **Which end is the tail, and how fast it is going,** come with
+    ``traffic`` (:func:`road_vehicles`, which is called with ``linear_rgb``
+    when it is not given). The wake's amount goes with the speed
+    (:func:`spray_amount`) and so does its length: the cloud hangs for
+    under a second, and is as long as the vehicle goes in that time.
 
     **Some vehicles get none.** One whose long way lies across the road is
     crossing it, turning or parked, or the road was misread there. One on a
     scrap of road, a slip road cut by the frame's edge, is on a road whose
     direction is a guess. Both used to shoot a jet of mist out sideways.
 
-    **Which end is the tail** a frame says only sometimes, and each
-    vehicle's own picture is where it says it (``linear_rgb``). A rear has
-    red lenses, a little red in a small part of the vehicle: it is seen
-    from behind, and driving away. A vehicle large enough to show lenses
-    and showing no red at all is seen from the front, and so is one with
-    white lamps burning at night: it is coming on, and its spray is behind
-    it, up the frame, mostly hidden by the vehicle itself. A red car says
-    nothing. A vehicle that says nothing goes the way of the nearest one
-    across the road that does, since traffic keeps to its side and the two
-    sides run opposite ways. A road none of whose vehicles says anything
-    has its direction drawn.
-
-    How fast each vehicle is going is drawn too: each is given its own
-    share of spray, and some none, as a parked car has none.
+    **It is a thing in the scene**, and what stands nearer the camera than
+    a part of it hides that part. The wake of a vehicle coming on is behind
+    the vehicle. The wake of one driving away lies between it and the
+    camera, over its wheels and its bumper, and over whatever follows it
+    further up the road than the wake reaches; a follower nearer than that
+    stands in front of it. Every part of a wake is cut by the outlines of
+    the vehicles that stand below it in the picture and by no others. It
+    used to be cut by every outline there was, which left each car in a
+    cloud standing in a clear hole with a hard edge. With ``depth_m`` the
+    rest of the scene hides it too: a branch, a post or a parapet much
+    nearer the camera than the vehicle the wake trails from.
 
     The result is a density, to be turned into an opacity by whatever knows
     how wet the road is: ``1 - exp(-strength * density)``.
     """
     height, width = vehicles.shape
+    if traffic is None:
+        traffic = road_vehicles(frame, vehicles, rng, linear_rgb)
+    spray = np.zeros((height, width), dtype=np.float32)
+    if not traffic:
+        return spray
     mask = (vehicles > 0.5).astype(np.uint8)
-    count, parts, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    _count, parts, stats, _centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    # Where each outline stands: the row of its foot, on every pixel of it
+    # and a little way round it, so that the feathered edge knows whose it
+    # is. A puff is hidden by an outline only where that row is below its
+    # own place on the road.
+    feather = max(1.5, 0.006 * float(np.hypot(height, width)))
+    hidden = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigmaX=feather)
+    bottoms = (stats[:, cv2.CC_STAT_TOP] + stats[:, cv2.CC_STAT_HEIGHT] - 1).astype(np.float32)
+    bottoms[0] = -1.0
+    round_it = 2 * int(2.0 * feather) + 1
+    stands = cv2.dilate(bottoms[parts], np.ones((round_it, round_it), np.uint8))
     roads = int(frame.piece.max())
-    # Towards the camera, or away from it: one way for each road.
-    trailing = rng.choice([-1.0, 1.0], size=roads + 1)
-    order = sorted(range(1, count), key=lambda index: -int(stats[index, cv2.CC_STAT_AREA]))
-    order = [index for index in order if stats[index, cv2.CC_STAT_AREA] >= _FEWEST_SPRAY_PIXELS]
-    order = order[:_MOST_SPRAYING]
-
-    shapes = []
-    faces: dict[int, float] = {}
-    night = linear_rgb is not None and float(linear_rgb.mean()) < _NIGHT_FRAME
-    for index in order:
-        left, top, wide, tall, _area = (int(value) for value in stats[index])
-        rows, columns = np.nonzero(parts[top : top + tall, left : left + wide] == index)
-        rows, columns = rows + top, columns + left
-        row = min(top + tall - 1, height - 1)
-        column = min(left + wide // 2, width - 1)
-        road = int(frame.piece[row, column])
-        if road == 0:
-            continue
-        shapes.append((index, road, rows, columns, row, column))
-        if linear_rgb is not None:
-            # Which end of the vehicle its own picture shows. A rear has
-            # red lenses, lit or not: a little red, in a small part of it.
-            # A front has none, so a vehicle large enough to show them and
-            # showing no red at all is seen from the front. One that is
-            # red all over, a red car, says nothing either way; taking any
-            # red for a tail lamp had one red car turn a whole motorway
-            # round, and spray come off the bonnets.
-            colour = linear_rgb[rows, columns]
-            other = colour[:, 1:].max(axis=1)
-            lens = (colour[:, 0] > _LENS_LEVEL) & (colour[:, 0] > _LENS_RED * other)
-            red_share = float(lens.mean())
-            white = night & (colour.min(axis=1) > _HEAD_LAMP_LEVEL)
-            # Lenses are a pair, one at either corner of the near end. Red
-            # that sits in the middle of an outline, or all up one side, is
-            # a red car among several that the labels have run together.
-            a_pair = False
-            if int(lens.sum()) >= 2:
-                over = (columns[lens] - left) / max(wide - 1, 1)
-                down = (rows[lens] - top) / max(tall - 1, 1)
-                sides = min(float((over < 0.38).mean()), float((over > 0.62).mean()))
-                a_pair = sides >= 0.2 and float((down > 0.4).mean()) >= 0.7
-            if a_pair and _LENS_SHARE[0] <= red_share <= _LENS_SHARE[1]:
-                faces[index] = 1.0
-            elif int(white.sum()) >= 2 or (red_share < _NO_LENS and len(rows) >= _SHOWS_LENSES):
-                faces[index] = -1.0
-    # A vehicle that shows no lamps goes the way of the nearest one across
-    # the road that does: traffic keeps to its side, and the two sides of a
-    # road run opposite ways.
-    told = [
-        (road, float(frame.across[row, column]), faces[index])
-        for index, road, _rows, _columns, row, column in shapes
-        if index in faces
-    ]
-
-    near = np.zeros((height, width), dtype=np.float32)
-    behind = np.zeros((height, width), dtype=np.float32)
     share = np.bincount(frame.piece.ravel(), minlength=roads + 1) / frame.piece.size
-    # How fast each road's traffic is moving, which is most of how much it
-    # throws up: one speed to a road, as traffic has, and a little either
-    # side of it for each vehicle.
-    flowing = rng.uniform(_SLOWEST_TRAFFIC, 1.0, size=roads + 1)
 
     def puff(
-        target: np.ndarray,
         at: tuple[float, float],
         axes: tuple[np.ndarray, np.ndarray],
         radii: tuple[float, float],
         strength: float,
+        ground: float,
         gate: tuple[float, float, np.ndarray, float] | None = None,
+        reach_m: float = 0.0,
     ) -> None:
-        """Add one soft puff to ``target``: a Gaussian with its own two axes and radii.
+        """Add one soft puff: a Gaussian with its own two axes and radii.
 
-        ``gate`` cuts it off behind a line, softly: a point, the direction
-        past it that is kept, and how far the cut is feathered.
+        ``ground`` is the row of the road it hangs over, which decides what
+        vehicles hide it, and ``reach_m`` how far off its vehicle is, which
+        decides what else does: where the road under a puff is itself
+        hidden, the depth there is that of what hides it. ``gate`` cuts it
+        off behind a line, softly: a point, the direction past it that is
+        kept, and how far the cut is feathered.
         """
         reach = int(3.0 * max(radii)) + 1
         x0, x1 = max(0, int(at[0]) - reach), min(width, int(at[0]) + reach + 1)
@@ -855,61 +1094,47 @@ def vehicle_spray(
         second = (dx * axes[1][0] + dy * axes[1][1]) / max(radii[1], 1.0)
         blob = np.exp(-0.5 * (first**2 + second**2))
         if gate is not None:
-            gate_x, gate_y, kept, feather = gate
+            gate_x, gate_y, kept, feathered = gate
             past = (np.arange(y0, y1, dtype=np.float32)[:, None] - gate_y) * kept[1] + (
                 np.arange(x0, x1, dtype=np.float32)[None, :] - gate_x
             ) * kept[0]
-            start = np.clip(past / max(feather, 1.0), 0.0, 1.0)
+            start = np.clip(past / max(feathered, 1.0), 0.0, 1.0)
             blob = blob * start * start * (3.0 - 2.0 * start)
-        target[y0:y1, x0:x1] += np.float32(strength) * blob
+        in_front = stands[y0:y1, x0:x1] > ground
+        blob = blob * (1.0 - hidden[y0:y1, x0:x1] * in_front)
+        if depth_m is not None:
+            clear = (depth_m[y0:y1, x0:x1] > _STANDS_NEARER * reach_m) | (mask[y0:y1, x0:x1] > 0)
+            blob = blob * clear
+        spray[y0:y1, x0:x1] += np.float32(strength) * blob
 
-    # How wide each vehicle is against the road it is on, and the middle
-    # one of them: a lorry is known by being wider and taller than the rest.
-    girth = {}
-    for index, _road, rows, columns, row, column in shapes:
-        centre = centres[index]
-        offsets = np.stack([columns - centre[0], rows - centre[1]], axis=1)
-        way = frame.along[row, column].astype(np.float64)
-        across = np.percentile(np.abs(offsets @ np.array([-way[1], way[0]])), 90.0)
-        girth[index] = float(across) / max(float(frame.width_px[row, column]), 1.0)
-    typical = float(np.median(list(girth.values()))) if girth else 1.0
+    # A lorry is known by being wider than the rest.
+    typical = float(np.median([vehicle.girth for vehicle in traffic]))
 
-    for index, road, rows, columns, row, column in shapes:
+    for vehicle in traffic:
         # Not on a scrap of road, whose direction is a guess: a slip road
         # cut by the frame's edge, the far carriageway behind a barrier.
-        if share[road] < _LEAST_ROAD_FOR_SPRAY:
+        if share[vehicle.road] < _LEAST_ROAD_FOR_SPRAY:
             continue
-        speed = float(flowing[road] * rng.uniform(0.8, 1.2))
-        tall = int(stats[index, cv2.CC_STAT_HEIGHT])
-        along_road = frame.along[row, column].astype(np.float64)
-        centre = centres[index]
-        offsets = np.stack([columns - centre[0], rows - centre[1]], axis=1)
-        values, vectors = np.linalg.eigh(np.cov(offsets.T) + 1e-6 * np.eye(2))
-        own = vectors[:, 1] * (1.0 if float(vectors[:, 1] @ along_road) >= 0.0 else -1.0)
-        long_way = float(np.sqrt(values[1] / max(values[0], 1e-6)))
-        agrees = float(own @ along_road)
-        # A vehicle that lies across the road is crossing it, turning or
-        # parked, or the road was read wrong there: none of them is a car
-        # at speed, and none throws anything up.
-        if long_way > _HEADING_ELONGATION and agrees < _HEADING_ACROSS:
+        amount = spray_amount(vehicle.speed_kmh)
+        if amount < _LEAST_AMOUNT:
             continue
-        # Its own heading, where its outline is long and near the road's.
-        turned = long_way > _HEADING_ELONGATION and agrees > _HEADING_NEAR_ROAD
-        heading = own if turned else along_road
-        sign = float(trailing[road])
-        here = float(frame.across[row, column])
-        nearest = [(abs(at - here), face) for told_road, at, face in told if told_road == road]
-        if nearest:
-            sign = min(nearest)[1]
-        way = heading * sign
+        rows = vehicle.rows
+        row, column = vehicle.foot
+        tall = int(rows.max()) - int(rows.min()) + 1
+        foot = float(rows.max())
+        far = 0.0 if depth_m is None else float(depth_m[row, column])
+        lie = _vehicle_lie(frame, vehicle)
+        if lie is None:
+            continue
+        centre, offsets, heading = lie
+        way = heading * vehicle.away
         side = np.array([-way[1], way[0]])
         half_wide = max(1.5, float(np.percentile(np.abs(offsets @ side), 90.0)))
         long_px = max(3.0, 2.0 * float(np.percentile(np.abs(offsets @ way), 90.0)))
         towards = way[1] > 0.0
-        target = near if towards else behind
         # What it throws up goes with its size: a lorry's wake is several
         # cars' worth, and as tall as the lorry.
-        size = float(np.clip(girth[index] / max(typical, 1e-6), 0.7, 2.0)) ** 2
+        size = float(np.clip(vehicle.girth / max(typical, 1e-6), 0.7, 2.0)) ** 2
         # Where it all begins: at the end of the outline it trails from.
         # That is the vehicle's foot when it is driving away, and behind its
         # own roof, part of the way to the far end, when it is coming on.
@@ -918,14 +1143,18 @@ def vehicle_spray(
         tail_y = float(centre[1] + way[1] * reach_along * (1.0 if towards else 0.6))
         gate = (tail_x, tail_y, way, 0.35 * long_px)
         wide_here = max(float(frame.width_px[row, column]), 1.0)
+        # As tall as its vehicle, which an outline of several run together
+        # is not: no taller than a lorry is against its width.
+        high = min(float(tall), _TALLEST * 2.0 * half_wide)
 
         # The wake. Fine droplets, off the tread and out of the film
         # between the tyre and the road, are carried along in the air the
-        # vehicle drags behind it: a cloud some lengths long, longer the
-        # faster it goes, as wide as the vehicle and widening, as tall as
-        # the vehicle a length back, and thinning all the way. Turbulent,
-        # so no two puffs of it are alike.
-        length = (_WAKE_LENGTHS[0] + (_WAKE_LENGTHS[1] - _WAKE_LENGTHS[0]) * speed) * long_px
+        # vehicle drags behind it: a cloud as long as the vehicle goes in
+        # the time it hangs, as wide as the vehicle and widening, as tall
+        # as the vehicle a length back, and thinning all the way.
+        # Turbulent, so no two puffs of it are alike.
+        lengths = vehicle.speed_kmh / 3.6 * _WAKE_SECONDS / _CAR_LENGTH_M
+        length = float(np.clip(lengths, 0.3, _LONGEST_WAKE)) * long_px
         for step in range(_WAKE_PUFFS):
             run = (step + 0.5) / _WAKE_PUFFS
             x = tail_x + way[0] * length * run
@@ -935,17 +1164,25 @@ def vehicle_spray(
             # Further up the road everything is smaller: by the road's own
             # width there, which is the perspective.
             scale = float(np.clip(frame.width_px[int(y), int(x)] / wide_here, 0.15, 2.5))
-            if frame.piece[int(y), int(x)] != road:
+            if frame.piece[int(y), int(x)] != vehicle.road:
+                # Off the end of its road. Up the frame that is the road's
+                # far end or its horizon, and a wake that ran on past it
+                # stood in the sky; down it, the road is only hidden.
+                if not towards and mask[int(y), int(x)] == 0:
+                    break
                 scale = 1.0 if towards else max(0.15, 1.0 - 0.8 * run)
             across = (0.9 + 0.9 * run) * half_wide * scale
             lengthways = max(1.5, 0.9 * length / _WAKE_PUFFS * scale)
-            rise = min(1.0, 0.35 + 1.3 * run) * tall * scale * min(size, 1.6)
+            rise = min(1.0, 0.35 + 1.3 * run) * high * scale * min(size, 1.6)
             sway = float(rng.normal(0.0, 0.25)) * half_wide * scale
             gust = float(rng.uniform(0.55, 1.45))
-            thin = np.exp(-_WAKE_DECAY * run) * gust * speed**2 * size
+            thin = np.exp(-_WAKE_DECAY * run) * gust * amount * size
+            # Trailing towards the camera it is this side of its own
+            # vehicle, whatever the outline's lowest row says.
+            ground = max(y, foot + 1.0) if towards else y
             for lift, share_up in ((0.0, 1.0), (0.45, 0.6), (0.9, 0.3)):
                 at = (x + side[0] * sway, y + side[1] * sway - lift * rise)
-                puff(target, at, (way, side), (lengthways, across), thin * share_up, gate)
+                puff(at, (way, side), (lengthways, across), thin * share_up, ground, gate, far)
 
         # The tufts. Coarse drops are flung off the back of each tyre, and
         # the air stops them within a metre or two and below half a metre:
@@ -958,15 +1195,192 @@ def vehicle_spray(
                     tail_y + side[1] * wheel * half_wide + way[1] * 0.12 * long_px - 0.08 * tall,
                 )
                 radii = (0.2 * long_px, 0.42 * half_wide)
-                puff(target, at, (way, side), radii, _TUFT * speed, None)
-    # What trails away from the camera is behind the vehicle that threw it.
-    # A network's outline of a vehicle is a little inside the vehicle, and
-    # the plume showed round it as a rim of light: the outline is let out.
-    grow = max(3, round(0.008 * float(np.hypot(height, width))) | 1)
-    grown = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
-    hidden = cv2.GaussianBlur(grown.astype(np.float32), (0, 0), sigmaX=1.0)
-    spray: np.ndarray = np.minimum(near + behind * (1.0 - hidden), _MOST_SPRAY)
-    return spray.astype(np.float32)
+                puff(at, (way, side), radii, _TUFT * min(1.0, amount**0.5), foot + 1.0, None, far)
+    return np.minimum(spray, np.float32(_MOST_SPRAY))
+
+
+# Lamps. The smallest vehicle given any, in pixels. Where a lamp is on the
+# end of the outline nearer the camera: this share of the outline's height
+# up from its lower edge, and this share of its width in from either side.
+# And how many times wider than tall an outline may be and still be a
+# vehicle seen end on: a car seen from the side is three times as long as
+# it is tall.
+_FEWEST_LAMP_PIXELS = 60
+_LAMP_UP = 0.27
+_LAMP_INSET = 0.14
+_END_ON = 1.6
+# A lamp's size, as a share of the vehicle's half width, and the glow round
+# it in the wet air as a multiple of that and as a share of its light.
+_LAMP_SIZE = 0.075
+_GLOW_SIZE = 5.0
+_GLOW_SHARE = 0.025
+# How far over full scale a dipped headlamp and a tail lamp are at their
+# middles, at a strength of 1; how much brighter a brake light is and how
+# often one is on; and the share of fronts and of rears lit by day.
+_HEAD_PEAK = 6.0
+_TAIL_PEAK = 2.2
+_BRAKE = (2.5, 0.12)
+_LIT_BY_DAY = (0.9, 0.75)
+# Lamps the picture already shows burning are at most this share of their
+# vehicle, which is otherwise darker than this at its median.
+_BURNING_SHARE = 0.03
+_DARK = 0.08
+# The colours: a halogen headlamp, an LED one, and a tail lamp.
+_HALOGEN = (1.0, 0.92, 0.78)
+_LED = (0.9, 0.95, 1.0)
+_TAIL = (1.0, 0.05, 0.03)
+
+
+def vehicle_lamps(
+    frame: RoadFrame,
+    traffic: list[RoadVehicle],
+    rng: np.random.Generator,
+    strength: float,
+    linear_rgb: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The lamps of a road's traffic, lit: their light, their glow, and where they are.
+
+    Traffic in rain drives with its lamps on, and a photograph taken in the
+    dry has them off. Each vehicle of ``traffic`` (:func:`road_vehicles`)
+    is given the pair that the end of it nearer the camera carries: two
+    headlamps where it is coming on, two tail lamps where it is driving
+    away, which is the same reading that lays its spray.
+
+    **Where.** The end that is seen is the lower part of the outline, and
+    the pair is at one height on it, a little in from either side and a
+    quarter of the way up. A rear whose red lenses can be seen in the
+    picture (``linear_rgb``) has its lamps lit where they are. A vehicle
+    seen from the side, and an outline that is several vehicles, has no
+    such end, and only lenses that are seen are lit on it.
+
+    **How bright.** Far over full scale, as a lamp is: a dipped headlamp
+    several times it and a tail lamp about twice, at a ``strength`` of 1,
+    each a little more or less. One rear in eight is braking. By day not
+    every vehicle is lit, and fewer rears than fronts, daytime running
+    lamps being at the front only; by night every one is, except those
+    whose lamps the picture already shows burning.
+
+    Three things come back, each the size of the frame: the lamps' own
+    light, linear RGB over the scene's; the glow each throws into wet air,
+    to be added in proportion to how much of that there is in front of it;
+    and a ``[0, 1]`` weight of where the lamps are, which is what a wet
+    road needs to reflect them as lamps and not as paint.
+    """
+    height, width = frame.piece.shape
+    light = np.zeros((height, width, 3), dtype=np.float32)
+    glow = np.zeros((height, width, 3), dtype=np.float32)
+    cores = np.zeros((height, width), dtype=np.float32)
+    night = linear_rgb is not None and float(linear_rgb.mean()) < _NIGHT_FRAME
+    whose = np.zeros((height, width), dtype=np.int32)
+    for number, vehicle in enumerate(traffic, start=1):
+        whose[vehicle.rows, vehicle.columns] = number
+
+    def spot(
+        target: np.ndarray,
+        at: tuple[float, float],
+        radii: tuple[float, float],
+        value: np.ndarray | float,
+    ) -> None:
+        """Add one lamp-shaped spot of ``value`` to an image, or raise a weight to it.
+
+        ``radii`` are its size across the picture and up it.
+        """
+        reach = int(3.0 * max(radii)) + 1
+        x0, x1 = max(0, int(at[0]) - reach), min(width, int(at[0]) + reach + 1)
+        y0, y1 = max(0, int(at[1]) - reach), min(height, int(at[1]) + reach + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+        dx = np.arange(x0, x1, dtype=np.float32)[None, :] - np.float32(at[0])
+        dy = np.arange(y0, y1, dtype=np.float32)[:, None] - np.float32(at[1])
+        blob = np.exp(-0.5 * ((dx / radii[0]) ** 2 + (dy / radii[1]) ** 2))
+        if target.ndim == 3:
+            target[y0:y1, x0:x1] += blob[..., None] * np.asarray(value, dtype=np.float32)
+        else:
+            np.maximum(target[y0:y1, x0:x1], blob * np.float32(value), out=target[y0:y1, x0:x1])
+
+    typical = float(np.median([vehicle.girth for vehicle in traffic])) if traffic else 1.0
+    for number, vehicle in enumerate(traffic, start=1):
+        rows, columns = vehicle.rows, vehicle.columns
+        if len(rows) < _FEWEST_LAMP_PIXELS:
+            continue
+        lie = _vehicle_lie(frame, vehicle)
+        if lie is None:
+            continue
+        rear = vehicle.away > 0.0
+        colour = None if linear_rgb is None else linear_rgb[rows, columns]
+        if night and colour is not None:
+            # Burning already: a few pixels at full scale on a vehicle that
+            # is otherwise dark. A pale car under a dull sky has many, and
+            # is not dark.
+            level = colour.max(axis=1)
+            burning = int((level > _HEAD_LAMP_LEVEL).sum())
+            if 2 <= burning <= _BURNING_SHARE * len(rows) and float(np.median(level)) < _DARK:
+                continue
+        if not night and float(rng.uniform()) > _LIT_BY_DAY[1 if rear else 0]:
+            continue
+        # The end of it that is seen is the lower part of its outline, and
+        # its two lamps are at one height on that, either side: a line
+        # across a road is level in the picture, near enough. So they are
+        # placed by the picture's rows and columns, and not along the long
+        # way of the outline, which for a box seen from above runs corner
+        # to corner.
+        top, bottom = int(rows.min()), int(rows.max())
+        tall = bottom - top + 1
+        level = bottom - _LAMP_UP * tall
+        band = np.abs(rows - level) <= max(1.0, 0.06 * tall)
+        if int(band.sum()) < 4:
+            continue
+        left, right = (float(value) for value in np.percentile(columns[band], [4.0, 96.0]))
+        half_wide = max(1.5, 0.5 * (right - left))
+        size = max(0.6, _LAMP_SIZE * half_wide)
+        if rear:
+            tint = np.array(_TAIL, dtype=np.float32)
+            peak = _TAIL_PEAK * (_BRAKE[0] if float(rng.uniform()) < _BRAKE[1] else 1.0)
+            radii = (1.3 * size, 0.7 * size)
+        else:
+            tint = np.array(_LED if float(rng.uniform()) < 0.5 else _HALOGEN, dtype=np.float32)
+            peak = _HEAD_PEAK
+            radii = (size, size)
+        peak = strength * peak * float(rng.uniform(0.7, 1.3))
+        lenses = None
+        if rear and colour is not None:
+            lenses = (colour[:, 0] > _LENS_LEVEL) & (
+                colour[:, 0] > _LENS_RED * colour[:, 1:].max(axis=1)
+            )
+            if float(lenses.mean()) > _LENS_SHARE[1]:
+                lenses = None
+        # Seen from the side, or several vehicles in one outline: there is
+        # no near end to put a pair on, and only lenses that are seen are lit.
+        broad = float(np.ptp(np.percentile(columns, [2.0, 98.0]))) / max(tall, 1)
+        placed = broad < _END_ON and vehicle.girth <= _SEVERAL_VEHICLES * typical
+        middle = 0.5 * (left + right)
+        for which in (-1.0, 1.0):
+            x = middle + which * (1.0 - 2.0 * _LAMP_INSET) * half_wide
+            # Each at its own height above the outline's lower edge, which
+            # is the slant a vehicle off to one side is seen with.
+            below = np.abs(columns - x) <= max(1.0, 0.16 * half_wide)
+            y = (float(rows[below].max()) if below.any() else float(bottom)) - _LAMP_UP * tall
+            found = placed
+            if lenses is not None:
+                seen = (
+                    lenses
+                    & ((columns - middle) * which > 0.3 * half_wide)
+                    & (rows > top + 0.3 * tall)
+                )
+                if int(seen.sum()) >= 2:
+                    x, y, found = float(columns[seen].mean()), float(rows[seen].mean()), True
+            if not found:
+                continue
+            if (
+                not (0 <= int(y) < height and 0 <= int(x) < width)
+                or whose[int(y), int(x)] != number
+            ):
+                continue
+            spot(light, (x, y), radii, tint * peak)
+            wide = (_GLOW_SIZE * radii[0], _GLOW_SIZE * radii[1])
+            spot(glow, (x, y), wide, tint * peak * _GLOW_SHARE)
+            spot(cores, (x, y), radii, min(strength, 1.0) * (0.5 if rear else 1.0))
+    return light, glow, cores
 
 
 # Painted lines. A line is a thin thing: it does not survive an opening by a
@@ -1514,9 +1928,16 @@ def read_road(
 # the number of vehicles on a road at which it is that thick.
 _MIST_REACH_M = 110.0
 _MIST_TRAFFIC = 10
+# How far up the layer of mist a vehicle's roof is.
+_ROOF_IN_MIST = 0.75
 
 
-def road_mist(frame: RoadFrame, vehicles: np.ndarray, depth_m: np.ndarray) -> np.ndarray:
+def road_mist(
+    frame: RoadFrame,
+    vehicles: np.ndarray,
+    depth_m: np.ndarray,
+    traffic: list[RoadVehicle] | None = None,
+) -> np.ndarray:
     """The optical depth of the spray that hangs over a road in traffic, ``(H, W)`` float32.
 
     What one vehicle throws up, the next drives through: over a busy wet
@@ -1529,8 +1950,17 @@ def road_mist(frame: RoadFrame, vehicles: np.ndarray, depth_m: np.ndarray) -> np
     what a motorway in rain looks like.
 
     The depth is in proportion to the distance to each pixel of road, and
-    to how much traffic the road carries. On a vehicle it is that of the
-    road at its foot, less towards its roof, which stands above the layer.
+    to how much traffic the road carries. With ``traffic``
+    (:func:`road_vehicles`) each vehicle counts for what it throws up at
+    its speed (:func:`spray_amount`), so a queue hangs no mist over its
+    road; without, each counts for one.
+
+    On a vehicle it is that of the road at its foot, less towards its roof:
+    a sight line that ends on a vehicle leaves the layer where it meets the
+    vehicle, and has run through the less of it the higher up that is. A
+    car's roof is three quarters of the way up the layer. It used to be
+    taken as clear of it, and each car stood out of the mist behind it with
+    a hard edge all the way round.
     """
     height, width = vehicles.shape
     mask = (vehicles > 0.5).astype(np.uint8)
@@ -1552,20 +1982,25 @@ def road_mist(frame: RoadFrame, vehicles: np.ndarray, depth_m: np.ndarray) -> np
         body = parts[top : top + tall, left : left + wide] == index
         # How far up the vehicle each pixel of it is, from its foot.
         up = (np.arange(tall, dtype=np.float32)[::-1] / max(tall - 1, 1))[:, None]
-        low[top : top + tall, left : left + wide][body] = (
-            np.broadcast_to(1.0 - up, body.shape)[body] ** 2
-        )
+        low[top : top + tall, left : left + wide][body] = np.broadcast_to(
+            1.0 - _ROOF_IN_MIST * up, body.shape
+        )[body]
         foot_depth[top : top + tall, left : left + wide][body] = float(depth_m[row, column])
+    if traffic is not None:
+        carried = np.zeros(roads + 1)
+        for vehicle in traffic:
+            carried[vehicle.road] += spray_amount(vehicle.speed_kmh)
     on_road = np.where(mask > 0, low, frame.weight)
-    traffic = np.clip(carried / _MIST_TRAFFIC, 0.0, 1.0)[frame.piece]
+    busy = np.clip(carried / _MIST_TRAFFIC, 0.0, 1.0)[frame.piece]
     # A vehicle's pixels take the traffic of the road at its foot.
-    traffic = cv2.dilate(traffic.astype(np.float32), np.ones((3, 3), np.uint8))
+    busy = cv2.dilate(busy.astype(np.float32), np.ones((3, 3), np.uint8))
     by_piece = np.clip(carried / _MIST_TRAFFIC, 0.0, 1.0)
     for index in range(1, count):
         left, top, wide, tall, area = (int(value) for value in stats[index])
         row, column = min(top + tall - 1, height - 1), min(left + wide // 2, width - 1)
         if area >= _FEWEST_VEHICLE_PIXELS and frame.piece[row, column] > 0:
             body = parts[top : top + tall, left : left + wide] == index
-            traffic[top : top + tall, left : left + wide][body] = by_piece[frame.piece[row, column]]
-    mist = on_road * traffic * foot_depth / _MIST_REACH_M
-    return cv2.GaussianBlur(mist.astype(np.float32), (0, 0), sigmaX=1.2)
+            busy[top : top + tall, left : left + wide][body] = by_piece[frame.piece[row, column]]
+    mist = on_road * busy * foot_depth / _MIST_REACH_M
+    soften = max(1.2, 0.003 * float(np.hypot(height, width)))
+    return cv2.GaussianBlur(mist.astype(np.float32), (0, 0), sigmaX=soften)
