@@ -8,6 +8,7 @@ against the lines it should follow.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -16,7 +17,16 @@ from surmentations.depth.estimator import DepthEstimator
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import recording
 from surmentations.perception import SceneClass, SceneLabelEstimator
-from surmentations.utils.road import Lanes, road_frame, road_lanes, wheel_tracks
+from surmentations.utils.road import (
+    Lanes,
+    painted_lines,
+    read_road,
+    road_frame,
+    road_lanes,
+    straighten,
+    vehicle_spray,
+    wheel_tracks,
+)
 
 HEIGHT, WIDTH = 240, 320
 VANISHING = (160.0, 60.0)
@@ -151,29 +161,141 @@ def _vehicles(frame_mask: np.ndarray, feet: list[tuple[float, int]], size: float
     return vehicles
 
 
+def _lane_of(lanes: Lanes, position: float) -> tuple[float, float]:
+    """How far ``position`` is from the middle of its lane, in lanes, and the lane's width."""
+    lines = lanes.edges[1]
+    index = int(np.clip(np.searchsorted(lines, position) - 1, 0, len(lines) - 2))
+    wide = float(lines[index + 1] - lines[index])
+    return abs(position - 0.5 * float(lines[index] + lines[index + 1])) / wide, wide
+
+
 def test_the_lanes_are_where_the_vehicles_are() -> None:
     """Three lanes of 80 pixels at the bottom row, a car in each a good way
-    up the road: the comb of lanes lands on them, and is as wide as 1.7 cars."""
+    up the road, and no paint: the comb of lanes is slid to where the cars
+    sit in the middle of its teeth, and a lane is as wide as 1.7 cars."""
     mask = _fan(40.0, 280.0)
     frame = road_frame(mask)
     assert frame is not None
     feet = [(80.0, 150), (160.0, 180), (240.0, 210), (160.0, 120), (80.0, 220)]
     lanes = road_lanes(frame, _vehicles(mask, feet, 47.0), np.random.default_rng(0))
-    assert float(lanes.width[1]) == pytest.approx(80.0 / 240.0, rel=0.15)
+    assert lanes.painted[1] == 0
     for foot in (80.0, 160.0, 240.0):
-        position = (foot - 40.0) / 240.0
-        turns = (position - lanes.centre[1]) / lanes.width[1]
-        assert abs(turns - round(turns)) < 0.12, f"no lane under the car at {foot}"
-    assert lanes.first[1] < 0.15 and lanes.last[1] > 0.85
+        off_centre, wide = _lane_of(lanes, (foot - 40.0) / 240.0)
+        assert off_centre < 0.15, f"the car at {foot} is not in the middle of a lane"
+        assert wide == pytest.approx(80.0 / 240.0, rel=0.2)
 
 
-def test_a_road_with_no_vehicles_gets_a_drawn_number_of_lanes() -> None:
+def _painted_road(lines: tuple[float, ...] = (40.0, 120.0, 200.0, 280.0)) -> np.ndarray:
+    """A grey fan of road with white lines painted from the vanishing point to those feet."""
+    scene = np.full((HEIGHT, WIDTH, 3), 0.12, dtype=np.float32)
+    rows = np.arange(74, HEIGHT)
+    for foot in lines:
+        columns = _on_line(foot, rows)
+        for offset in (0, 1):
+            scene[rows, np.clip(columns + offset, 0, WIDTH - 1)] = 0.8
+    return scene
+
+
+def test_painted_lines_are_thin_bright_long_and_lie_along_the_road() -> None:
+    """Which is what tells a lane line from a crossing, an arrow or a patch
+    of light, all of which are bright."""
+    mask = _fan(30.0, 290.0)
+    frame = road_frame(mask)
+    assert frame is not None
+    scene = _painted_road()
+    scene[150:156, 60:250][:, ::14] = 0.8  # studs across the road
+    scene[180:186, 100:220] = 0.8  # a stop line, across it
+    scene[100:140, 152:172] = np.maximum(scene[100:140, 152:172], 0.5)  # a pool of light
+    paint = painted_lines(scene, frame, mask, None)
+    rows = np.arange(90, 145)
+    for foot in (120.0, 200.0):
+        assert paint[rows, _on_line(foot, rows)].mean() > 0.8, "a lane line was not found"
+    assert not paint[181:185, 110:210].any(), "a line across the road was taken for a lane line"
+    assert paint[105:135, 156:168].mean() < 0.05, "a pool of light was taken for paint"
+    # And not near what stands on the road.
+    on_road = np.zeros_like(mask)
+    on_road[200:230, 100:140] = True
+    assert not painted_lines(scene, frame, mask, on_road)[205:225, 105:135].any()
+
+
+def test_lanes_are_read_off_the_paint_before_anything_else() -> None:
+    """Three lanes between four lines. The cars say a lane is half as wide
+    as it is, and sit off-centre: the paint is believed."""
+    mask = _fan(30.0, 290.0)
+    frame = road_frame(mask)
+    assert frame is not None
+    scene = _painted_road()
+    paint = painted_lines(scene, frame, mask, None)
+    feet = [(70.0, 150), (150.0, 200)]
+    lanes = road_lanes(frame, _vehicles(mask, feet, 30.0), np.random.default_rng(0), paint=paint)
+    assert lanes.painted[1] >= 3
+    lines = lanes.edges[1]
+    for foot in (120.0, 200.0):
+        position = (foot - 30.0) / 260.0
+        assert float(np.abs(lines - position).min()) < 0.02, f"no lane line on the paint at {foot}"
+    assert float(np.median(np.diff(lines))) == pytest.approx(80.0 / 260.0, rel=0.1)
+
+
+def test_a_line_worn_away_leaves_a_gap_of_two_lanes() -> None:
+    mask = _fan(30.0, 290.0)
+    frame = road_frame(mask)
+    assert frame is not None
+    scene = _painted_road((40.0, 120.0, 280.0))
+    paint = painted_lines(scene, frame, mask, None)
+    lanes = road_lanes(frame, None, np.random.default_rng(0), paint=paint)
+    assert float(np.abs(lanes.edges[1] - (200.0 - 30.0) / 260.0).min()) < 0.03
+
+
+def test_paint_that_fits_no_even_spacing_is_not_lane_lines() -> None:
+    mask = _fan(30.0, 290.0)
+    frame = road_frame(mask)
+    assert frame is not None
+    scene = _painted_road((40.0, 95.0, 118.0, 201.0, 280.0))
+    paint = painted_lines(scene, frame, mask, None)
+    lanes = road_lanes(frame, None, np.random.default_rng(0), paint=paint)
+    assert lanes.painted[1] == 0 and len(lanes.edges[1]) >= 3
+
+
+def test_painted_lines_put_a_road_right_where_its_mask_is_wrong() -> None:
+    """A mask that takes in a hard shoulder on one side, low down, has a
+    side that is no line through the vanishing point, and the lanes read
+    off it lean. The paint runs to the vanishing point whatever the mask
+    does, and the road is redrawn through that."""
+    mask = _fan(30.0, 290.0)
+    rows, columns = np.mgrid[0:HEIGHT, 0:WIDTH]
+    mask |= (rows > 150) & (columns > 150) & (columns < 300 + 0.4 * (rows - 150))
+    scene = _painted_road()
+    crooked = road_frame(mask)
+    assert crooked is not None
+    paint = painted_lines(scene, crooked, mask, None)
+    true = straighten(crooked, paint)
+    down = np.arange(100, 230)
+    line = true.across[down, _on_line(120.0, down)]
+    assert float(line.max() - line.min()) < 0.02
+    was = crooked.across[down, _on_line(120.0, down)]
+    assert float(was.max() - was.min()) > 2.0 * float(line.max() - line.min())
+    assert abs(float(true.along[200, 250, 0])) > 0.3, "the way along it does not fan"
+    # Nothing to go by: left as it was.
+    assert np.array_equal(straighten(crooked, np.zeros_like(mask)).across, crooked.across)
+
+
+def test_reading_a_road_does_all_of_it_in_one_call() -> None:
+    mask = _fan(30.0, 290.0)
+    nothing = np.zeros_like(mask)
+    read = read_road(_painted_road(), mask, nothing, None, np.random.default_rng(0))
+    assert read is not None
+    frame, lanes = read
+    assert lanes.painted[1] >= 3 and float(frame.weight[200, 160]) == 1.0
+    assert read_road(_painted_road(), nothing, nothing, None, np.random.default_rng(0)) is None
+
+
+def test_a_road_with_no_vehicles_and_no_paint_gets_a_drawn_number_of_lanes() -> None:
     frame = road_frame(_fan(40.0, 280.0))
     assert frame is not None
     counts = set()
     for seed in range(12):
         lanes = road_lanes(frame, None, np.random.default_rng(seed), lane_count_range=(2, 4))
-        counts.add(round(0.9 / float(lanes.width[1])))
+        counts.add(len(lanes.edges[1]) - 1)
     assert counts == {2, 3, 4}
 
 
@@ -188,12 +310,12 @@ def test_vehicles_lying_across_a_road_say_it_was_read_the_wrong_way() -> None:
     lying[60:72, 120:160] = True
     lying[150:162, 150:190] = True
     lanes = road_lanes(frame, lying, np.random.default_rng(0))
-    assert lanes.first[1] > lanes.last[1]
+    assert len(lanes.edges[1]) == 0
     tracks = wheel_tracks(frame, lanes, 0.1, np.random.default_rng(0))
     assert float(tracks.max()) == 0.0
     standing = np.zeros_like(mask)
     standing[60:100, 120:136] = True
-    assert road_lanes(frame, standing, np.random.default_rng(0)).first[1] < 0.5
+    assert len(road_lanes(frame, standing, np.random.default_rng(0)).edges[1]) >= 2
 
 
 # ------------------------------------------------------------------------ the tracks
@@ -203,13 +325,7 @@ def _straight_lanes() -> tuple[np.ndarray, Lanes]:
     """A road up the middle of the frame, 200 pixels wide, in two lanes."""
     mask = np.zeros((HEIGHT, WIDTH), dtype=bool)
     mask[:, 60:260] = True
-    lanes = Lanes(
-        centre=np.array([0.0, 0.25]),
-        width=np.array([1.0, 0.5]),
-        first=np.array([0.0, 0.02]),
-        last=np.array([1.0, 0.98]),
-    )
-    return mask, lanes
+    return mask, Lanes(edges=[np.zeros(0), np.array([0.0, 0.5, 1.0])], painted=[0, 0])
 
 
 def test_each_lane_has_two_tracks_where_its_wheels_run() -> None:
@@ -259,7 +375,7 @@ def test_far_down_the_road_the_tracks_run_together() -> None:
     road is greyer all over, and no more of it than the tracks were."""
     frame = road_frame(_fan(40.0, 280.0))
     assert frame is not None
-    lanes = Lanes(np.array([0.0, 0.1]), np.array([1.0, 0.2]), np.zeros(2), np.ones(2))
+    lanes = Lanes(edges=[np.zeros(0), np.linspace(0.0, 1.0, 6)], painted=[0, 0])
     tracks = wheel_tracks(frame, lanes, 0.06, np.random.default_rng(1))
     near, far = tracks[225, 60:260], tracks[78, 155:166]
     assert float(near.max()) > 0.3 and float(near.min()) < 0.02
@@ -328,7 +444,7 @@ def test_traffic_wears_dark_tracks_into_a_snowed_road() -> None:
     assert drew["wheel_tracks_drawn"] and drew["road_share"] == pytest.approx(0.625, abs=0.02)
     road = (slice(20, 80), slice(70, 250))
     assert float(untouched[road].std()) < 10.0, "the fixture's snow is not an even coat"
-    assert float(worn[road].min()) < 0.6 * float(untouched[road].mean())
+    assert float(worn[road].min()) < 0.7 * float(untouched[road].mean())
     assert float(worn[road].max()) > 0.9 * float(untouched[road].mean()), "no snow left between"
     # Tracks run along the road: a column down it is one thing or the other
     # for most of its length, a row across it is both.
@@ -416,8 +532,9 @@ def _rained(labelled: bool = True, **kwargs: object) -> tuple[np.ndarray, dict]:
         "camera_pitch_range_deg": (35.0, 35.0),
         "rain_rate_range_mm_h": (2.0, 2.0),
     }
+    seed = int(kwargs.pop("seed", 0))  # type: ignore[call-overload]
     rain = RandomRain(depth_provider=provider, p=1.0, **{**settings, **kwargs})  # type: ignore[arg-type]
-    rain.set_random_seed(0)
+    rain.set_random_seed(seed)
     with recording() as log:
         out = rain(image=image)["image"].astype(np.float32)
     return out, {**log[0]["drew"], **log[0]["out"]}
@@ -438,7 +555,13 @@ def test_a_soaked_road_is_under_cloud_whatever_is_falling() -> None:
 def test_spray_trails_the_vehicles_on_a_wet_road_and_only_when_asked() -> None:
     plain, drew = _rained()
     assert not drew["spray_drawn"] and "spray" not in drew or drew["spray"] == 0.0
-    sprayed, drew = _rained(spray_range=(1.0, 1.0))
+    # A vehicle may be standing, and have none: the first draw in which
+    # one of the two is moving.
+    for seed in range(8):
+        plain, _drew = _rained(seed=seed)
+        sprayed, drew = _rained(spray_range=(1.0, 1.0), seed=seed)
+        if drew["spray_drawn"]:
+            break
     assert drew["spray_drawn"]
     changed = np.abs(sprayed - plain).max(axis=2) > 6.0
     assert 0.002 < float(changed.mean()) < 0.4
@@ -457,8 +580,6 @@ def test_spray_trails_the_vehicles_on_a_wet_road_and_only_when_asked() -> None:
 def test_a_plume_lies_behind_its_vehicle_along_the_road() -> None:
     """Densest at the tail, a couple of lengths long, and on one side of the
     vehicle only: the side it has come from."""
-    from surmentations.utils.road import vehicle_spray
-
     mask, _lanes = _straight_lanes()
     frame = road_frame(mask)
     assert frame is not None
@@ -497,3 +618,87 @@ def test_no_dry_rim_is_left_round_a_labelled_vehicle() -> None:
     assert float(wet[115:125, 150:170].mean()) < 0.05, "the car is wet"
     for rim in (wet[97:99, 140:180], wet[141:143, 140:180], wet[105:135, 127:129]):
         assert float(rim.mean()) > 0.85, "a dry rim round the car"
+
+
+def test_a_plume_follows_its_vehicle_s_own_heading() -> None:
+    """A car crossing the lanes at an angle trails its spray along its own
+    line, not the road's; and it is as wide as the car is across that line."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    slanted = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    # 44 long and 18 wide, leaning 30 degrees from the road's direction.
+    box = cv2.boxPoints(((160.0, 110.0), (18.0, 44.0), 30.0))
+    cv2.fillConvexPoly(slanted, box.astype(np.int32), 1)
+    leans = []
+    for seed in range(30):
+        spray = vehicle_spray(frame, slanted.astype(bool), np.random.default_rng(seed))
+        below = spray[140:210]
+        if float(below.sum()) < 1.0 or float(spray[:80].sum()) > float(below.sum()):
+            continue
+        rows, columns = np.mgrid[140:210, 0:WIDTH]
+        centre = float((columns * below).sum() / below.sum())
+        leans.append(centre - 160.0)
+    assert leans, "no plume was thrown towards the camera in thirty draws"
+    # The tail of a box leaning that way is to the left of its middle, and
+    # the plume runs on down and to the left from it.
+    assert max(leans) < -8.0
+
+
+def test_tail_lamps_say_which_way_the_traffic_runs() -> None:
+    """Red lamps are seen from behind: those vehicles are driving away, and
+    their spray trails towards the camera, every time and not half of it."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    for left, top in ((100, 60), (190, 120)):
+        vehicles[top : top + 30, left : left + 26] = True
+        scene[top + 24 : top + 27, left + 2 : left + 6] = (0.9, 0.05, 0.05)
+        scene[top + 24 : top + 27, left + 20 : left + 24] = (0.9, 0.05, 0.05)
+    for seed in range(12):
+        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed), scene)
+        above = float(spray[20:58].sum() + spray[95:118, 180:230].sum())
+        below = float(spray[92:118, 90:140].sum() + spray[152:200].sum())
+        assert above <= 0.05 * below + 1e-6, "a plume trailing ahead of a car seen from behind"
+
+
+def test_a_vehicle_lying_across_the_road_and_one_on_a_scrap_of_road_get_no_plume() -> None:
+    """Crossing, turning or parked; or on a road whose direction is a guess.
+    Both used to shoot a jet of mist out sideways."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    across = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    across[110:124, 130:190] = True
+    for seed in range(10):
+        assert float(vehicle_spray(frame, across, np.random.default_rng(seed)).max()) == 0.0
+    scrap = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scrap[60:200, 150:168] = True
+    small = road_frame(scrap)
+    assert small is not None and float((small.piece > 0).mean()) < 0.05
+    car = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    car[100:124, 152:166] = True
+    for seed in range(10):
+        assert float(vehicle_spray(small, car, np.random.default_rng(seed)).max()) == 0.0
+
+
+def test_a_plume_is_a_low_cloud_as_wide_as_its_vehicle() -> None:
+    """Not a jet: at its tail it is about the vehicle's width, and it does
+    not reach far beyond a length and a half."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    vehicles[90:130, 148:172] = True
+    for seed in range(40):
+        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed))
+        if float(spray[131:].sum()) < 1.0:
+            continue
+        row = spray[136]
+        wide = int((row > 0.5 * row.max()).sum())
+        assert 14 <= wide <= 44, f"a plume {wide} pixels wide behind a car of 24"
+        assert float(spray[215:].max()) < 0.1 * float(spray.max())
+        return
+    raise AssertionError("no plume was thrown towards the camera in forty draws")

@@ -134,7 +134,7 @@ from surmentations.utils.precipitation import (
     snow_physical_diameter,
     width_cut_for_budget,
 )
-from surmentations.utils.road import road_frame, road_lanes, wheel_tracks
+from surmentations.utils.road import read_road, wheel_tracks
 from surmentations.utils.sky import (
     extinction_for_visibility,
     lift_sky,
@@ -1087,9 +1087,12 @@ class RandomSnow(CameraTransform):
         traffic = self.py_random.uniform(*self.wheel_track_range)
         cleared = None
         if road is not None and traffic > 0.0:
-            frame = road_frame(road)
-            if frame is not None:
-                lanes = road_lanes(frame, on_road, rng)
+            carriageway = labels == int(SceneClass.ROAD) if labels is not None else road
+            standing_on = np.zeros(road.shape, dtype=bool) if on_road is None else on_road
+            named_vehicles = None if labels is None else labels == int(SceneClass.VEHICLE)
+            read = read_road(linear_scene, carriageway, standing_on, named_vehicles, rng)
+            if read is not None:
+                frame, lanes = read
                 ragged = ground_noise(depth_pm, focal, camera_pitch, _TRACK_RAGGED_M, rng)
                 worn = ground_noise(depth_pm, focal, camera_pitch, _TRACK_WORN_M, rng)
                 low, high = _TRACK_BAND
