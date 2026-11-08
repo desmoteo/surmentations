@@ -23,10 +23,17 @@ both off the picture, and `RandomSnow` and `RandomRain` use them:
 "Scene labels" means a provider built with `labels=`
 ([scene understanding](scene_understanding.md)): they say where the road
 and its vehicles are. Without them there is no road to follow, and
-everything in the table that needs them is simply not drawn.
+everything in the table that needs them is simply not drawn. Spray and
+lamps are much the better for a provider built with `vehicles=` as well,
+which has a network say which end of each vehicle is seen and where its
+lamps are ([vehicle views](scene_understanding.md#vehicle-views)).
 
 ```python
-provider = SharedDepthProvider(DepthAnythingV2Estimator(), labels=SegmentationLabelEstimator())
+provider = SharedDepthProvider(
+    DepthAnythingV2Estimator(),
+    labels=SegmentationLabelEstimator(),
+    vehicles=OpenVocabularyVehicleEstimator(),  # for spray and lamps
+)
 snow = RandomSnow(depth_provider=provider, wheel_track_range=(0.2, 0.8))
 rain = RandomRain(
     depth_provider=provider,
@@ -54,7 +61,7 @@ flowchart TD
     COMB --> TRACKS["wheel tracks, ruts, gutters"]
     FIT --> DIR["the road's direction at every pixel"]
     DIR --> SPRAY["spray: tufts, wakes, mist"]
-    LENS["each vehicle's own picture:<br/>red lenses = seen from behind"] --> VOTE
+    LENS["each vehicle's own picture:<br/>a network's reading of its lamps,<br/>or red lenses by colour"] --> VOTE
     OFF --> VOTE["one vote per road: one way,<br/>or two ways about its widest empty strip"]
     VOTE --> SPRAY
     SPEED["traffic speed, drawn:<br/>frame, road, vehicle"] --> SPRAY
@@ -190,10 +197,19 @@ Where each wake lies:
 
 ### Which way the traffic is going
 
-The spray is behind the vehicle, so which end is the back has to be known,
-and a single frame says so only weakly.
+The spray is behind the vehicle, so which end is the back has to be known.
 
-**What one vehicle shows** ([`vehicle_facing`](../src/surmentations/utils/road.py)):
+**What one vehicle shows, to a network.** A provider built with
+`vehicles=` has a detector look at each vehicle for a headlight and for a
+tail light ([vehicle views](scene_understanding.md#vehicle-views)). Which
+it is surer of is the end that is seen, and it was right for all 22 of
+the single vehicles in these scenes, where colour was right for 12:
+
+![vehicles as read](assets/road_surface/vehicle_views.jpg)
+
+**What one vehicle shows, by colour**
+([`vehicle_facing`](../src/surmentations/utils/road.py)), which is what is
+used without a reader and for any vehicle the reader did not read:
 
 - *A rear has red lenses*: a few small patches of red, each a small part
   of the vehicle. One is enough, the other being as often hidden or in
@@ -217,6 +233,11 @@ evidence agrees with is taken, two ways only when it explains more than
 one. So a red taxi goes the way of the cars about it, and two rears in
 shade among a carriageway's lanes do not turn their neighbours round. Where
 no vehicle of a road says anything, its direction is drawn.
+
+A network's reading is a vote like any other, weighted by how much surer it
+is of one lamp than the other; and a vehicle it is sure of keeps its own
+reading whatever its road says. That is what a junction needs, where one
+road's traffic goes three ways, and a car parked facing the traffic.
 
 ### How fast it is going
 
@@ -261,11 +282,16 @@ dry has them off. `vehicle_lamp_range` lights them
 
 - **Which lamps** is the reading above: two headlamps on a vehicle coming
   on, two tail lamps on one driving away.
-- **Where.** The end that is seen is the lower part of the outline, and
-  the pair is at one height on it, a little in from either side and a
-  quarter of the way up. A rear whose lenses can be seen is lit where they
-  are. A vehicle seen from the side, and an outline that is several
-  vehicles, has no such end, and only lenses that are seen are lit on it.
+- **Where, with a reader.** Where the network found them: the pair, or
+  the one that is seen, each as large as it was found, and no larger than
+  a lamp is against its vehicle. Found on the end the vehicle is taken to
+  show, or not used.
+- **Where, without.** The end that is seen is the lower part of the
+  outline, and the pair is put at one height on it, a little in from
+  either side and a quarter of the way up. A rear whose lenses can be seen
+  is lit where they are. A vehicle seen from the side, and an outline that
+  is several vehicles, has no such end, and only lenses that are seen are
+  lit on it. Placed lamps are on the car and seldom on its lamps.
 - **How bright.** A lamp is far over full scale: a dipped headlamp about
   six times it at a strength of 1 and a tail lamp about twice, each a
   little more or less, halogen or LED in colour. One rear in eight is
@@ -305,13 +331,19 @@ dry has them off. `vehicle_lamp_range` lights them
 - **Touching vehicles are one vehicle** to a semantic mask, so dense
   traffic gives fewer, wider plumes, and no lamps on the merged outline
   unless its lenses are seen.
-- **Which way a vehicle faces is weak evidence pooled.** A one-way road
-  whose every rear is in shade and shows no red reads as coming on. Two
-  carriageways with an empty lane wider than their reserve are divided at
-  the lane. A road with no evidence at all has its direction drawn.
-- **Lamps are placed, not found.** A headlamp is put where a headlamp
-  usually is on an outline, which on an unusual vehicle or a partly hidden
-  one is not where it is.
+- **Without a reader, which way a vehicle faces is weak evidence
+  pooled.** A one-way road whose every rear is in shade and shows no red
+  reads as coming on. Two carriageways with an empty lane wider than their
+  reserve are divided at the lane. A road with no evidence at all has its
+  direction drawn. And lamps are placed, not found: a headlamp is put
+  where a headlamp usually is on an outline.
+- **With a reader, it is as good as the network.** It was right on every
+  single vehicle of four scenes, which is not a measurement. It reads the
+  32 largest outlines of at least 150 pixels; smaller and further ones are
+  read by colour. A vehicle seen from the side shows one lamp of each
+  kind, leans neither way and goes with its road. An outline of several
+  vehicles is read as one, and may be lit with one car's left lamp and
+  another's right.
 - **The traffic's speed is the caller's.** Nothing in a frame is read for
   it; the default range covers a town and a motorway and is right for
   neither.
