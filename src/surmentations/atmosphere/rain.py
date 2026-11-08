@@ -105,6 +105,7 @@ from surmentations.utils.ground import (
     standing_objects,
     vegetation_weight,
 )
+from surmentations.utils.noise import value_noise
 from surmentations.utils.overcast import apply_overcast, cloud_cover
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
@@ -117,6 +118,14 @@ from surmentations.utils.precipitation import (
     resolvable_fraction,
     sample_resolvable_particles,
     width_cut_for_budget,
+)
+from surmentations.utils.road import (
+    Lanes,
+    RoadFrame,
+    road_frame,
+    road_lanes,
+    vehicle_spray,
+    wheel_tracks,
 )
 from surmentations.utils.sky import (
     extinction_for_visibility,
@@ -367,6 +376,18 @@ class RandomRain(CameraTransform):
             what is above it, sky mostly, and by day the brightest thing on
             a wet road; between puddles the road is dark and glossy. Scaled
             by how wet the ground is, so a damp road has none.
+        spray_range: how much spray the vehicles on a wet road throw up,
+            drawn per call. 0, the default, is none. Above it, each vehicle
+            on a road with a film of water trails a plume of mist: at 0.3 a
+            haze round its wheels, at 1 a cloud a couple of lengths long
+            that hides the lower half of whatever follows. It needs scene
+            labels on the provider, for the vehicles and the road they are
+            on, and does nothing without. Off by default because of what a
+            single frame cannot say: which vehicles are moving, and which
+            way. Each road's direction of travel is drawn, and each vehicle
+            is given its own share of spray or none; a parked car may get a
+            plume, and a plume may trail the wrong way. See
+            :func:`~surmentations.utils.road.vehicle_spray`.
         lamp_glint_range: at night, how many times full scale the lamps in
             the frame are taken to be when they light the rain, drawn per
             call. Zero — the default — leaves every streak lit by the
@@ -504,6 +525,11 @@ class RandomRain(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        spray_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
 
     def __init__(
         self,
@@ -532,6 +558,7 @@ class RandomRain(CameraTransform):
         overcast_range: tuple[float, float] = (0.7, 1.0),
         lamp_glint_range: tuple[float, float] = (0.0, 0.0),
         puddle_coverage_range: tuple[float, float] = (0.0, 0.45),
+        spray_range: tuple[float, float] = (0.0, 0.0),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -566,6 +593,7 @@ class RandomRain(CameraTransform):
         self.overcast_range = overcast_range
         self.lamp_glint_range = lamp_glint_range
         self.puddle_coverage_range = puddle_coverage_range
+        self.spray_range = spray_range
 
     def _veil_beta_bounds(self, rain_rate_mm_h: float) -> tuple[float, float]:
         """Veil extinction range, derived from the rain rate unless overridden."""
@@ -795,10 +823,41 @@ class RandomRain(CameraTransform):
                 horizon_row=self.depth_provider.horizon_row(scene),
             )
 
+        # The road's own coordinates, where the scene's labels say what is
+        # road: water stands along it, in its ruts and its gutters.
+        road = lanes = lie = None
+        if draw_wetness and labels is not None:
+            on_road = class_weight(labels, _ON_THE_ROAD) > 0.5
+            road = road_frame(on_road | (labels == int(SceneClass.ROAD)))
+            if road is not None:
+                lanes = road_lanes(road, on_road, rng)
+                lie = water_lie(road, lanes, rng)
+
         puddle_coverage = self.py_random.uniform(*self.puddle_coverage_range)
         puddles = np.zeros((height, width), dtype=np.float32)
         if draw_wetness and puddle_coverage > 0.0:
-            puddles = _puddles(depth_pm, focal, camera_pitch, puddle_coverage, rng)
+            puddles = _puddles(
+                depth_pm, focal, camera_pitch, puddle_coverage, rng, lie, wetness
+            )
+
+        # The light. Rain falls from cloud, in step with its rate; and a
+        # road does not get soaked under a clear sky, whatever is falling
+        # at this moment. A film on the road means it has rained for some
+        # time, and the sky that did it is still there: without this a
+        # soaked road under light rain was lit by the sun, which is the one
+        # light a wet road is least seen in.
+        film = float(
+            np.clip(
+                (_DAMP_ALBEDO_RATIO - wetness_darkening)
+                / (_DAMP_ALBEDO_RATIO - _SOAKED_ALBEDO_RATIO),
+                0.0,
+                1.0,
+            )
+        )
+        cloud = cloud_cover(rain_rate, _OVERCAST_HALF_RATE_MM_H)
+        if draw_wetness:
+            cloud = max(cloud, _SOAKED_ROAD_CLOUD * film)
+        overcast = self.py_random.uniform(*self.overcast_range) * cloud
 
         record_draw(
             puddle_coverage=puddle_coverage,
@@ -810,7 +869,7 @@ class RandomRain(CameraTransform):
             ground_fraction=lambda: float((wetness > 0.05).mean()),
         )
 
-        return {
+        drawn = {
             "streaks": {
                 "x": x,
                 "y": y,
@@ -834,8 +893,7 @@ class RandomRain(CameraTransform):
             "angle": wind_angle,
             "veil_transmission": np.exp(-veil_beta * lift_sky(depth_pm, sky)).astype(np.float32),
             "sky": sky,
-            "overcast": self.py_random.uniform(*self.overcast_range)
-            * cloud_cover(rain_rate, _OVERCAST_HALF_RATE_MM_H),
+            "overcast": overcast,
             "lamp_glint": self.py_random.uniform(*self.lamp_glint_range),
             "draw_wetness": draw_wetness,
             "wetness": wetness,
@@ -844,7 +902,23 @@ class RandomRain(CameraTransform):
             "horizon_px": horizon,
             "mirror_px": far_end,
             "focal_px": focal,
+            # Rain on standing water roughens it, in step with the rate.
+            "puddle_ripple": 1.0 + min(rain_rate / _RIPPLE_RATE_MM_H, _RIPPLE_MOST - 1.0),
         }
+
+        # Spray, last: what is drawn for it comes after every other draw.
+        spray = self.py_random.uniform(*self.spray_range)
+        sprayed = False
+        if spray > 0.0 and road is not None and film > 0.0 and labels is not None:
+            plumes = vehicle_spray(road, labels == int(SceneClass.VEHICLE), rng)
+            if float(plumes.max()) > 0.0:
+                # Mist is not even: it is torn by the air the vehicle drags.
+                torn = value_noise(height, width, rng=rng, octaves=5, base_cells=6)
+                thickness = np.float32(_SPRAY_DENSITY * spray * film) * plumes * (0.35 + 1.3 * torn)
+                drawn["spray"] = (1.0 - np.exp(-thickness)).astype(np.float32)
+                sprayed = True
+        record_draw(spray=spray, spray_drawn=sprayed)
+        return drawn
 
     def apply(
         self,
@@ -862,6 +936,8 @@ class RandomRain(CameraTransform):
         lamp_glint: float = 0.0,
         puddles: np.ndarray | None = None,
         mirror_px: float | None = None,
+        spray: np.ndarray | None = None,
+        puddle_ripple: float = 1.0,
         **params: Any,
     ) -> np.ndarray:
         """Relight the frame for overcast, veil it, draw the streaks, and wet the road.
@@ -948,7 +1024,15 @@ class RandomRain(CameraTransform):
                 lamp_gain=max(lamp_glint, 1.0),
                 puddles=puddles,
                 mirror_px=mirror_px,
+                puddle_ripple=puddle_ripple,
             )
+
+        if spray is not None:
+            # Over the road and what is on it: the spray hangs in the air
+            # above the water it was lifted from, and is lit as the rain's
+            # own veil is.
+            share = spray[..., None]
+            out = out * (1.0 - share) + airlight[None, None, :] * np.float32(_SPRAY_ALBEDO) * share
 
         return from_linear_unit(out, scale, is_integer, img.dtype)
 
@@ -1224,6 +1308,21 @@ _WET_GROUND_FAR_M = 400.0
 _NO_FILM = (*NOT_GROUND, SceneClass.GRASS)
 _LABEL_EDGE = 0.003
 
+# Spray: the optical depth of a plume at its densest, at full strength over
+# a soaked road; and how bright it is against the veil's own light, being
+# close to the ground and under the vehicle that throws it.
+_SPRAY_DENSITY = 1.5
+_SPRAY_ALBEDO = 0.9
+# Rain on a puddle: the rate at which its reflection is twice as blurred as
+# still water's, and the most it is blurred by.
+_RIPPLE_RATE_MM_H = 15.0
+_RIPPLE_MOST = 3.5
+# What is on a road and is part of it for finding its sides.
+_ON_THE_ROAD = (SceneClass.VEHICLE, SceneClass.PERSON)
+# How overcast the sky is taken to be over a soaked road, whatever is
+# falling: the share of full cloud.
+_SOAKED_ROAD_CLOUD = 0.85
+
 # Fraction of the frame's height over which a reflection hands over from the
 # mirrored picture to the sky, as its source row nears the top edge.
 _OFF_FRAME_BLEND = 0.08
@@ -1245,12 +1344,24 @@ def _paved_weight(linear_rgb: np.ndarray) -> np.ndarray:
 _PUDDLE_SCALE_M = 1.2
 
 
+# How much lower the road lies where water collects on it, on the scale of
+# the noise the puddles are cut from, which runs from 0 to 1: enough that
+# most of a light covering of water is in the ruts and the gutters, and not
+# so much that a puddle cannot lie anywhere else.
+_PUDDLE_LIE = 0.3
+# Half the width of a puddle's edge on the same scale. Water has an edge: a
+# puddle that fades out over half its width is a stain.
+_PUDDLE_EDGE = 0.012
+
+
 def _puddle_map(
     depth_m: np.ndarray,
     focal_px: float,
     camera_pitch_deg: float,
     coverage: float,
     rng: np.random.Generator,
+    lie: np.ndarray | None = None,
+    wet: np.ndarray | None = None,
 ) -> np.ndarray:
     """``[0, 1]`` map of standing water, laid out on the ground and not the screen.
 
@@ -1258,11 +1369,46 @@ def _puddle_map(
     wide and thin towards the horizon, round at the camera's feet. The
     lowest-lying ``coverage`` of a noise pattern in ground coordinates is
     under water.
+
+    ``lie`` is where the road lies low, ``(H, W)`` in ``[0, 1]``: the wheel
+    ruts and the gutters (:func:`water_lie`). The noise is lowered by it, so
+    that water stands there first, in strips along the road, and anywhere
+    else only once there is a good deal of it. ``wet`` is the wet ground's
+    weight; the share under water is then a share of that, and not of a
+    frame most of which may be sky.
     """
-    noise = ground_noise(depth_m, focal_px, camera_pitch_deg, _PUDDLE_SCALE_M, rng)
-    level = float(np.quantile(noise, coverage))
-    edge = 0.03
+    noise = ground_noise(depth_m, focal_px, camera_pitch_deg, _PUDDLE_SCALE_M, rng, octaves=4)
+    if lie is not None:
+        noise = noise - np.float32(_PUDDLE_LIE) * lie
+    ground = noise[wet > 0.5] if wet is not None and float((wet > 0.5).mean()) > 0.01 else noise
+    level = float(np.quantile(ground, coverage))
+    edge = _PUDDLE_EDGE
     return np.clip((level + edge - noise) / (2.0 * edge), 0.0, 1.0).astype(np.float32)
+
+
+# Where water collects on a road: against either kerb, within this share of
+# the road's width of it; and in the wheel ruts, which are this share of a
+# lane wide, and hold this much as much as a gutter does.
+_GUTTER = 0.035
+_RUT_BAND = 0.07
+_RUT_SHARE = 0.75
+
+
+def water_lie(frame: RoadFrame, lanes: Lanes, rng: np.random.Generator) -> np.ndarray:
+    """Where a road lies low and water stands on it first, ``(H, W)`` in ``[0, 1]``.
+
+    A road is not flat, and where its water stands is not chance. It is
+    cambered, and drains to the kerbs: the gutter is wet when nothing else
+    is. And traffic presses two ruts into every lane, a few millimetres
+    deep, which is as deep as a puddle needs. Both run along the road, so
+    this is drawn in the road's own coordinates
+    (:mod:`surmentations.utils.road`).
+    """
+    from_kerb = np.minimum(frame.across, 1.0 - frame.across)
+    gutter = np.exp(-((from_kerb / _GUTTER) ** 2))
+    ruts = wheel_tracks(frame, lanes, _RUT_BAND, rng)
+    lie: np.ndarray = np.maximum(gutter, _RUT_SHARE * ruts) * frame.weight
+    return lie.astype(np.float32)
 
 
 # How close to white a pixel has to be before it is spared the darkening.
@@ -1455,7 +1601,14 @@ def _read_wet_ground(
         # And not on what the network could name and the depth map could
         # not tell from road. By colour a tree is vegetation by day and
         # paving under a sodium lamp.
-        wetness *= 1.0 - class_weight(labels, _NO_FILM, soften_px=soften)
+        # Drawn in from its outline by as much as the outline is softened:
+        # a network's outline of a car runs a little outside the car, and
+        # a soft edge on top of that left a rim of dry, pale road round
+        # every vehicle on a dark wet one, like a glow.
+        reach = max(3, 2 * round(soften) + 1)
+        named = (class_weight(labels, _NO_FILM) > 0.5).astype(np.uint8)
+        inner = cv2.erode(named, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach)))
+        wetness *= 1.0 - cv2.GaussianBlur(inner.astype(np.float32), (0, 0), sigmaX=soften)
     # And on ground near enough to be a road. Level ground hundreds of metres
     # off is terrain, seen at so shallow an angle that a film on it would be
     # a perfect mirror: a bright band of reflected sky along the horizon of
@@ -1662,18 +1815,26 @@ def _puddles(
     camera_pitch_deg: float,
     coverage: float,
     rng: np.random.Generator,
+    lie: np.ndarray | None = None,
+    wet: np.ndarray | None = None,
 ) -> np.ndarray:
     """:func:`_puddle_map`, laid out at the depth map's size and enlarged.
 
-    A puddle is metres across and its edge is soft; nothing in it needs the
-    frame's own pixels. The random draws are the same at either size.
+    A puddle is metres across; nothing in it needs the frame's own pixels.
+    The random draws are the same at either size.
     """
     height, width = depth_m.shape[:2]
     size = depth_work_size(height, width)
     if size is None:
-        return _puddle_map(depth_m, focal_px, camera_pitch_deg, coverage, rng)
+        return _puddle_map(depth_m, focal_px, camera_pitch_deg, coverage, rng, lie, wet)
     small_depth = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
-    small = _puddle_map(small_depth, focal_px * size[0] / width, camera_pitch_deg, coverage, rng)
+    if lie is not None:
+        lie = cv2.resize(lie, size, interpolation=cv2.INTER_AREA)
+    if wet is not None:
+        wet = cv2.resize(wet, size, interpolation=cv2.INTER_AREA)
+    small = _puddle_map(
+        small_depth, focal_px * size[0] / width, camera_pitch_deg, coverage, rng, lie, wet
+    )
     enlarged = cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
     return np.clip(enlarged, 0.0, 1.0).astype(np.float32)
 
@@ -1734,6 +1895,7 @@ def _apply_ground_wetness(
     lamp_gain: float = 1.0,
     puddles: np.ndarray | None = None,
     mirror_px: float | None = None,
+    puddle_ripple: float = 1.0,
 ) -> np.ndarray:
     """Wet ground: a darker diffuse base plus a Fresnel-weighted mirror image.
 
@@ -1770,6 +1932,10 @@ def _apply_ground_wetness(
     factor a lamp's clipped pixels are raised by before they are reflected.
     A lamp's, and not every clipped pixel's: the lit road and the leaves
     round a lamp are clipped too and were not that bright.
+
+    ``puddle_ripple`` is how much rougher than still water the puddles are,
+    1 for still: every drop that lands in one sets rings going, and under
+    heavy rain a puddle shows a blur of what a still one mirrors.
 
     ``mirror_px`` is the row the picture is mirrored about where that is not
     the horizon (:func:`ground_horizon`); ``horizon_px`` is always what the
@@ -1860,7 +2026,9 @@ def _apply_ground_wetness(
     # one with no puddles drawn, skips a blur of the whole band.
     sharp = rough
     if puddles is not None and darkening < _DAMP_ALBEDO_RATIO and puddles[top:bottom].any():
-        sharp = cv2.GaussianBlur(reflection, (0, 0), sigmaX=1.0, sigmaY=3.0)[inner]
+        sharp = cv2.GaussianBlur(
+            reflection, (0, 0), sigmaX=1.0 * puddle_ripple, sigmaY=3.0 * puddle_ripple
+        )[inner]
 
     # Schlick: R = R0 + (1 - R0)(1 - cos t)^5, where t is measured from the
     # surface normal, i.e. from vertical. cos t is the *sine* of the ray's

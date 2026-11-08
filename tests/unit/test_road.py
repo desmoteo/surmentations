@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from surmentations.atmosphere import RandomSnow
+from surmentations.atmosphere import RandomRain, RandomSnow
 from surmentations.depth.estimator import DepthEstimator
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import recording
@@ -349,3 +349,151 @@ def test_without_labels_there_is_no_road_to_follow_and_nothing_changes() -> None
     assert np.array_equal(plain, _snowed(0.0, labelled=False)[0])
     with pytest.raises(ValueError):
         RandomSnow(depth_provider=SharedDepthProvider(_Level()), wheel_track_range=(0.5, 1.5))
+
+
+# -------------------------------------------------------------------- on a wet road
+
+
+def test_water_lies_in_the_gutters_and_the_wheel_ruts() -> None:
+    from surmentations.atmosphere.rain import water_lie
+
+    mask, lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    lie = water_lie(frame, lanes, np.random.default_rng(0))
+    assert lie.shape == (HEIGHT, WIDTH) and lie.dtype == np.float32
+    row = lie[120]
+    assert row[61] > 0.9 and row[258] > 0.9, "no water against the kerbs"
+    assert row[88] > 0.2 and row[232] > 0.2, "none in the ruts"
+    assert row[110] < 0.02 and row[160] < 0.02, "the crown of the lane is as low as its ruts"
+    assert float(lie[:, :55].max()) == 0.0
+
+
+def test_puddles_stand_along_the_road_where_it_lies_low() -> None:
+    """With a little water it is all in the ruts and gutters, in strips; with
+    a lot it is everywhere. And a puddle has an edge."""
+    from surmentations.atmosphere.rain import _puddle_map
+
+    mask, lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    lie = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
+    lie[:, 86:92] = lie[:, 130:136] = 1.0
+    depth = _Level().estimate(np.zeros((HEIGHT, WIDTH, 3), np.uint8)) * 36.0 + 4.0
+    wet = mask.astype(np.float32)
+
+    def water(coverage: float, low: np.ndarray | None) -> np.ndarray:
+        """The puddles for that much water, with or without a lie of the land."""
+        return _puddle_map(depth, 300.0, 35.0, coverage, np.random.default_rng(5), low, wet)
+
+    little = water(0.05, lie)
+    in_ruts = float(little[:, 86:92].mean() + little[:, 130:136].mean()) / 2.0
+    assert in_ruts > 6.0 * float(little[:, 100:125].mean() + 1e-4)
+    assert float(little[mask].mean()) == pytest.approx(0.05, abs=0.03), "a share of the wet road"
+    assert float(water(0.05, None)[:, 86:92].mean()) < 0.3 * in_ruts
+    plenty = water(0.6, lie)
+    assert float(plenty[:, 100:125].mean()) > 0.3
+    edge = (little > 0.05) & (little < 0.95)
+    assert float(edge.mean()) < 0.5 * float((little > 0.5).mean()) + 0.01, "puddles with no edge"
+
+
+def _rained(labelled: bool = True, **kwargs: object) -> tuple[np.ndarray, dict]:
+    """The snow fixture's road in rain, soaked, with whatever else is asked."""
+    labels = np.full((HEIGHT, WIDTH), int(SceneClass.GRASS), dtype=np.uint8)
+    labels[:60] = int(SceneClass.SKY)
+    labels[60:, 60:260] = int(SceneClass.ROAD)
+    labels[150:180, 96:124] = int(SceneClass.VEHICLE)
+    labels[90:120, 196:224] = int(SceneClass.VEHICLE)
+    image = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    image[:60] = (150, 180, 230)
+    extra = {"labels": _Labels(labels)} if labelled else {}
+    provider = SharedDepthProvider(_Level(), depth_range_m=(4.0, 40.0), **extra)  # type: ignore[arg-type]
+    settings: dict[str, object] = {
+        "max_streaks": 0,
+        "wetness_probability": 1.0,
+        "wetness_darkening_range": (0.4, 0.4),
+        "puddle_coverage_range": (0.1, 0.1),
+        "camera_pitch_range_deg": (35.0, 35.0),
+        "rain_rate_range_mm_h": (2.0, 2.0),
+    }
+    rain = RandomRain(depth_provider=provider, p=1.0, **{**settings, **kwargs})  # type: ignore[arg-type]
+    rain.set_random_seed(0)
+    with recording() as log:
+        out = rain(image=image)["image"].astype(np.float32)
+    return out, {**log[0]["drew"], **log[0]["out"]}
+
+
+def test_a_soaked_road_is_under_cloud_whatever_is_falling() -> None:
+    """A road does not get soaked under a clear sky. Light rain on a wet
+    road used to be lit by the sun, the light a wet road is least seen in."""
+    _out, soaked = _rained()
+    _out, dry = _rained(wetness_probability=0.0)
+    _out, damp = _rained(wetness_darkening_range=(0.9, 0.9))
+    assert soaked["overcast"] > 0.7
+    assert dry["overcast"] < 0.2 and damp["overcast"] < 0.2
+    _out, told = _rained(overcast_range=(0.0, 0.0))
+    assert told["overcast"] == 0.0, "a caller who says there is no cloud is believed"
+
+
+def test_spray_trails_the_vehicles_on_a_wet_road_and_only_when_asked() -> None:
+    plain, drew = _rained()
+    assert not drew["spray_drawn"] and "spray" not in drew or drew["spray"] == 0.0
+    sprayed, drew = _rained(spray_range=(1.0, 1.0))
+    assert drew["spray_drawn"]
+    changed = np.abs(sprayed - plain).max(axis=2) > 6.0
+    assert 0.002 < float(changed.mean()) < 0.4
+    # Round the vehicles, and not off in the grass.
+    assert float(changed[:, :40].mean()) < 0.01
+    assert float(changed[60:230, 70:250].mean()) > 3.0 * float(changed.mean()) * 0.3
+
+    # Nothing without labels, without a film on the road, or without a road.
+    for kwargs in ({"wetness_probability": 0.0}, {"wetness_darkening_range": (0.9, 0.9)}):
+        _out, drew = _rained(spray_range=(1.0, 1.0), **kwargs)
+        assert not drew["spray_drawn"]
+    _out, drew = _rained(labelled=False, spray_range=(1.0, 1.0))
+    assert not drew["spray_drawn"]
+
+
+def test_a_plume_lies_behind_its_vehicle_along_the_road() -> None:
+    """Densest at the tail, a couple of lengths long, and on one side of the
+    vehicle only: the side it has come from."""
+    from surmentations.utils.road import vehicle_spray
+
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    vehicles[100:130, 146:174] = True
+    seen = set()
+    for seed in range(40):
+        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed))
+        assert spray.shape == (HEIGHT, WIDTH) and spray.dtype == np.float32
+        above, below = float(spray[40:95, 130:190].sum()), float(spray[135:200, 130:190].sum())
+        if above + below == 0.0:
+            seen.add("none")
+            continue
+        seen.add("towards" if below > above else "away")
+        assert min(above, below) < 0.05 * max(above, below), "a plume on both sides of a car"
+        # Not out to the sides, and not on the far side of the frame.
+        assert float(spray[:, :100].max()) < 0.02 and float(spray[:, 220:].max()) < 0.02
+        if below > above:
+            assert float(spray[131:140, 150:170].mean()) > float(spray[180:190, 150:170].mean())
+        else:
+            # Hidden by the vehicle that threw it.
+            assert float(spray[105:125, 150:170].max()) < 0.05
+    assert seen == {"towards", "away", "none"}, "the direction and the speed are not drawn"
+
+
+def test_no_dry_rim_is_left_round_a_labelled_vehicle() -> None:
+    """A network's outline runs a little outside the car, and softening it
+    left a ring of dry, pale road round every vehicle on a dark wet one."""
+    from surmentations.atmosphere.rain import _read_wet_ground
+
+    depth = _Level().estimate(np.zeros((HEIGHT, WIDTH, 3), np.uint8)) * 36.0 + 4.0
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    labels = np.full((HEIGHT, WIDTH), int(SceneClass.ROAD), dtype=np.uint8)
+    labels[100:140, 130:190] = int(SceneClass.VEHICLE)
+    wet, *_ = _read_wet_ground(depth, scene, 60.0, 35.0, 6.0, labels)
+    assert float(wet[115:125, 150:170].mean()) < 0.05, "the car is wet"
+    for rim in (wet[97:99, 140:180], wet[141:143, 140:180], wet[105:135, 127:129]):
+        assert float(rim.mean()) > 0.85, "a dry rim round the car"

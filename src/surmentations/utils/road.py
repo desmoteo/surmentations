@@ -524,3 +524,111 @@ def wheel_tracks(
         track = track * np.clip(wear_floor + (1.0 - wear_floor) * 2.0 * worn, 0.0, 1.0)
     inside = (frame.across >= lanes.first[frame.piece]) & (frame.across <= lanes.last[frame.piece])
     return (track * inside * frame.weight).astype(np.float32)
+
+
+# Most vehicles given spray in one frame, largest first, and the fewest
+# pixels one covers to be given any.
+_MOST_SPRAYING = 48
+_FEWEST_SPRAY_PIXELS = 40
+# The plume behind a vehicle: how many puffs it is drawn as; its length as
+# a multiple of the vehicle's larger side in the picture; and a puff's
+# spread across the road and upwards, as a share of the vehicle's width and
+# height, at the wheels and at the plume's far end.
+_PUFFS = 7
+_PLUME_LENGTH = 2.4
+_PUFF_ACROSS = (0.2, 0.6)
+_PUFF_UP = (0.1, 0.36)
+# The most spray counted in front of one pixel, in plumes at their densest:
+# ten cars abreast do not make ten times the mist of one.
+_MOST_SPRAY = 1.6
+# How high in the vehicle the middle of the plume rides, at the wheels and
+# at its far end: spray is thrown up and hangs.
+_PUFF_RISE = (0.08, 0.38)
+
+
+def vehicle_spray(
+    frame: RoadFrame,
+    vehicles: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """How much spray hangs in front of each pixel, ``(H, W)`` float32, 0 and up.
+
+    A vehicle on a wet road lifts the water off it and trails it behind as a
+    plume of mist: densest at the wheels, a car's width across there, then
+    wider, higher and thinner for a couple of lengths back. The plume lies
+    along the road, which is why this needs the road's own direction, and
+    it is a thing in the scene: the one behind a vehicle that is driving
+    away hangs between it and the camera and takes its wheels and its
+    bumper with it, while the one behind a vehicle coming on is hidden by
+    the vehicle itself.
+
+    Two things a single frame does not say are drawn. Which way the traffic
+    of each road is going is one, drawn once per road, since a carriageway
+    goes one way. How fast each vehicle is going is the other: each is
+    given its own share of spray, and some none, as a parked car has none.
+
+    The result is a density, to be turned into an opacity by whatever knows
+    how wet the road is: ``1 - exp(-strength * density)``.
+    """
+    height, width = vehicles.shape
+    mask = (vehicles > 0.5).astype(np.uint8)
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    roads = int(frame.piece.max())
+    # Towards the camera, or away from it: one way for each road.
+    trailing = rng.choice([-1.0, 1.0], size=roads + 1)
+    order = sorted(range(1, count), key=lambda index: -int(stats[index, cv2.CC_STAT_AREA]))
+    near = np.zeros((height, width), dtype=np.float32)
+    behind = np.zeros((height, width), dtype=np.float32)
+    for index in order[:_MOST_SPRAYING]:
+        left, top, wide, tall, area = (int(value) for value in stats[index])
+        speed = float(rng.uniform(-0.3, 1.0))
+        if area < _FEWEST_SPRAY_PIXELS:
+            break
+        row = min(top + tall - 1, height - 1)
+        column = min(left + wide // 2, width - 1)
+        road = int(frame.piece[row, column])
+        if road == 0 or speed <= 0.0:
+            continue
+        way = frame.along[row, column] * trailing[road]
+        towards = way[1] > 0.0
+        target = near if towards else behind
+        length = _PLUME_LENGTH * max(wide, tall)
+        # Where the plume begins: at the vehicle's tail. That is its foot
+        # in the picture when it is driving away, and its far end, up the
+        # frame and behind its own roof, when it is coming on.
+        tail = float(row) if towards else top + 0.3 * tall
+        for puff in range(_PUFFS):
+            along = puff / (_PUFFS - 1)
+            low, high = _PUFF_ACROSS
+            across = max(1.0, (low + (high - low) * along) * wide)
+            low, high = _PUFF_UP
+            up = max(1.0, (low + (high - low) * along) * tall)
+            low, high = _PUFF_RISE
+            centre_x = column + way[0] * length * along
+            centre_y = tail + way[1] * length * along * 0.6 - (low + (high - low) * along) * tall
+            reach_x, reach_y = int(3.0 * across) + 1, int(3.0 * up) + 1
+            x0, x1 = max(0, int(centre_x) - reach_x), min(width, int(centre_x) + reach_x + 1)
+            y0, y1 = max(0, int(centre_y) - reach_y), min(height, int(centre_y) + reach_y + 1)
+            if x0 >= x1 or y0 >= y1:
+                continue
+            xs = (np.arange(x0, x1, dtype=np.float32) - centre_x) / across
+            ys = (np.arange(y0, y1, dtype=np.float32) - centre_y) / up
+            blob = np.exp(-0.5 * (ys[:, None] ** 2 + xs[None, :] ** 2))
+            # Behind the tail and nowhere else: a puff is round, and one
+            # centred on the tail would stand out all round the vehicle as
+            # a rim of mist. A plume thrown towards the camera may rise a
+            # little over the tail it comes from.
+            past = (np.arange(y0, y1, dtype=np.float32)[:, None] - tail) * way[1] + (
+                np.arange(x0, x1, dtype=np.float32)[None, :] - column
+            ) * way[0]
+            start = -0.25 * tall if towards else 0.0
+            blob = blob * np.clip((past - start) / max(0.12 * tall, 1.0), 0.0, 1.0)
+            target[y0:y1, x0:x1] += np.float32(speed * (1.0 - 0.8 * along) ** 1.5) * blob
+    # What trails away from the camera is behind the vehicle that threw it.
+    # A network's outline of a vehicle is a little inside the vehicle, and
+    # the plume showed round it as a rim of light: the outline is let out.
+    grow = max(3, round(0.008 * float(np.hypot(height, width))) | 1)
+    grown = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
+    hidden = cv2.GaussianBlur(grown.astype(np.float32), (0, 0), sigmaX=1.0)
+    spray: np.ndarray = np.minimum(near + behind * (1.0 - hidden), _MOST_SPRAY)
+    return spray.astype(np.float32)
