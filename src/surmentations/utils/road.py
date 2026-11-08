@@ -1411,12 +1411,37 @@ _LED = (0.9, 0.95, 1.0)
 _TAIL = (1.0, 0.05, 0.03)
 
 
+def vehicles_as_seen(
+    vehicles: np.ndarray, views: Sequence[VehicleView] | None
+) -> list[RoadVehicle]:
+    """The vehicles a network read, each taken to go the way its own picture shows.
+
+    For where there is no road to read them against: a junction seen from
+    above, a car park, a frame that is not being rained on. There is no
+    vote here and no speed. A vehicle is in the list when a network read it
+    and leans one way (:mod:`surmentations.perception.vehicles`), and it
+    shows the end the network is surer of, with the lamps found on it. It
+    is on no road: its ``road`` is 0.
+    """
+    seen = []
+    for rows, columns, view in _outlines(vehicles, views):
+        if view is None or not view.read or abs(view.facing) < _VIEW_LEANS:
+            continue
+        shows = float(np.sign(view.facing))
+        foot = (int(rows.max()), int(np.median(columns[rows >= rows.max() - 2])))
+        lamps = view.lamps if len(view.lamps) else None
+        seen.append(RoadVehicle(0, rows, columns, foot, 0.0, shows, shows, 0.0, lamps, True))
+    return seen
+
+
 def vehicle_lamps(
-    frame: RoadFrame,
+    frame: RoadFrame | None,
     traffic: list[RoadVehicle],
     rng: np.random.Generator,
     strength: float,
     linear_rgb: np.ndarray | None = None,
+    shape: tuple[int, int] | None = None,
+    lit_share: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The lamps of a road's traffic, lit: their light, their glow, and where they are.
 
@@ -1443,7 +1468,14 @@ def vehicle_lamps(
     each a little more or less. One rear in eight is braking. By day not
     every vehicle is lit, and fewer rears than fronts, daytime running
     lamps being at the front only; by night every one is, except those
-    whose lamps the picture already shows burning.
+    whose lamps the picture already shows burning. ``lit_share`` says
+    otherwise: the share of fronts and of rears that are lit, for a caller
+    who knows what light the frame is to be seen in better than the frame
+    does, as one turning a daylight photograph into a night one.
+
+    ``frame`` is the road the traffic is on, and may be ``None`` for
+    vehicles that were read without one (:func:`vehicles_as_seen`); the
+    frame's ``shape`` is then given in its place.
 
     Three things come back, each the size of the frame: the lamps' own
     light, linear RGB over the scene's; the glow each throws into wet air,
@@ -1451,7 +1483,11 @@ def vehicle_lamps(
     and a ``[0, 1]`` weight of where the lamps are, which is what a wet
     road needs to reflect them as lamps and not as paint.
     """
-    height, width = frame.piece.shape
+    if frame is not None:
+        shape = frame.piece.shape
+    if shape is None:
+        raise ValueError("vehicle_lamps needs the road's frame or the picture's shape")
+    height, width = shape
     light = np.zeros((height, width, 3), dtype=np.float32)
     glow = np.zeros((height, width, 3), dtype=np.float32)
     cores = np.zeros((height, width), dtype=np.float32)
@@ -1487,8 +1523,7 @@ def vehicle_lamps(
         rows, columns = vehicle.rows, vehicle.columns
         if len(rows) < _FEWEST_LAMP_PIXELS:
             continue
-        lie = _vehicle_lie(frame, vehicle)
-        if lie is None:
+        if frame is not None and _vehicle_lie(frame, vehicle) is None:
             continue
         rear = vehicle.away > 0.0
         colour = None if linear_rgb is None else linear_rgb[rows, columns]
@@ -1500,16 +1535,17 @@ def vehicle_lamps(
             burning = int((level > _HEAD_LAMP_LEVEL).sum())
             if 2 <= burning <= _BURNING_SHARE * len(rows) and float(np.median(level)) < _DARK:
                 continue
-        if not night and float(rng.uniform()) > _LIT_BY_DAY[1 if rear else 0]:
+        share = _LIT_BY_DAY if lit_share is None else lit_share
+        if (lit_share is not None or not night) and float(rng.uniform()) > share[1 if rear else 0]:
             continue
         if rear:
             tint = np.array(_TAIL, dtype=np.float32)
             peak = _TAIL_PEAK * (_BRAKE[0] if float(rng.uniform()) < _BRAKE[1] else 1.0)
-            shape = (1.3, 0.7)
+            form = (1.3, 0.7)
         else:
             tint = np.array(_LED if float(rng.uniform()) < 0.5 else _HALOGEN, dtype=np.float32)
             peak = _HEAD_PEAK
-            shape = (1.0, 1.0)
+            form = (1.0, 1.0)
         peak = strength * peak * float(rng.uniform(0.7, 1.3))
         places: list[tuple[float, float, tuple[float, float]]] = []
         if vehicle.lamps is not None:
@@ -1538,7 +1574,7 @@ def vehicle_lamps(
                     if apart and 0 <= int(other) < width and whose[int(y), int(other)] == number:
                         places.append((other, y, radii))
         else:
-            places = _placed_lamps(vehicle, colour if rear else None, shape, vehicle.alone)
+            places = _placed_lamps(vehicle, colour if rear else None, form, vehicle.alone)
             places = [
                 (x, y, radii)
                 for x, y, radii in places

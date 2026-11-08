@@ -33,6 +33,17 @@ that automatically instead of having to paint it on.
 **Gain goes up, so noise does.** Shot noise scales with the square root of
 the signal and read noise does not scale at all, so a gained-up dark frame is
 noisiest in the shadows — not uniformly noisy.
+
+**Traffic has its lamps on.** A photograph taken by day shows cars with their
+lamps off, and by night they are the brightest things in the frame: a pair of
+points far over full scale, each with the halo a saturated source has on
+these sensors. Which lamps a vehicle shows, and where, is not something
+colour says in a picture that is about to lose its colour, so they are lit
+only where the provider has a vehicle reader
+(:mod:`surmentations.perception.vehicles`): headlamps on a vehicle seen from
+the front, tail lamps on one seen from behind, where the reader found them.
+With the filter out the sensor sees a red tail lamp as it sees a white
+headlamp, by how bright it is, and both come out white.
 """
 
 from __future__ import annotations
@@ -48,10 +59,11 @@ from surmentations import mode
 from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
-from surmentations.perception.labels import VEGETATION, class_weight
+from surmentations.perception.labels import VEGETATION, SceneClass, class_weight
 from surmentations.utils.channels import percentile
 from surmentations.utils.grids import on_coarse_grid, pixel_grid
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
+from surmentations.utils.road import vehicle_lamps, vehicles_as_seen
 from surmentations.utils.sky import sky_to_depth_edge, sky_weight
 
 # Broad, red-weighted stand-in for silicon's response with the IR-cut filter
@@ -72,6 +84,17 @@ _NIGHT_SKY_LEVEL = 0.12
 # measures. A leaf in shade, in autumn or under a sodium lamp measures
 # nothing, and reflects the near infrared all the same.
 _LABELLED_GREENNESS = 0.3
+
+# The share of vehicles seen from the front, and from behind, whose lamps
+# are on at night: the rest are parked. And how much of the glow round a
+# lamp the sensor shows: a source far over full scale blooms on it whatever
+# the air is like.
+_LIT_AT_NIGHT = (0.85, 0.85)
+_LAMP_BLOOM = 0.6
+# How much further over full scale a lamp is at night than in daylight
+# rain, which is what the lamps' own strengths are set for: the lamp is the
+# same lamp, and the camera has opened up for the dark by about this much.
+_NIGHT_LAMP_OVER = 8.0
 
 
 def near_infrared_reflectance(
@@ -117,6 +140,10 @@ class NightIrMode(CameraTransform):
     over real metres, and a scene beyond its reach is lit by the ambient
     term alone.
 
+    With a provider that also carries a vehicle reader
+    (:mod:`surmentations.perception.vehicles`) the traffic's lamps are
+    lit: see ``vehicle_lamp_range``.
+
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
         illuminator_range_m: distance at which the illuminator delivers unit
@@ -148,6 +175,19 @@ class NightIrMode(CameraTransform):
             exposure. Unlike shot noise this does not shrink in the shadows,
             which is why a gained-up night frame is noisiest where it is
             darkest.
+        vehicle_lamp_range: how brightly the lamps of the vehicles in the
+            frame are lit, drawn per call; 1 is dipped beams, 0 none. It
+            does something only on a provider built with ``vehicles=``:
+            headlamps on each vehicle its reader saw from the front and
+            tail lamps on each it saw from behind, where it found them,
+            far over full scale and white, as an infrared camera shows
+            both, with the bloom of a saturated source. Most vehicles are
+            lit and some are not, as parked ones are not. Lit here and not
+            before, the lamps are light and not paint: the illuminator's
+            falloff does not dim them, and whatever follows in a pipeline,
+            fog, rain or snow at night, finds them as it finds any lamp in
+            a frame. Without a vehicle reader no lamp is lit, whatever
+            this is.
 
     Targets:
         image
@@ -197,6 +237,11 @@ class NightIrMode(CameraTransform):
             AfterValidator(check_range_bounds(0.0, 0.2)),
         ]
         residual_tint: float = Field(ge=0.0, le=0.5)
+        vehicle_lamp_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 2.0)),
+        ]
 
     def __init__(
         self,
@@ -209,6 +254,7 @@ class NightIrMode(CameraTransform):
         gain_range: tuple[float, float] = (0.8, 1.6),
         read_noise_range: tuple[float, float] = (0.004, 0.03),
         residual_tint: float = 0.04,
+        vehicle_lamp_range: tuple[float, float] = (0.7, 1.3),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -227,6 +273,7 @@ class NightIrMode(CameraTransform):
         self.gain_range = gain_range
         self.read_noise_range = read_noise_range
         self.residual_tint = residual_tint
+        self.vehicle_lamp_range = vehicle_lamp_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -298,7 +345,7 @@ class NightIrMode(CameraTransform):
             depth_p50_m=lambda: float(np.median(depth_m)),
             depth_max_m=lambda: float(depth_m.max()),
         )
-        return {
+        drawn = {
             "exposure": (irradiance * beam).astype(np.float32),
             "ambient": self.py_random.uniform(*self.ambient_range),
             "target_level": self.py_random.uniform(*self.target_level_range),
@@ -309,6 +356,31 @@ class NightIrMode(CameraTransform):
             "vegetation": vegetation,
             "night_sky": night_sky,
         }
+
+        # The traffic's lamps, drawn after everything else is: a provider
+        # without a vehicle reader draws what it always drew.
+        lamps = self.py_random.uniform(*self.vehicle_lamp_range)
+        lamp_seed = self.py_random.randint(0, 2**31 - 1)
+        views = self.depth_provider.get_vehicles(scene)
+        lit = 0
+        if lamps > 0.0 and views and labels is not None:
+            seen = vehicles_as_seen(labels == int(SceneClass.VEHICLE), views)
+            light, glow, cores = vehicle_lamps(
+                None,
+                seen,
+                np.random.default_rng(lamp_seed),
+                lamps * _NIGHT_LAMP_OVER,
+                shape=(height, width),
+                lit_share=_LIT_AT_NIGHT,
+            )
+            if float(cores.max()) > 0.0:
+                # White whatever their colour: with the filter out a red
+                # lamp is a bright one and no more.
+                drawn["lamp_light"] = light.max(axis=2)
+                drawn["lamp_glow"] = glow.max(axis=2)
+                lit = len(seen)
+        record_draw(vehicle_lamps=lamps, vehicles_read=lit)
+        return drawn
 
     def apply(
         self,
@@ -322,13 +394,16 @@ class NightIrMode(CameraTransform):
         noise_seed: int,
         vegetation: np.ndarray | None = None,
         night_sky: np.ndarray | None = None,
+        lamp_light: np.ndarray | None = None,
+        lamp_glow: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the frame as the near-infrared camera sees it at night.
 
         Near-infrared reflectance times the light that arrived, scaled by the
-        auto-exposure to put the 80th percentile at the target, plus shot and
-        read noise, in a grey with the residual tint of the colour filters.
+        auto-exposure to put the 80th percentile at the target, plus the
+        traffic's lamps where there are any to light, plus shot and read
+        noise, in a grey with the residual tint of the colour filters.
         """
         linear, scale, is_integer = to_linear_unit(img)
 
@@ -353,6 +428,14 @@ class NightIrMode(CameraTransform):
         # sat against the clipping point and the near road washed out to a
         # featureless white plate covering 24% of the image. What gain does
         # control is the noise, below.
+
+        if lamp_light is not None and lamp_glow is not None:
+            # The traffic's lamps. They are sources and not surfaces: what
+            # they send the lens is theirs, whatever the illuminator
+            # delivers where they are and wherever the auto-exposure has
+            # put the scene, which is exposed for the road and not for
+            # them. So they are added here, at their own level, after both.
+            signal = signal + lamp_light + np.float32(_LAMP_BLOOM) * lamp_glow
 
         # Shot noise scales as sqrt(signal); read noise does not scale at all,
         # which is why the shadows of a gained-up frame are the noisy part.

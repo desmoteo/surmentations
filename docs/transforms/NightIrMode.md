@@ -61,6 +61,17 @@ that automatically instead of having to paint it on.
 the signal and read noise does not scale at all, so a gained-up dark frame is
 noisiest in the shadows — not uniformly noisy.
 
+**Traffic has its lamps on.** A photograph taken by day shows cars with their
+lamps off, and by night they are the brightest things in the frame: a pair of
+points far over full scale, each with the halo a saturated source has on
+these sensors. Which lamps a vehicle shows, and where, is not something
+colour says in a picture that is about to lose its colour, so they are lit
+only where the provider has a vehicle reader
+(`vehicles`): headlamps on a vehicle seen from
+the front, tail lamps on one seen from behind, where the reader found them.
+With the filter out the sensor sees a red tail lamp as it sees a white
+headlamp, by how bright it is, and both come out white.
+
 ## With scene labels and geometry
 
 With a provider that carries scene labels
@@ -87,6 +98,7 @@ See [scene understanding](../scene_understanding.md).
 | `gain_range` | `(0.8, 1.6)` | sensor gain, which sets how far the noise floor is lifted. It does not scale the signal: the auto-exposure has already placed that, and gain is one of the levers it used to get there. Higher gain therefore means a noisier frame at the same brightness, which is what raising ISO actually buys you. |
 | `read_noise_range` | `(0.004, 0.03)` | signal-independent noise, as a fraction of unit exposure. Unlike shot noise this does not shrink in the shadows, which is why a gained-up night frame is noisiest where it is darkest. |
 | `residual_tint` | `0.04` |  |
+| `vehicle_lamp_range` | `(0.7, 1.3)` | how brightly the lamps of the vehicles in the frame are lit, drawn per call; 1 is dipped beams, 0 none. It does something only on a provider built with `vehicles=`: headlamps on each vehicle its reader saw from the front and tail lamps on each it saw from behind, where it found them, far over full scale and white, as an infrared camera shows both, with the bloom of a saturated source. Most vehicles are lit and some are not, as parked ones are not. Lit here and not before, the lamps are light and not paint: the illuminator's falloff does not dim them, and whatever follows in a pipeline, fog, rain or snow at night, finds them as it finds any lamp in a frame. Without a vehicle reader no lamp is lit, whatever this is. |
 | `p` | `0.5` | probability that the transform is applied |
 
 ## Samples
