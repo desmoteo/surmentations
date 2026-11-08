@@ -6,7 +6,7 @@ provider that carries scene labels and an estimated geometry:
 * the roads as the library reads them: painted lines, lane lines and the
   wheel tracks laid in the lanes;
 * settled snow without wheel tracks and with them;
-* a soaked road without spray and with it.
+* a soaked road as it was, and with its traffic's spray and lamps.
 
 Run from the repository root, on a machine with a CUDA GPU::
 
@@ -48,6 +48,14 @@ OUT_DIR = REPO / "docs" / "assets" / "road_surface"
 REFERENCE = REPO / "docs" / "examples" / "00_base_scene.png"
 # The scenes shown: a motorway from a bridge, a city road, a street, a bend.
 SHOWN = ("reference", "urban_road_day", "urban_street_wet", "underpass_from_above")
+# How fast the traffic of each is taken to be going, in km/h: a frame does
+# not say, and spray is mostly a matter of speed.
+SPEEDS_KMH = {
+    "reference": (95.0, 115.0),
+    "urban_road_day": (75.0, 95.0),
+    "urban_street_wet": (30.0, 45.0),
+    "underpass_from_above": (30.0, 45.0),
+}
 
 
 def _photograph(name: str) -> np.ndarray:
@@ -125,7 +133,11 @@ def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPr
 def compare(
     images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider], effect: str
 ) -> None:
-    """Each scene twice: settled snow or a soaked road, without the new thing and with it."""
+    """Each scene twice: settled snow without tracks and with, or a soaked road and its traffic's.
+
+    The soaked road's second picture has spray at each scene's own speed
+    (:data:`SPEEDS_KMH`) and the traffic's lamps lit.
+    """
     tiles = []
     for name, image in images.items():
         for amount in (0.0, 0.6):
@@ -146,6 +158,8 @@ def compare(
                     p=1.0,
                     camera_pitch_range_deg=_pitch(name),
                     spray_range=(amount, amount),
+                    traffic_speed_range_kmh=SPEEDS_KMH[name],
+                    vehicle_lamp_range=(amount / 0.6, amount / 0.6),
                     **settings,
                 )
             transform.set_random_seed(4)

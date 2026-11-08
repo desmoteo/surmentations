@@ -39,7 +39,8 @@ than exposed.
   Start here if you want a pipeline rather than a transform.
 - **[`docs/road_surface.md`](docs/road_surface.md)** — what is laid out
   along a road: its lanes, read off the paint and the vehicles; wheel tracks
-  in settled snow; water in the ruts and gutters; spray behind vehicles.
+  in settled snow; water in the ruts and gutters; spray behind vehicles, by
+  their heading and their speed; their lamps, lit.
 - **[`docs/scene_understanding.md`](docs/scene_understanding.md)** — the two
   things a provider can work out besides depth: what each pixel is, and how
   the camera is mounted. What they change in each effect, how the geometry
@@ -292,7 +293,7 @@ and the physics behind it.
 | Transform | Start with |
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels) |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels), `traffic_speed_range_kmh` (how fast that traffic is going, which is most of how much it throws up), `vehicle_lamp_range` (off by default: the traffic's head and tail lamps lit, with their glow and their streaks down the road) |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
 | `NightFog` | `visibility_range_m` (read against the provider's depth range), `visibility_range_scene` (as a multiple of the scene's depth instead), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
