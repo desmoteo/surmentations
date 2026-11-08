@@ -19,6 +19,7 @@ both off the picture, and `RandomSnow` and `RandomRain` use them:
 | Spray behind vehicles | `RandomRain(spray_range=...)` | `(0.0, 0.0)`: off | scene labels |
 | How fast the traffic is going | `RandomRain(traffic_speed_range_kmh=...)` | `(40.0, 130.0)` | with spray |
 | The traffic's lamps, lit | `RandomRain(vehicle_lamp_range=...)` | `(0.0, 0.0)`: off | scene labels |
+| The traffic's lamps at night | `NightIrMode(vehicle_lamp_range=...)` | `(0.7, 1.3)` | a vehicle reader |
 
 "Scene labels" means a provider built with `labels=`
 ([scene understanding](scene_understanding.md)): they say where the road
@@ -316,6 +317,40 @@ dry has them off. `vehicle_lamp_range` lights them
   drawn, and the road reflects them as it does any lamp: a streak down the
   film towards the camera. Lamps the picture already shows burning are
   given the same glow.
+- **With no road.** A vehicle the reader read shows which end it shows
+  whether or not a road was read under it, and its lamps are lit from that
+  alone: at a junction seen from above, or with the ground left dry.
+
+### At night
+
+A photograph taken by day has its traffic's lamps off, and by night they
+are the brightest things in a frame. Two cases:
+
+- **A daylight frame made into a night one.**
+  [`NightIrMode`](transforms/NightIrMode.md) lights them itself, on a
+  provider with a vehicle reader: headlamps on each vehicle seen from the
+  front and tail lamps on each seen from behind, where the reader found
+  them, about six in seven vehicles and the rest left dark as parked ones
+  are. They are far over full scale, eight times further than in daylight
+  rain because the camera has opened up for the dark, and they bloom. They
+  are white whichever end they are on: with the infrared-cut filter out, a
+  red lamp is a bright lamp and no more. They are added as light, after the
+  illuminator's falloff and the auto-exposure, so neither dims them; and
+  whatever follows in a pipeline, `NightFog`, `NightRain`, `NightSnow`,
+  finds them as it finds any lamp in a frame. Without a vehicle reader no
+  lamp is lit: which end a vehicle shows is not something colour says in a
+  frame about to lose its colour. Light them here and not in `RandomRain`
+  before it, where they would be painted on the car and then dimmed with
+  it.
+- **A frame that was taken at night.** Its lamps are in it already.
+  `RandomRain` leaves a vehicle alone when a few of its pixels are at full
+  scale and the rest of it is dark, gives the lamps it finds burning the
+  glow it gives the ones it lights, and reflects them in the wet road. A
+  vehicle that is dark all over is lit, every one.
+
+The same draw without a vehicle reader and with one:
+
+![infrared night lamps](assets/road_surface/night_lamps.jpg)
 
 ## Limits
 
@@ -357,6 +392,12 @@ dry has them off. `vehicle_lamp_range` lights them
   are divided along the edges of their boxes, which is square where the
   vehicles are not; and far traffic it cannot tell apart stays one
   outline.
+- **Night lamps throw no light.** A headlamp lit by `NightIrMode` is a
+  bright point with a halo. It does not light the road ahead of it, and a
+  road wetted before the frame was made a night one does not reflect it.
+- **Frames taken at night with traffic in them were tested on drawn
+  frames only.** The sample scenes have no night photograph with a vehicle
+  in it.
 - **The traffic's speed is the caller's.** Nothing in a frame is read for
   it; the default range covers a town and a motorway and is right for
   neither.

@@ -376,8 +376,8 @@ AGPL. Classical tail-lamp detection, red by colour and paired by symmetry
 already is, and has no counterpart for an unlit headlamp by day. OWLv2 is
 Apache-2.0.
 
-**What uses it.** `RandomRain`'s spray and lamps
-([`road_surface.md`](road_surface.md)). Each vehicle told apart has its
+**What uses it.** `RandomRain`'s spray and lamps, and `NightIrMode`'s
+lamps ([`road_surface.md`](road_surface.md)). Each vehicle told apart has its
 own wake, its own place in the mist and its own lamps. A vehicle the
 network is sure of keeps its own reading; the rest go with their road's
 traffic; one it did not read is read by colour as before. A vehicle it
