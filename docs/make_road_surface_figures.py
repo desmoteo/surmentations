@@ -136,12 +136,11 @@ def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPr
     _save("lanes.jpg", tiles, 2)
 
 
-def read_vehicles(
-    images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]
-) -> None:
+def read_vehicles(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
     """Each scene's vehicles as read: outlined green for a front and red for a rear, lamps boxed.
 
-    Grey is an outline the network leans neither way on.
+    Each vehicle by its own outline, as the network told it from its
+    neighbours. Grey is one it did not read or leans neither way on.
     """
     tiles = []
     for name, image in images.items():
@@ -151,7 +150,11 @@ def read_vehicles(
             colour = (150, 150, 150)
             if abs(view.facing) >= 0.03:
                 colour = (255, 60, 60) if view.facing > 0.0 else (60, 255, 60)
-            cv2.rectangle(out, (left, top), (left + wide, top + tall), colour, 1)
+            own = np.ones((tall, wide), dtype=np.uint8)
+            if view.mask is not None:
+                own = view.mask.astype(np.uint8)
+            edges, _ = cv2.findContours(own, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            cv2.drawContours(out, edges, -1, colour, 1, offset=(left, top))
             for x, y, half_wide, half_tall, _score in view.lamps.tolist():
                 first = (round(x - half_wide), round(y - half_tall))
                 last = (round(x + half_wide), round(y + half_tall))

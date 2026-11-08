@@ -323,24 +323,39 @@ provider = SharedDepthProvider(
 views = provider.get_vehicles(image)              # one VehicleView per outline
 ```
 
-**How.** Each connected piece of the vehicle label is cut out of the frame
-and the cuts are laid out as one square mosaic, sixteen to a pass. An
-open-vocabulary detector, OWLv2, is asked for two things by name, "a car
+**How.** An open-vocabulary detector, OWLv2, looks twice.
+
+*First at the whole frame, for the vehicles themselves* ("a car", "a van",
+"a truck", "a bus", "a motorcycle"). A semantic mask runs touching
+vehicles together: three cars nose to tail are one long outline to it, and
+a motorway's far traffic is one piece. The boxes found on each connected
+piece of the vehicle label share it out among them. A pixel inside one box
+is that vehicle's; inside several, it is the vehicle's whose box reaches
+lowest in the picture, which is the nearest and stands in front; what lies
+well away from every box is a vehicle the detector missed, kept as one of
+its own. Boxes that are the same vehicle twice, a row of vehicles as one,
+or not on the vehicle label at all are dropped first. On the motorway
+below, 17 connected pieces become 57 vehicles.
+
+*Then at each vehicle*, cut out of the frame and laid out with the others
+as one square mosaic, sixteen to a pass, for two things by name: "a car
 headlight" and "a car tail light". Which of the two it is surer of on a
 vehicle says which end is seen; where it found them is where the lamps
 are. Boxes that are a large part of the vehicle are not lamps, and of the
 small ones the best pair, apart across the vehicle and at one level, is
 kept, which leaves out a number plate and a badge. A
 [`VehicleView`](../src/surmentations/perception/vehicles.py) holds the
-outline's box, the two scores and the lamps.
+vehicle's box, its own mask within it, what kind it is, the two scores and
+the lamps.
 
-Green outlines are read as fronts and red as rears; the lamps found are
+Each vehicle by its own outline: green is read as a front and red as a
+rear, grey was not read or leans neither way, and the lamps found are
 boxed in yellow:
 
 ![vehicles as read](assets/road_surface/vehicle_views.jpg)
 
-**How good.** On the 22 single vehicles of these sample scenes, labelled
-by eye:
+**How good at which end.** On the 22 vehicles of these sample scenes that
+the labels already had as outlines of their own, labelled by eye:
 
 | | Right | Wrong | Silent |
 | --- | --- | --- | --- |
@@ -349,7 +364,8 @@ by eye:
 | OWLv2, headlight against tail light | 22 | 0 | 0 |
 
 Four scenes are not a benchmark. They say the network is much the better
-reader, not how good it is on yours.
+reader, not how good it is on yours. How well it tells vehicles apart was
+judged by eye on the same scenes and not counted.
 
 **Why this network.** A classifier of views does nearly as well at which
 end and says nothing of where the lamps are. Networks trained on car
@@ -361,9 +377,12 @@ already is, and has no counterpart for an unlit headlamp by day. OWLv2 is
 Apache-2.0.
 
 **What uses it.** `RandomRain`'s spray and lamps
-([`road_surface.md`](road_surface.md)). A vehicle the network is sure of
-keeps its own reading; the rest go with their road's traffic; one it did
-not read is read by colour as before. Without a reader nothing changes.
+([`road_surface.md`](road_surface.md)). Each vehicle told apart has its
+own wake, its own place in the mist and its own lamps. A vehicle the
+network is sure of keeps its own reading; the rest go with their road's
+traffic; one it did not read is read by colour as before. A vehicle it
+named a truck or a bus keeps to a lorry's speed. Without a reader nothing
+changes.
 
 ## What it costs
 
@@ -375,13 +394,15 @@ On one CPU core and a laptop GPU (RTX PRO 1000), once per new frame; from
 | Depth | 11 ms | 15 ms |
 | Scene labels | 33 ms | 33 ms |
 | Geometry | 5 ms | 6 ms |
-| Vehicle views, per 16 vehicles | 90 ms | 90 ms |
+| Vehicle views, a scene of up to 16 vehicles read | 130 ms | 130 ms |
 
-Vehicle views are timed apart, on the sample scenes at 1024 px: 90 ms for
-a scene of up to sixteen vehicles and 170 ms for the motorway's seventeen,
-in fast mode, which runs the network in half precision; 300 ms and 610 ms
-in exact mode. A scene with no vehicle labelled is not shown to the
-network. It needs about 1.2 GB of GPU memory and a 620 MB download.
+Vehicle views are timed apart, on the sample scenes at 1024 px. The
+network passes over the frame once and then once for every sixteen
+vehicles read, at about 65 ms a pass in fast mode, which runs it in half
+precision: 130 ms for a junction with nine cars, 195 ms for the motorway,
+whose 31 readable vehicles take two passes. In exact mode a pass is 280
+ms. A scene with no vehicle labelled is not shown to the network. It needs
+about 1.2 GB of GPU memory and a 620 MB download.
 
 They are made together, when the first transform asks for the scene's
 depth, from the frame the pipeline was given. A pipeline in which no

@@ -184,6 +184,9 @@ Where each wake lies:
 - **Some vehicles throw up nothing**: one lying across the road, which is
   crossing, turning or parked; and any on a scrap of road under a
   twentieth of the frame, whose direction is a guess.
+- **It stays on its road.** A wake ends where its road does, at the road's
+  far end or where it turns out of the frame. It used to run on across the
+  verge.
 - **It is a thing in the scene.** Every part of a wake is hidden by the
   vehicles that stand nearer the camera than it, and by no others. The
   wake of a car coming on is behind that car, and over the bonnet of the
@@ -282,9 +285,10 @@ dry has them off. `vehicle_lamp_range` lights them
 
 - **Which lamps** is the reading above: two headlamps on a vehicle coming
   on, two tail lamps on one driving away.
-- **Where, with a reader.** Where the network found them: the pair, or
-  the one that is seen, each as large as it was found, and no larger than
-  a lamp is against its vehicle. Found on the end the vehicle is taken to
+- **Where, with a reader.** Where the network found them: the pair, each
+  as large as it was found, and no larger than a lamp is against its
+  vehicle. Where it found one of a pair on a vehicle seen end on, the
+  other is lit across from it. Found on the end the vehicle is taken to
   show, or not used.
 - **Where, without.** The end that is seen is the lower part of the
   outline, and the pair is put at one height on it, a little in from
@@ -328,9 +332,11 @@ dry has them off. `vehicle_lamp_range` lights them
   this; that is not built.
 - **Junctions, squares and car parks have no lanes.** A ragged mask gets
   no road; a tidy one is read as a road.
-- **Touching vehicles are one vehicle** to a semantic mask, so dense
-  traffic gives fewer, wider plumes, and no lamps on the merged outline
-  unless its lenses are seen.
+- **Touching vehicles are one vehicle** to a semantic mask. A provider
+  built with `vehicles=` tells them apart
+  ([vehicle views](scene_understanding.md#vehicle-views)); without one,
+  dense traffic gives fewer, wider plumes, and no lamps on a merged
+  outline unless its lenses are seen.
 - **Without a reader, which way a vehicle faces is weak evidence
   pooled.** A one-way road whose every rear is in shade and shows no red
   reads as coming on. Two carriageways with an empty lane wider than their
@@ -341,9 +347,10 @@ dry has them off. `vehicle_lamp_range` lights them
   single vehicle of four scenes, which is not a measurement. It reads the
   32 largest outlines of at least 150 pixels; smaller and further ones are
   read by colour. A vehicle seen from the side shows one lamp of each
-  kind, leans neither way and goes with its road. An outline of several
-  vehicles is read as one, and may be lit with one car's left lamp and
-  another's right.
+  kind, leans neither way and goes with its road. Vehicles it tells apart
+  are divided along the edges of their boxes, which is square where the
+  vehicles are not; and far traffic it cannot tell apart stays one
+  outline.
 - **The traffic's speed is the caller's.** Nothing in a frame is read for
   it; the default range covers a town and a motorway and is right for
   neither.
