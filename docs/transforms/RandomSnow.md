@@ -23,9 +23,9 @@ flowchart TD
     RATE --> VEIL["V = 0.6/R to beta"]
     DEPTH["depth and normals"] --> ACC["upward^falloff x patchiness"]
     ACC --> SETTLE["settled snow"]
-    PROJ --> COMP["composite"]
-    VEIL --> COMP
+    VEIL --> COMP["composite: veil, settled snow, then flakes last"]
     SETTLE --> COMP
+    PROJ --> COMP
 ```
 
 ## Model

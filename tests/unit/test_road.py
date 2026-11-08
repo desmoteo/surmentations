@@ -1116,3 +1116,61 @@ def test_the_traffic_s_speed_is_drawn_from_its_range() -> None:
     none, _ = _rained()
     assert float(np.abs(still - none).max()) < 1.0, "spray over a standing queue"
     assert float(np.abs(fast - none).mean()) > 3.0 * float(np.abs(slow - none).mean()) > 0.0
+
+
+def test_rain_is_drawn_in_front_of_the_wet_road_and_not_wetted_with_it() -> None:
+    """The streaks are the drops near the lens, and the road is behind them.
+    Against a road the rain has darkened they stand out the more. Drawn
+    before the road was wetted, as they used to be, they were darkened and
+    mirrored with it, and showed less on the road than on the grass beside
+    it."""
+
+    def linear(image: np.ndarray) -> np.ndarray:
+        """An 8-bit frame's luminance in linear light, near enough."""
+        return ((image / 255.0) ** 2.2).mean(axis=2)
+
+    on_road = on_grass = 0.0
+    for seed in range(4):
+        settings = {
+            "seed": seed,
+            "rain_rate_range_mm_h": (20.0, 20.0),
+            "puddle_coverage_range": (0.0, 0.0),
+        }
+        streaked, _ = _rained(max_streaks=16000, **settings)
+        bare, _ = _rained(**settings)
+        lift = linear(streaked) - linear(bare)
+        on_road += float(np.percentile(lift[130:230, 80:240], 99.0))
+        beside = np.concatenate([lift[130:230, :50].ravel(), lift[130:230, 270:].ravel()])
+        on_grass += float(np.percentile(beside, 99.0))
+    assert on_grass > 0.0, "no rain was drawn"
+    assert on_road > 1.2 * on_grass
+
+
+def test_rain_is_drawn_in_front_of_spray() -> None:
+    """Spray is in the scene and the rain is nearer than the scene. A mist
+    thick enough to hide everything behind it leaves the streaks in front
+    of it showing; laid over them, as it used to be, it painted them out and
+    left a blank frame."""
+    labels = np.full((HEIGHT, WIDTH), int(SceneClass.GRASS), dtype=np.uint8)
+    labels[:60] = int(SceneClass.SKY)
+    labels[60:, 60:260] = int(SceneClass.ROAD)
+    image = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    image[:60] = (150, 180, 230)
+    provider = SharedDepthProvider(_Level(), depth_range_m=(4.0, 40.0), labels=_Labels(labels))
+    rain = RandomRain(
+        depth_provider=provider,
+        p=1.0,
+        wetness_probability=1.0,
+        rain_rate_range_mm_h=(20.0, 20.0),
+        camera_pitch_range_deg=(35.0, 35.0),
+    )
+    rain.set_random_seed(0)
+    params = rain.get_params_dependent_on_data({"shape": image.shape}, {"image": image})
+    everywhere = np.ones((HEIGHT, WIDTH), dtype=np.float32)
+    hidden = rain.apply(image, **{**params, "spray": everywhere}).astype(np.float32)
+    no_rain = {name: values[:0] for name, values in params["streaks"].items()}
+    blank = rain.apply(image, **{**params, "spray": everywhere, "streaks": no_rain})
+    flat = blank.astype(np.float32).std(axis=(0, 1))
+    assert float(flat.max()) < 0.5, "the mist does not hide the scene"
+    spread = hidden.max(axis=(0, 1)) - hidden.min(axis=(0, 1))
+    assert float(spread.max()) > 4.0, "the mist hid the rain in front of it"

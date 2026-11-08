@@ -1142,11 +1142,12 @@ class RandomSnow(CameraTransform):
         tracks: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
-        """Relight the frame for overcast, veil it, draw the flakes, and lay the settled snow.
+        """Relight the frame for overcast, veil it, lay the settled snow, and draw the flakes last.
 
         In linear light. Flakes take the illuminant's radiance and the veil
         the sky's; settled snow is lit by the scene's own brightness around
-        it.
+        it. The flakes are in the air near the lens and are drawn over
+        everything else.
         """
         height, width = img.shape[:2]
         frame_centre = (width / 2.0, height / 2.0)
@@ -1175,15 +1176,20 @@ class RandomSnow(CameraTransform):
         airlight = veil_radiance_linear(linear, sky)
 
         # Heavy snow scatters hard: the veil is most of what says "snowing".
-        # One compiled pass where there is one, with the arithmetic of the
-        # two expressions below in their order: the same floats.
-        cover = np.clip(flake_layer, 0.0, 1.0)
-        blended = _native.veil_blend(linear, veil_transmission, airlight, cover, flake_radiance)
+        # The veil now and the flakes at the very end, each one compiled
+        # pass where there is one, with the arithmetic of the expressions
+        # beside them in their order: the same floats.
+        #
+        # The order is that of the scene, from the far end to the lens. The
+        # veil is the snow too far off to resolve; the snow that has settled
+        # and the tracks worn in it are on the ground; the flakes are in the
+        # air near the lens, in front of all of it. They used to be drawn
+        # with the veil, and settled snow was then laid over them and lit by
+        # a frame that had them in it.
+        blended = _native.veil_blend(linear, veil_transmission, airlight)
         if blended is None:
             t_veil = veil_transmission[..., None]
             out = linear * t_veil + airlight[None, None, :] * (1.0 - t_veil)
-            alpha = cover[..., None]
-            out = out * (1.0 - alpha) + flake_radiance[None, None, :] * alpha
         else:
             out = blended
 
@@ -1246,5 +1252,16 @@ class RandomSnow(CameraTransform):
             coverage = np.clip(settled * _SNOW_OPACITY, 0.0, 1.0)[..., None]
             snow = snow_albedo * tint.reshape(1, 1, -1).astype(np.float32) * shading
             out = out * (1.0 - coverage) + snow * coverage
+
+        # The flakes, last: in the air, in front of the ground and what lies on it.
+        cover = np.clip(flake_layer, 0.0, 1.0)
+        over = _native.veil_blend(
+            out, np.ones(cover.shape, dtype=np.float32), airlight, cover, flake_radiance
+        )
+        if over is None:
+            alpha = cover[..., None]
+            out = out * (1.0 - alpha) + flake_radiance[None, None, :] * alpha
+        else:
+            out = over
 
         return from_linear_unit(out, scale, is_integer, img.dtype)
