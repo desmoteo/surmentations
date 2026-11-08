@@ -246,14 +246,17 @@ def test_a_line_worn_away_leaves_a_gap_of_two_lanes() -> None:
     assert float(np.abs(lanes.edges[1] - (200.0 - 30.0) / 260.0).min()) < 0.03
 
 
-def test_paint_that_fits_no_even_spacing_is_not_lane_lines() -> None:
+def test_lanes_are_one_width_whatever_the_paint_says() -> None:
     mask = _fan(30.0, 290.0)
     frame = road_frame(mask)
     assert frame is not None
     scene = _painted_road((40.0, 95.0, 118.0, 201.0, 280.0))
     paint = painted_lines(scene, frame, mask, None)
     lanes = road_lanes(frame, None, np.random.default_rng(0), paint=paint)
-    assert lanes.painted[1] == 0 and len(lanes.edges[1]) >= 3
+    # Whatever it makes of them, the lanes it lays are of one width.
+    gaps = np.diff(lanes.edges[1][1:-1])
+    assert len(lanes.edges[1]) >= 3
+    assert len(gaps) == 0 or float(np.ptp(gaps)) < 0.02
 
 
 def test_painted_lines_put_a_road_right_where_its_mask_is_wrong() -> None:
@@ -702,3 +705,29 @@ def test_a_plume_is_a_low_cloud_as_wide_as_its_vehicle() -> None:
         assert float(spray[215:].max()) < 0.1 * float(spray.max())
         return
     raise AssertionError("no plume was thrown towards the camera in forty draws")
+
+
+def test_a_car_seen_from_the_front_trails_its_spray_away_from_the_camera() -> None:
+    """A rear shows red lenses and a front shows none. Cars with no red on
+    them are coming on, and their spray is behind them, up the frame: never
+    off the bonnet. And a red car is not a tail lamp."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    for left, top in ((100, 60), (190, 120)):
+        vehicles[top : top + 30, left : left + 26] = True
+        scene[top : top + 30, left : left + 26] = (0.3, 0.32, 0.35)
+    # A red car between them, which used to be taken for one big tail lamp.
+    vehicles[150:180, 140:166] = True
+    scene[150:180, 140:166] = (0.5, 0.04, 0.04)
+    thrown = 0.0
+    for seed in range(12):
+        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed), scene)
+        towards = float(spray[92:118, 90:124].sum() + spray[152:200, 184:230].sum())
+        towards += float(spray[182:230, 130:176].sum())
+        away = float(spray[20:58, 90:140].sum() + spray[80:118, 180:230].sum())
+        assert towards <= 0.05 * away + 1e-6, "spray off the front of a car that is coming on"
+        thrown += away
+    assert thrown > 0.0

@@ -1090,7 +1090,16 @@ class RandomSnow(CameraTransform):
             carriageway = labels == int(SceneClass.ROAD) if labels is not None else road
             standing_on = np.zeros(road.shape, dtype=bool) if on_road is None else on_road
             named_vehicles = None if labels is None else labels == int(SceneClass.VEHICLE)
-            read = read_road(linear_scene, carriageway, standing_on, named_vehicles, rng)
+            camera = self.depth_provider.settle_camera(scene)
+            read = read_road(
+                linear_scene,
+                carriageway,
+                standing_on,
+                named_vehicles,
+                rng,
+                horizon_row=self.depth_provider.horizon_row(scene),
+                camera_height_m=None if camera is None else camera.height_m,
+            )
             if read is not None:
                 frame, lanes = read
                 ragged = ground_noise(depth_pm, focal, camera_pitch, _TRACK_RAGGED_M, rng)
