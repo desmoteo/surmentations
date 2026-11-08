@@ -8,10 +8,14 @@ front too, and none of it says *where* a headlamp is.
 
 So this is asked of a network, once per scene, as the scene's labels are.
 The shipped estimator is an open-vocabulary detector, OWLv2 (Minderer,
-Gritsenko and Houlsby, 2023), asked for two things by name, "a car
-headlight" and "a car tail light". What it finds on a vehicle says both
-which end is seen, by which of the two it is surer of, and where the lamps
-are, by where it found them. On the 22 single vehicles of this
+Gritsenko and Houlsby, 2023). It is asked first for the vehicles
+themselves, over the whole frame, because a semantic mask runs touching
+vehicles together: three cars nose to tail are one long outline to it, and
+the boxes found on that outline share it out among them. Then each vehicle
+is looked at for two things by name, "a car headlight" and "a car tail
+light". What is found on a vehicle says both which end is seen, by which
+of the two the network is surer of, and where the lamps are, by where it
+found them. On the 22 single vehicles of this
 repository's sample scenes, labelled by eye, it told front from rear every
 time; the lens test of :func:`surmentations.utils.road.vehicle_facing` was
 right for 12 of them, wrong for 3 and silent on 7. That is four scenes and
@@ -25,10 +29,11 @@ trained on car keypoints say both and better, and the ones published with
 weights are under licences this library cannot take on (OpenPifPaf's, on
 ApolloCar3D, is AGPL). OWLv2 is Apache-2.0.
 
-**The cost** is the largest of anything a provider runs: on a laptop GPU,
-90 ms for every sixteen vehicles in half precision and 300 ms in full. It
-is paid once per scene, only by a provider given this estimator, and not
-at all for a scene with no vehicle in it.
+**The cost** is the largest of anything a provider runs: one pass of the
+network over the frame and one for every sixteen vehicles, each about 65 ms
+on a laptop GPU in half precision and 280 ms in full. It is paid once per
+scene, only by a provider given this estimator, and not at all for a scene
+with no vehicle in it.
 
 References:
 
@@ -54,6 +59,32 @@ from surmentations import mode
 # What the detector is asked for, in this order: the first is a front's and
 # the second a rear's.
 LAMP_PROMPTS = ("a car headlight", "a car tail light")
+# What it is asked for first, over the whole frame: the vehicles themselves,
+# so that those the scene's labels run together can be told apart. And what
+# each is called, the heavy ones among them being slower and wider.
+VEHICLE_PROMPTS = ("a car", "a van", "a truck", "a bus", "a motorcycle")
+VEHICLE_KINDS = ("car", "van", "truck", "bus", "motorcycle")
+HEAVY_KINDS = frozenset({"truck", "bus"})
+# A vehicle found is believed at this score; at least this share of its box
+# is labelled vehicle; and at least this share of it is the outline it is
+# taken to be part of.
+_VEHICLE_SCORE = 0.2
+_VEHICLE_FILL = 0.3
+_OUTLINE_FILL = 0.25
+# Two boxes are one vehicle when they overlap by this much of their union,
+# or when the smaller lies this far inside the larger and is at least this
+# share of its size. A box that holds the middles of two smaller ones is a
+# group of vehicles and not one.
+_SAME_VEHICLE = 0.5
+_INSIDE = 0.8
+_ALIKE = 0.35
+_GROUP_OF = 0.6
+# A pixel of an outline outside every box found on it goes to the nearest,
+# up to this share of that box's size away; further off it is another
+# vehicle, which the detector did not find.
+_BESIDE = 0.25
+# The smallest piece of an outline that is kept as a vehicle of its own.
+_FEWEST_PIXELS = 20
 # A lamp is a small part of a vehicle: a box wider or taller than this share
 # of its outline is the bumper, the windscreen or the whole car.
 _LAMP_SHARE = 0.35
@@ -83,8 +114,7 @@ class VehicleView(NamedTuple):
     The fields:
 
     * ``box``: the vehicle's outline in the frame, as left, top, width and
-      height in pixels. It is what a vehicle is known by: the outline is a
-      connected piece of the scene's vehicle label.
+      height in pixels.
     * ``front``: how sure the reading is that a headlamp is seen on it, 0
       to 1.
     * ``rear``: the same of a tail lamp.
@@ -92,12 +122,27 @@ class VehicleView(NamedTuple):
       one to a row: column, row, half width and half height in pixels of the
       frame, and the score. The pair, where a pair was found; one lamp
       where the other is hidden; none where none was found.
+    * ``mask``: which pixels of the box are the vehicle, ``(height, width)``
+      bool. ``None`` says the vehicle is the whole connected piece of the
+      scene's vehicle label that has this box. With a mask, a piece of the
+      label can be more than one vehicle: touching vehicles are one piece
+      to a semantic mask, and an estimator that can tell them apart says
+      so here.
+    * ``kind``: what the vehicle is, where that is known: one of
+      :data:`VEHICLE_KINDS`, or empty.
     """
 
     box: tuple[int, int, int, int]
     front: float
     rear: float
     lamps: np.ndarray
+    mask: np.ndarray | None = None
+    kind: str = ""
+
+    @property
+    def read(self) -> bool:
+        """Whether anything was found on it: an unread vehicle says nothing of its ends."""
+        return self.front > 0.0 or self.rear > 0.0
 
     @property
     def facing(self) -> float:
@@ -126,6 +171,155 @@ def vehicle_outlines(
             ((left, top, wide, tall), parts[top : top + tall, left : left + wide] == index)
         )
     return found
+
+
+def separate_vehicles(found: np.ndarray, vehicles: np.ndarray) -> np.ndarray:
+    """The boxes a detector found that are each one vehicle, surest first.
+
+    ``found`` has a row for each box: left, top, right, bottom in pixels of
+    the frame, the kind (an index into :data:`VEHICLE_KINDS`) and the
+    score. A detector asked for cars answers with more than cars: the same
+    car twice, a row of parked cars as one, a hoarding. Kept are the boxes
+    it is sure enough of that lie mostly on the scene's vehicle label, less
+    those that hold two smaller ones, and of boxes on one vehicle the
+    surest.
+    """
+    mask = (np.asarray(vehicles) > 0.5).astype(np.uint8)
+    height, width = mask.shape
+    total = cv2.integral(mask)
+    rows: list[tuple[float, ...]] = []
+    for x0, y0, x1, y1, kind, score in found.tolist():
+        left, top = int(np.clip(x0, 0, width - 1)), int(np.clip(y0, 0, height - 1))
+        right, bottom = int(np.clip(x1, left + 1, width)), int(np.clip(y1, top + 1, height))
+        inside = total[bottom, right] - total[top, right] - total[bottom, left] + total[top, left]
+        area = float((right - left) * (bottom - top))
+        if score >= _VEHICLE_SCORE and inside >= _VEHICLE_FILL * area:
+            rows.append((float(left), float(top), float(right), float(bottom), kind, score, area))
+    rows.sort(key=lambda row: -row[5])
+
+    def shared(one: tuple[float, ...], other: tuple[float, ...]) -> float:
+        """The area two boxes have in common."""
+        across = min(one[2], other[2]) - max(one[0], other[0])
+        down = min(one[3], other[3]) - max(one[1], other[1])
+        return max(across, 0.0) * max(down, 0.0)
+
+    # The same vehicle twice, first: or a vehicle found twice would count
+    # as two when the next step asks what a box holds.
+    once: list[tuple[float, ...]] = []
+    for row in rows:
+        if all(
+            shared(row, other) <= _SAME_VEHICLE * (row[6] + other[6] - shared(row, other))
+            for other in once
+        ):
+            once.append(row)
+    # Then the boxes that are several vehicles: those that hold the middles
+    # of two smaller ones.
+    single = []
+    for row in once:
+        held = sum(
+            1
+            for other in once
+            if other is not row
+            and other[6] < _GROUP_OF * row[6]
+            and row[0] <= 0.5 * (other[0] + other[2]) <= row[2]
+            and row[1] <= 0.5 * (other[1] + other[3]) <= row[3]
+        )
+        if held < 2:
+            single.append(row)
+    # And most of a vehicle found again as a vehicle.
+    kept: list[tuple[float, ...]] = []
+    for row in single:
+        if not any(
+            shared(row, other) > _INSIDE * min(row[6], other[6])
+            and min(row[6], other[6]) > _ALIKE * max(row[6], other[6])
+            for other in kept
+        ):
+            kept.append(row)
+    return np.array([row[:6] for row in kept], dtype=np.float32).reshape(-1, 6)
+
+
+def split_outlines(
+    vehicles: np.ndarray, found: np.ndarray
+) -> list[tuple[tuple[int, int, int, int], np.ndarray, str]]:
+    """The vehicles of a vehicle mask, largest first: each one's box, its mask in it, and its kind.
+
+    A connected piece of the mask with one vehicle found on it, or none, is
+    one vehicle. One with several found on it (``found``, as
+    :func:`separate_vehicles` returns it) is shared out among them. A pixel
+    inside one box is that vehicle's; inside several, it is the vehicle's
+    whose box reaches lowest in the picture, which is the nearest and
+    stands in front of the others; just outside them all, the nearest's.
+    What lies well away from every box is a vehicle the detector did not
+    find, and is kept as one of its own, of no known kind.
+    """
+    mask = (np.asarray(vehicles) > 0.5).astype(np.uint8)
+    count, parts, stats, _centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    boxes = found.reshape(-1, 6)
+    out: list[tuple[tuple[int, int, int, int], np.ndarray, str]] = []
+    for index in range(1, count):
+        left, top, wide, tall, area = (int(value) for value in stats[index])
+        if area < _FEWEST_PIXELS:
+            continue
+        own = parts[top : top + tall, left : left + wide] == index
+        rows, columns = np.nonzero(own)
+        on_it = []
+        for x0, y0, x1, y1, kind, _score in boxes.tolist():
+            if not (left <= 0.5 * (x0 + x1) < left + wide and top <= 0.5 * (y0 + y1) < top + tall):
+                continue
+            inside = (
+                (columns + left >= x0)
+                & (columns + left < x1)
+                & (rows + top >= y0)
+                & (rows + top < y1)
+            )
+            if int(inside.sum()) >= _OUTLINE_FILL * (x1 - x0) * (y1 - y0):
+                on_it.append((x0, y0, x1, y1, int(kind), inside))
+        if len(on_it) < 2:
+            kind = VEHICLE_KINDS[on_it[0][4]] if on_it else ""
+            out.append(((left, top, wide, tall), own, kind))
+            continue
+        # Whose each pixel is: the lowest-reaching box it is inside, or the
+        # nearest box it is just outside of.
+        whose = np.full(len(rows), -1)
+        lowest = np.full(len(rows), -np.inf)
+        nearest = np.full(len(rows), np.inf)
+        beside = np.full(len(rows), -1)
+        for number, (x0, y0, x1, y1, _kind, inside) in enumerate(on_it):
+            take = inside & (y1 > lowest)
+            whose[take], lowest[take] = number, y1
+            off_x = np.maximum(np.maximum(x0 - (columns + left), columns + left - x1), 0.0)
+            off_y = np.maximum(np.maximum(y0 - (rows + top), rows + top - y1), 0.0)
+            off = np.maximum(off_x / max(x1 - x0, 1.0), off_y / max(y1 - y0, 1.0))
+            closer = off < nearest
+            nearest[closer], beside[closer] = off[closer], number
+        outside = whose < 0
+        whose[outside & (nearest <= _BESIDE)] = beside[outside & (nearest <= _BESIDE)]
+        for number, (_x0, _y0, _x1, _y1, kind, _inside) in enumerate(on_it):
+            mine = whose == number
+            if int(mine.sum()) >= _FEWEST_PIXELS:
+                out.append((*_boxed(rows[mine], columns[mine], left, top), VEHICLE_KINDS[kind]))
+        rest = np.zeros((tall, wide), dtype=np.uint8)
+        rest[rows[whose < 0], columns[whose < 0]] = 1
+        pieces, piece_of, piece_stats, _middles = cv2.connectedComponentsWithStats(
+            rest, connectivity=8
+        )
+        for piece in range(1, pieces):
+            if int(piece_stats[piece, cv2.CC_STAT_AREA]) >= _FEWEST_PIXELS:
+                piece_rows, piece_columns = np.nonzero(piece_of == piece)
+                out.append((*_boxed(piece_rows, piece_columns, left, top), ""))
+    out.sort(key=lambda one: -int(one[1].sum()))
+    return out
+
+
+def _boxed(
+    rows: np.ndarray, columns: np.ndarray, left: int, top: int
+) -> tuple[tuple[int, int, int, int], np.ndarray]:
+    """Pixels given by row and column within an outline's box, as a box in the frame and a mask."""
+    first_row, first_column = int(rows.min()), int(columns.min())
+    tall, wide = int(rows.max()) - first_row + 1, int(columns.max()) - first_column + 1
+    mask = np.zeros((tall, wide), dtype=bool)
+    mask[rows - first_row, columns - first_column] = True
+    return (left + first_column, top + first_row, wide, tall), mask
 
 
 def lamps_of(
@@ -198,7 +392,12 @@ def check_views(views: Any, *, source: str) -> list[VehicleView]:
         if not isinstance(view, VehicleView):
             raise TypeError(
                 f"{source} gave a {type(view).__name__} where a VehicleView was expected; "
-                "an estimator of vehicle views returns one VehicleView per outline."
+                "an estimator of vehicle views returns one VehicleView per vehicle."
+            )
+        if view.mask is not None and view.mask.shape != (view.box[3], view.box[2]):
+            raise ValueError(
+                f"{source} gave a vehicle a mask of shape {view.mask.shape} in a box "
+                f"{view.box[2]} wide and {view.box[3]} tall; a view's mask is its box's size."
             )
     return views
 
@@ -215,21 +414,27 @@ class VehicleViewEstimator(ABC):
         """The view of each vehicle of one ``(H, W, 3)`` frame.
 
         ``vehicles`` is the ``(H, W)`` mask of the pixels labelled vehicle.
-        A view is returned for each outline the estimator read, known by
-        its box (:func:`vehicle_outlines`); an outline it did not read is
-        simply absent, and whoever asks falls back to what colour says.
+        A view is returned for each vehicle the estimator has something to
+        say of: which pixels are it, where it can tell touching vehicles
+        apart, and which end it shows, where it read that. A vehicle left
+        out, or returned unread, is read by colour by whoever asks.
         """
 
 
 class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
     """Vehicle views from an open-vocabulary detector asked for lamps, the shipped default.
 
-    Each outline of the vehicle mask is cut out of the frame with a little
-    of what surrounds it, and the cuts are laid out as a square mosaic,
-    ``grid`` to a side, which the detector sees as one picture: sixteen
-    vehicles cost one pass and not sixteen. It is asked for a headlight and
-    for a tail light (:data:`LAMP_PROMPTS`), and what it finds in each
-    cell is that vehicle's (:func:`lamps_of`).
+    It looks twice. First at the whole frame, for the vehicles themselves
+    (:data:`VEHICLE_PROMPTS`): a semantic mask runs touching vehicles
+    together, and the boxes found on each connected piece of it share the
+    piece out among them (:func:`separate_vehicles`,
+    :func:`split_outlines`). Then at the vehicles one by one. Each is cut
+    out of the frame with a little of what surrounds it, and the cuts are
+    laid out as a square mosaic, ``grid`` to a side, which the detector
+    sees as one picture: sixteen vehicles cost one pass and not sixteen.
+    There it is asked for a headlight and for a tail light
+    (:data:`LAMP_PROMPTS`), and what it finds in each cell is that
+    vehicle's (:func:`lamps_of`).
 
     Args:
         model_name: the checkpoint: anything ``transformers`` loads as a
@@ -242,8 +447,9 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
             the network each vehicle at 240 pixels, which is enough for it
             to find a lamp; five is a third faster on a busy road and finds
             more that are not lamps.
-        max_vehicles: the most outlines read in one frame, largest first.
-        min_pixels: the smallest outline read. Below a few hundred pixels a
+        max_vehicles: the most vehicles read for their lamps in one frame,
+            largest first.
+        min_pixels: the smallest vehicle read. Below a few hundred pixels a
             lamp is under a pixel, and there is nothing to find.
         min_score: the least the detector is believed at.
         half_precision: run the network in float16. ``None`` follows the
@@ -292,25 +498,80 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         size = getattr(self._processor.image_processor, "size", None)
         side = size.get("height") if isinstance(size, dict) else getattr(size, "height", None)
         self._side = int(side or 960)
+        pictures = self._processor.image_processor
+        self._mean = torch.tensor(pictures.image_mean, device=self.device).view(1, 3, 1, 1)
+        self._std = torch.tensor(pictures.image_std, device=self.device).view(1, 3, 1, 1)
+        self._words: dict[tuple[str, ...], Any] = {}
 
-    def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
-        """The view of each vehicle outline of one ``(H, W, 3)`` frame, largest first.
+    def _find(self, picture: np.ndarray, prompts: tuple[str, ...], least: float) -> np.ndarray:
+        """What the detector finds in a square picture, one row to a box.
 
-        A float frame is taken as ``[0, 1]`` and quantised to 8 bits first.
+        Left, top, right and bottom in the picture's own pixels, the kind,
+        which is the index of the prompt, and the score.
+
+        The picture is brought to the network's size and normalised here,
+        on the GPU, and the prompts are put into tokens once: the
+        checkpoint's own preprocessing does both on the CPU for every pass.
         """
         import torch
 
+        side = picture.shape[0]
+        if side != self._side:
+            shrink = cv2.INTER_AREA if side > self._side else cv2.INTER_LINEAR
+            picture = cv2.resize(picture, (self._side, self._side), interpolation=shrink)
+        if prompts not in self._words:
+            self._words[prompts] = self._processor(
+                text=[list(prompts)], return_tensors="pt", padding="max_length"
+            ).to(self.device)
+        pixels = torch.from_numpy(picture).to(self.device).permute(2, 0, 1).float().unsqueeze(0)
+        pixels = (pixels / 255.0 - self._mean) / self._std
+        half = mode.fast() if self.half_precision is None else self.half_precision
+        with (
+            torch.inference_mode(),
+            torch.autocast(self.device.type, dtype=torch.float16, enabled=half),
+        ):
+            output = self._model(pixel_values=pixels, **self._words[prompts])
+        found = self._processor.post_process_grounded_object_detection(
+            output, threshold=least, target_sizes=[(side, side)]
+        )[0]
+        boxes = found["boxes"].float().cpu().numpy().reshape(-1, 4)
+        kinds = found["labels"].cpu().numpy().reshape(-1, 1).astype(np.float32)
+        scores = found["scores"].float().cpu().numpy().reshape(-1, 1)
+        return np.hstack([boxes, kinds, scores]).astype(np.float32)
+
+    def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
+        """The view of each vehicle of one ``(H, W, 3)`` frame, largest first.
+
+        A float frame is taken as ``[0, 1]`` and quantised to 8 bits first.
+        Every vehicle of the mask comes back, with its own pixels; the
+        ``max_vehicles`` largest of at least ``min_pixels`` are read for
+        their lamps, and the rest come back unread.
+        """
         height, width = image.shape[:2]
         if image.dtype != np.uint8:
             image = np.clip(np.rint(image.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
-        outlines = vehicle_outlines(vehicles, self.min_pixels, self.max_vehicles)
-        views: list[VehicleView] = []
+        if not np.any(vehicles):
+            return []
+        # The vehicles first, in the whole frame, to tell apart the ones
+        # the labels run together.
+        whole = np.full((max(height, width), max(height, width), 3), 114, dtype=np.uint8)
+        whole[:height, :width] = image
+        found = self._find(whole, VEHICLE_PROMPTS, _VEHICLE_SCORE)
+        apart = split_outlines(vehicles, separate_vehicles(found, vehicles))
+        none = np.zeros((0, 5), dtype=np.float32)
+        views = [VehicleView(box, 0.0, 0.0, none, mask, kind) for box, mask, kind in apart]
+        readable = [
+            index
+            for index, (_box, mask, _kind) in enumerate(apart)
+            if mask.sum() >= self.min_pixels
+        ][: self.max_vehicles]
         cell = self._side // self.grid
-        for start in range(0, len(outlines), self.grid * self.grid):
-            batch = outlines[start : start + self.grid * self.grid]
+        for start in range(0, len(readable), self.grid * self.grid):
+            batch = readable[start : start + self.grid * self.grid]
             canvas = np.full((self._side, self._side, 3), 114, dtype=np.uint8)
             placed = []
-            for slot, ((left, top, wide, tall), _outline) in enumerate(batch):
+            for slot, index in enumerate(batch):
+                left, top, wide, tall = apart[index][0]
                 # With a little of what is round it, which is how the
                 # network knows a car when it sees one.
                 pad = int(0.15 * max(wide, tall)) + 2
@@ -323,28 +584,12 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
                 at_y, at_x = (slot // self.grid) * cell + 4, (slot % self.grid) * cell + 4
                 canvas[at_y : at_y + cut.shape[0], at_x : at_x + cut.shape[1]] = cut
                 placed.append((at_x, at_y, cut.shape[1], cut.shape[0], scale, x0, y0))
-            inputs = self._processor(
-                text=[list(LAMP_PROMPTS)], images=canvas, return_tensors="pt"
-            ).to(self.device)
-            half = mode.fast() if self.half_precision is None else self.half_precision
-            with (
-                torch.inference_mode(),
-                torch.autocast(self.device.type, dtype=torch.float16, enabled=half),
-            ):
-                output = self._model(**inputs)
-            found = self._processor.post_process_grounded_object_detection(
-                output, threshold=self.min_score, target_sizes=[(self._side, self._side)]
-            )[0]
-            boxes = found["boxes"].float().cpu().numpy().reshape(-1, 4)
-            kinds = found["labels"].cpu().numpy().reshape(-1, 1).astype(np.float32)
-            scores = found["scores"].float().cpu().numpy().reshape(-1, 1)
+            lamps = self._find(canvas, LAMP_PROMPTS, self.min_score)
             middle_x, middle_y = (
-                0.5 * (boxes[:, 0] + boxes[:, 2]),
-                0.5 * (boxes[:, 1] + boxes[:, 3]),
+                0.5 * (lamps[:, 0] + lamps[:, 2]),
+                0.5 * (lamps[:, 1] + lamps[:, 3]),
             )
-            for (box, outline), (at_x, at_y, wide, tall, scale, x0, y0) in zip(
-                batch, placed, strict=True
-            ):
+            for index, (at_x, at_y, wide, tall, scale, x0, y0) in zip(batch, placed, strict=True):
                 inside = (
                     (middle_x >= at_x)
                     & (middle_x < at_x + wide)
@@ -352,7 +597,9 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
                     & (middle_y < at_y + tall)
                 )
                 # From the mosaic back to the frame.
-                in_frame = (boxes[inside] - [at_x, at_y, at_x, at_y]) / scale + [x0, y0, x0, y0]
-                rows = np.hstack([in_frame, kinds[inside], scores[inside]])
-                views.append(lamps_of(box, outline, rows, self.min_score))
+                rows = lamps[inside].copy()
+                rows[:, :4] = (rows[:, :4] - [at_x, at_y, at_x, at_y]) / scale + [x0, y0, x0, y0]
+                box, mask, kind = apart[index]
+                seen = lamps_of(box, mask, rows, self.min_score)
+                views[index] = seen._replace(mask=mask, kind=kind)
         return views
