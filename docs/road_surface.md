@@ -132,6 +132,12 @@ wide (0.3) to lanes worn bare (1). Left, without; right, with:
 
 ## The wet road
 
+Everything in this section and the next two is in the scene, and the rain
+that is seen as streaks is nearer the lens than the scene. So the streaks
+are drawn last, over the wet road, the spray and the lamps, and none of
+them darkens, mirrors or hides the rain in front of it
+([how it works](how_it_works.md)).
+
 - **Water in the ruts and gutters.** A road drains to its kerbs and has two
   ruts in every lane. The noise the puddles are cut from is lowered there,
   so a little water is strips along the road and only a lot of it is
