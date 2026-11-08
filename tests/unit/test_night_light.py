@@ -32,6 +32,8 @@ from surmentations.perception import (
 )
 from surmentations.perception.vehicles import lamp_posts
 from surmentations.utils.night_light import (
+    BeamSource,
+    beam_origins,
     even_road,
     fit_ground,
     headlamp_light,
@@ -39,6 +41,7 @@ from surmentations.utils.night_light import (
     lamps_in_space,
     scene_points,
     street_light,
+    vehicle_heading,
 )
 from surmentations.utils.precipitation import (
     far_field_texture,
@@ -156,43 +159,169 @@ def test_a_headlamp_lights_the_road_ahead_of_its_vehicle_and_not_what_is_above_i
         (-_ground_at(0.0) / CAMERA_M).astype(np.float32),
     )
     foot = _pixel_of(_ground_at(25.0))
-    # Driving away from the camera, up the picture, seen from behind.
-    beams = headlamp_light(points, middle, up, FOCAL, (HEIGHT, WIDTH), [(foot, (0.0, -1.0), True)])
+    frame = (HEIGHT, WIDTH)
+    scale = HEIGHT / points.shape[0]
 
-    def lit(ahead_m: float, right_m: float = 0.0) -> float:
-        """The beam at a place on the ground."""
+    def lit(beams: np.ndarray, ahead_m: float, right_m: float = 0.0) -> float:
+        """A beam's light at a place on the ground."""
         column, row = _pixel_of(_ground_at(ahead_m, right_m))
-        scale = HEIGHT / beams.shape[0]
         return float(beams[int(row / scale), int(column / scale)])
 
-    assert lit(36.0) > 0.4 and lit(36.0) > lit(50.0) > lit(70.0) > 0.0
-    assert lit(28.0) < 0.05, "a beam from the middle of a vehicle seen from behind"
-    assert lit(20.0) == 0.0 and lit(40.0, 12.0) < 0.02
-    # The same vehicle coming on: its beam is towards the camera.
-    oncoming = headlamp_light(
-        points, middle, up, FOCAL, (HEIGHT, WIDTH), [(foot, (0.0, 1.0), False)]
-    )
-    scale = HEIGHT / oncoming.shape[0]
-    near = _pixel_of(_ground_at(18.0))
-    assert float(oncoming[int(near[1] / scale), int(near[0] / scale)]) > 0.3
-    # Which way it points is which end is seen, with nothing else to go
-    # by: away from the camera seen from behind, at it seen from the
-    # front. An outline that is long across that line says nothing.
-    for long_way in (None, (1.0, 0.0)):
-        frame = (HEIGHT, WIDTH)
-        rear = headlamp_light(points, middle, up, FOCAL, frame, [(foot, long_way, True)])
-        front = headlamp_light(points, middle, up, FOCAL, frame, [(foot, long_way, False)])
-        beyond, nearer = _pixel_of(_ground_at(40.0)), _pixel_of(_ground_at(15.0))
-        assert float(rear[int(beyond[1] / scale), int(beyond[0] / scale)]) > 0.3
-        assert float(rear[int(nearer[1] / scale), int(nearer[0] / scale)]) == 0.0
-        assert float(front[int(nearer[1] / scale), int(nearer[0] / scale)]) > 0.3
-        assert float(front[int(beyond[1] / scale), int(beyond[0] / scale)]) == 0.0
-    # A wall across the road at 40 m: lit at its foot, dark at 3 m up.
+    # Seen from behind: driving away from the camera, up the picture.
+    rear = headlamp_light(points, middle, up, FOCAL, frame, [BeamSource(foot, True)])
+    assert lit(rear, 36.0) > 0.4 and lit(rear, 36.0) > lit(rear, 50.0) > lit(rear, 70.0) > 0.0
+    assert lit(rear, 28.0) < 0.05, "a beam from the middle of a vehicle seen from behind"
+    assert lit(rear, 20.0) == 0.0 and lit(rear, 15.0) == 0.0 and lit(rear, 40.0, 12.0) < 0.02
+    # The same vehicle seen from the front: its beam is at the camera.
+    front = headlamp_light(points, middle, up, FOCAL, frame, [BeamSource(foot, False)])
+    assert lit(front, 18.0) > 0.3 and lit(front, 40.0) == 0.0
+    # A wall across the road at 40 m, nearer than the ground behind it:
+    # lit at its foot, dark at 3 m up.
     wall = points.copy()
     for above in (0.3, 3.0):
         wall[0, 0] = _ground_at(40.0, 0.0, above)
-        got = headlamp_light(wall, middle, up, FOCAL, (HEIGHT, WIDTH), [(foot, (0.0, -1.0), True)])
+        got = headlamp_light(wall, middle, up, FOCAL, frame, [BeamSource(foot, True)])
         assert (float(got[0, 0]) > 0.2) is (above < 1.0)
+
+
+def test_a_vehicle_points_the_way_its_outline_leans_from_its_lamps() -> None:
+    """Which end is seen says away from the camera or at it. Seen from one
+    side as well, the body shows on that side of the lamps, and the
+    vehicle is turned that way by the angle the lean makes: none for an
+    outline centred on its lamps, to the right for one that leans right,
+    and never more than half a right angle. An outline that is long
+    across the line from the camera says nothing."""
+    middle, up = _ground_at(20.0), -_ground_at(0.0) / CAMERA_M
+    foot = _pixel_of(_ground_at(25.0))
+    frame = (HEIGHT, WIDTH)
+    away = _ground_at(1.0) - _ground_at(0.0)
+    right = np.array([1.0, 0.0, 0.0])
+
+    def heading(**reading: object) -> np.ndarray:
+        """Which way a vehicle standing 25 m off points, as read."""
+        stands = vehicle_heading(BeamSource(foot, **reading), middle, up, FOCAL, frame)  # type: ignore[arg-type]
+        assert stands is not None
+        assert np.allclose(stands[0], _ground_at(25.0), atol=0.3)
+        assert float(np.linalg.norm(stands[1])) == pytest.approx(1.0)
+        return stands[1]
+
+    assert float(heading(from_behind=True) @ away) > 0.999
+    assert float(heading(from_behind=False) @ away) < -0.999
+    assert float(heading(from_behind=True, lean=0.0) @ away) > 0.999
+    turned = heading(from_behind=True, lean=0.6)
+    assert 0.2 < float(turned @ right) < 0.5 and float(turned @ away) > 0.85
+    assert float(heading(from_behind=True, lean=-0.6) @ right) < -0.2
+    assert float(heading(from_behind=True, lean=9.0) @ away) == pytest.approx(
+        np.sqrt(0.5), abs=0.01
+    )
+    # Seen from the front, the body is behind its lamps and it points the other way.
+    coming = heading(from_behind=False, lean=0.6)
+    assert float(coming @ away) < -0.85 and float(coming @ right) < -0.2
+    # The long way of an outline, with no pair of lamps to go by: used
+    # where it runs with the line from the camera, not across it.
+    assert float(heading(from_behind=True, long_way=(1.0, 0.0)) @ away) > 0.999
+    slanted = heading(from_behind=True, long_way=(0.5, -0.87))
+    assert float(slanted @ right) > 0.05 and float(slanted @ away) > 0.5
+    above_the_horizon = BeamSource((160.0, 2.0), True)
+    assert vehicle_heading(above_the_horizon, middle, up, FOCAL, frame) is None
+
+
+def _tail_lamps(ahead_m: float, apart_m: float = 1.4, high_m: float = 0.8) -> tuple:
+    """Where the two lamps of a vehicle's near end are seen, that far ahead on the road."""
+    return tuple(_pixel_of(_ground_at(ahead_m, side * apart_m / 2, high_m)) for side in (-1, 1))
+
+
+def test_a_vehicle_s_beams_are_placed_and_sized_by_its_own_lamps() -> None:
+    """A pair of lamps is two points a known distance apart at a known
+    height. The end that is seen is under the middle of them; the front of
+    a vehicle seen from behind is its own length further on; and a vehicle
+    whose lamps are twice as far apart as the ground's plane allows is
+    twice the size in that plane's units, beam and all."""
+    middle, up = _ground_at(20.0), -_ground_at(0.0) / CAMERA_M
+    frame = (HEIGHT, WIDTH)
+    foot = _pixel_of(_ground_at(26.5, 0.9))  # the corner of it nearest the camera, not its middle
+    seen = beam_origins(
+        BeamSource(foot, True, 0.0, None, _tail_lamps(25.0)), middle, up, FOCAL, frame
+    )
+    assert seen is not None
+    front, heading, scale = seen
+    assert scale == pytest.approx(1.0, rel=0.1)
+    assert np.allclose(front, _ground_at(29.5), atol=0.5), "not a length on from under its lamps"
+    assert float(heading @ (_ground_at(1.0) - _ground_at(0.0))) > 0.999
+    # Seen from the front, its front is where its lamps are.
+    coming = beam_origins(
+        BeamSource(foot, False, 0.0, None, _tail_lamps(25.0)), middle, up, FOCAL, frame
+    )
+    assert coming is not None and np.allclose(coming[0], _ground_at(25.0), atol=0.5)
+    # Lamps 2.8 m apart on this plane: a plane out by two, and a car twice as long on it.
+    big = beam_origins(
+        BeamSource(foot, True, 0.0, None, _tail_lamps(25.0, 2.8, 1.6)), middle, up, FOCAL, frame
+    )
+    assert big is not None and big[2] == pytest.approx(2.0, rel=0.1)
+    assert np.allclose(big[0], _ground_at(34.0), atol=1.0)
+    # With no pair it stands at its foot, at the scene's own scale.
+    alone = beam_origins(BeamSource(foot, True), middle, up, FOCAL, frame)
+    assert alone is not None and alone[2] == 1.0
+    assert np.allclose(alone[0], _ground_at(31.0, 0.9), atol=0.6)
+    assert beam_origins(BeamSource((160.0, 2.0), True), middle, up, FOCAL, frame) is None
+
+
+def test_a_vehicle_throws_two_beams_that_run_into_one() -> None:
+    """One from each headlamp: two pools on the road just ahead of the
+    vehicle, with less light between them, and one beam a few lengths on."""
+    points, _step = scene_points(_ground_depth(), FOCAL)
+    middle, up = (
+        _ground_at(20.0).astype(np.float32),
+        (-_ground_at(0.0) / CAMERA_M).astype(np.float32),
+    )
+    scale = HEIGHT / points.shape[0]
+    source = BeamSource(_pixel_of(_ground_at(12.0)), True, 0.0, None, _tail_lamps(12.0))
+    beams = headlamp_light(points, middle, up, FOCAL, (HEIGHT, WIDTH), [source])
+
+    def lit(ahead_m: float, right_m: float = 0.0) -> float:
+        """The light at a place on the ground."""
+        column, row = _pixel_of(_ground_at(ahead_m, right_m))
+        return float(beams[int(row / scale), int(column / scale)])
+
+    # Its front is at 16.5 m. A metre and a half on, each lamp has its pool.
+    assert lit(18.0, 0.65) > 1.4 * lit(18.0) and lit(18.0, -0.65) > 1.4 * lit(18.0)
+    assert lit(18.0, 0.65) > 0.4
+    # Fifteen metres on they are one beam, brightest in the middle.
+    assert lit(31.0) > lit(31.0, 0.9) > 0.0
+    assert lit(15.0) == 0.0, "light under the vehicle"
+
+
+def test_a_beam_falls_on_the_road_whatever_the_depth_made_of_it() -> None:
+    """A road in the deep shade under a bridge comes out of a depth map
+    far beyond where it is. It is the ground all the same, and a car that
+    drives into the shade lights it; but a car standing there, which the
+    labels know, is lit as a car and not as the road beyond it."""
+    points, _step = scene_points(_ground_depth(), FOCAL)
+    middle, up = (
+        _ground_at(20.0).astype(np.float32),
+        (-_ground_at(0.0) / CAMERA_M).astype(np.float32),
+    )
+    foot = _pixel_of(_ground_at(25.0))
+    frame = (HEIGHT, WIDTH)
+    scale = HEIGHT / points.shape[0]
+    column, row = (int(value / scale) for value in _pixel_of(_ground_at(38.0)))
+    shaded = points.copy()
+    shaded[row - 3 : row + 4, column - 3 : column + 4] *= 2.2
+    beam = [BeamSource(foot, True)]
+    plain = headlamp_light(points, middle, up, FOCAL, frame, beam)
+    in_shade = headlamp_light(shaded, middle, up, FOCAL, frame, beam)
+    assert float(in_shade[row, column]) == pytest.approx(float(plain[row, column]), rel=0.05)
+    assert float(plain[row, column]) > 0.3
+    # A bonnet at that pixel, a metre and a half up on a thing the labels
+    # say stands there: lit as what it is, at the top of the beam, and not
+    # as the road its line of sight comes down on a few metres beyond.
+    stood = points.copy()
+    stood[row, column] = _ground_at(36.0, 0.0, 1.5)
+    standing = np.zeros(points.shape[:2], dtype=bool)
+    standing[row, column] = True
+    as_itself = float(headlamp_light(stood, middle, up, FOCAL, frame, beam, standing)[row, column])
+    as_road = float(headlamp_light(stood, middle, up, FOCAL, frame, beam)[row, column])
+    assert as_road > 0.25 and as_itself < 0.5 * as_road
 
 
 def test_a_road_loses_the_day_s_light_and_shade_and_keeps_its_paint() -> None:
