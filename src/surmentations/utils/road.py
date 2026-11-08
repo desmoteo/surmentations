@@ -97,17 +97,18 @@ class RoadFrame(NamedTuple):
     ``weight`` is 1 on road that has a frame and 0 elsewhere, and the other
     fields mean something only where it is set.
 
-    Attributes:
-        weight: ``(H, W)`` float32 in ``[0, 1]``.
-        across: ``(H, W)`` float32 in ``[0, 1]``: position across the road,
-            from one side to the other.
-        width_px: ``(H, W)`` float32: the road's width through the pixel,
-            in pixels, which is what turns a width in the world into one in
-            the picture.
-        along: ``(H, W, 2)`` float32: the unit vector along the road,
-            ``(dx, dy)``, pointing down the frame where it has a choice.
-        piece: ``(H, W)`` int32: which connected piece of road the pixel
-            belongs to, from 1; 0 off the road.
+    The fields:
+
+    * ``weight``: ``(H, W)`` float32 in ``[0, 1]``.
+    * ``across``: ``(H, W)`` float32 in ``[0, 1]``: position across the road,
+      from one side to the other.
+    * ``width_px``: ``(H, W)`` float32: the road's width through the pixel,
+      in pixels, which is what turns a width in the world into one in
+      the picture.
+    * ``along``: ``(H, W, 2)`` float32: the unit vector along the road,
+      ``(dx, dy)``, pointing down the frame where it has a choice.
+    * ``piece``: ``(H, W)`` int32: which connected piece of road the pixel
+      belongs to, from 1; 0 off the road.
     """
 
     weight: np.ndarray
@@ -393,14 +394,15 @@ _NARROWEST_PAINTED_LANE = 0.12
 class Lanes(NamedTuple):
     """Where the lanes of each road in a :class:`RoadFrame` lie across it.
 
-    Attributes:
-        edges: for each road, at the index :attr:`RoadFrame.piece` gives it
-            (index 0 is unused), the positions across the road of its lane
-            lines in order, in the units of :attr:`RoadFrame.across`: lane
-            ``i`` runs from ``edges[road][i]`` to ``edges[road][i + 1]``. An
-            empty array for a road with no lanes.
-        painted: for each road, how many of those lines were read off paint
-            on the road, the rest being placed between and beyond them.
+    The fields:
+
+    * ``edges``: for each road, at the index :attr:`RoadFrame.piece` gives it
+      (index 0 is unused), the positions across the road of its lane
+      lines in order, in the units of :attr:`RoadFrame.across`: lane
+      ``i`` runs from ``edges[road][i]`` to ``edges[road][i + 1]``. An
+      empty array for a road with no lanes.
+    * ``painted``: for each road, how many of those lines were read off paint
+      on the road, the rest being placed between and beyond them.
     """
 
     edges: list[np.ndarray]
