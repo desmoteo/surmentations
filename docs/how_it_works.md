@@ -382,6 +382,11 @@ some point:
   a soaked road came out as a dry one a shade darker: nothing in it said
   wet. At night the same road reflected no lamp, because the test for what
   is a lamp asked a ragged clipped outline to fill its box as a disc does.
+- **A road has lanes, and things lie along them.** Where the scene's
+  labels say what is road, its own coordinates are read off its mask and
+  its lanes off the paint and the vehicles: water stands in the wheel ruts
+  and the gutters, settled snow is worn into tracks, and vehicles trail
+  spray along their own heading. See [`road_surface.md`](road_surface.md).
 - **The whole road is wet, and stays dark.** Level ground now carries the
   full effect up to the foot of each object, where estimated normals used
   to leave it at 40-70% with a dry outline round every car; and the

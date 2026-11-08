@@ -37,6 +37,9 @@ than exposed.
 - **[`docs/pipelines.md`](docs/pipelines.md)** — a worked composite whose
   effects cannot contradict each other, with measured frequencies and cost.
   Start here if you want a pipeline rather than a transform.
+- **[`docs/road_surface.md`](docs/road_surface.md)** — what is laid out
+  along a road: its lanes, read off the paint and the vehicles; wheel tracks
+  in settled snow; water in the ruts and gutters; spray behind vehicles.
 - **[`docs/scene_understanding.md`](docs/scene_understanding.md)** — the two
   things a provider can work out besides depth: what each pixel is, and how
   the camera is mounted. What they change in each effect, how the geometry
@@ -289,11 +292,11 @@ and the physics behind it.
 | Transform | Start with |
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view) |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels) |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
 | `NightFog` | `visibility_range_m` (read against the provider's depth range), `visibility_range_scene` (as a multiple of the scene's depth instead), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
-| `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes`, `min_visibility_scene` (keeps the veil from hiding the far end of a long view) |
+| `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes`, `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `wheel_track_range` (how far traffic has worn the settled snow into tracks, with scene labels) |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `GroundFog` | `visibility_range_m` (at the ground), `layer_height_range_m` (how shallow the layer is), `camera_height_range_m`, `camera_pitch_range_deg`, `patchiness_range`, `patch_scale_range_m`, `depth_scale` (it shows along the distance) |
 | `LocalPlumes` | `plume_count_range`, `source_width_range_m`, `rise_range_m`, `opacity_range`, `lean_range` (wind), `brightness_range` |
@@ -871,6 +874,7 @@ python -m tests.visual_regression.generate_goldens
 python docs/generate_examples.py          # the severity gallery
 python docs/generate_scene_examples.py    # every effect over sample_scenes/
 python docs/make_scene_understanding_figures.py   # the labels and geometry guide's figures
+python docs/make_road_surface_figures.py          # the road surface guide's figures
 ```
 
 The code reference is a site generated from the source: Python by autodoc,

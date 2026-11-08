@@ -100,6 +100,10 @@ down on it:
 
 ![ground fog](assets/scene_understanding/ground_fog.jpg)
 
+With labels the library can also follow the road itself: its lanes, wheel
+tracks in snow, water in the ruts and spray behind vehicles are in
+[`road_surface.md`](road_surface.md).
+
 ## Scene labels
 
 A segmentation network names every pixel, and what it names is folded into
