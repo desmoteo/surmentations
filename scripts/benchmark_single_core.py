@@ -114,10 +114,11 @@ LABELS = {
     "depth_estimate": "the depth estimate, once per new frame",
     "scene_labels": "the scene's labels, once per new frame",
     "scene_geometry": "the camera's geometry, once per new frame",
+    "scene_vehicles": "which end of each vehicle is seen, once per new frame",
 }
 
 # Rows that are not transforms: what a provider works out once for a frame.
-PER_FRAME = ("depth_estimate", "scene_labels", "scene_geometry")
+PER_FRAME = ("depth_estimate", "scene_labels", "scene_geometry", "scene_vehicles")
 
 
 def _scene_image(scene: str, size: int) -> np.ndarray:
@@ -228,7 +229,8 @@ def run(args: argparse.Namespace) -> None:
 
     # What a provider may work out besides depth, timed on its own as the
     # depth estimate is. A checkout from before there was any has no rows.
-    labeller = geometry = None
+    labeller = geometry = reader = None
+    vehicle = 0
     if not args.load_depth and not args.only:
         try:
             from surmentations.perception import (
@@ -239,6 +241,12 @@ def run(args: argparse.Namespace) -> None:
             pass
         else:
             labeller, geometry = SegmentationLabelEstimator(), GroundPlaneGeometryEstimator()
+        try:
+            from surmentations.perception import OpenVocabularyVehicleEstimator, SceneClass
+        except ImportError:
+            pass
+        else:
+            reader, vehicle = OpenVocabularyVehicleEstimator(), int(SceneClass.VEHICLE)
 
     provider = SharedDepthProvider(estimator)
     times: dict[str, list[float]] = {}
@@ -272,6 +280,18 @@ def run(args: argparse.Namespace) -> None:
                     geometry.estimate(image, disparity, labels)
 
                 times.setdefault(f"scene_geometry/{size}", []).append(_least(read, 5))
+                if reader is not None:
+                    named = labels == vehicle
+
+                    def look(image: np.ndarray = image, named: np.ndarray = named) -> None:
+                        """One reading of the scene's vehicles, with the GPU synchronised."""
+                        import torch
+
+                        torch.cuda.synchronize()
+                        reader.estimate(image, named)
+                        torch.cuda.synchronize()
+
+                    times.setdefault(f"scene_vehicles/{size}", []).append(_least(look, 5))
             for name, transform in transforms.items():
                 for seed in SEEDS:
 

@@ -82,6 +82,7 @@ from surmentations.perception.labels import (
     check_labels,
     class_weight,
 )
+from surmentations.perception.vehicles import VehicleView, VehicleViewEstimator, check_views
 
 # Samples per axis of the content fingerprint. 32 x 32 pixels is a few
 # kilobytes and a few microseconds, against tens of milliseconds for the
@@ -172,6 +173,7 @@ class _Scene:
         "labels",
         "metric",
         "pitch",
+        "vehicles",
     )
 
     def __init__(self, depth: np.ndarray, image: np.ndarray) -> None:
@@ -190,6 +192,7 @@ class _Scene:
         self.asked = False
         self.labels: np.ndarray | None = None
         self.geometry: InstallationGeometry | None = None
+        self.vehicles: list[VehicleView] | None = None
         self.disparity: np.ndarray | None = None
         self.fov: float | None = None
         self.pitch: float | None = None
@@ -244,6 +247,12 @@ class SharedDepthProvider:
             that asks sees the scene through the same camera, and where the
             camera's height is known the depth is in metres measured from
             it and ``depth_range_m`` is not used.
+        vehicles: what says which end of each vehicle is seen and where its
+            lamps are (:mod:`surmentations.perception.vehicles`), or
+            ``None``. It reads the vehicles the labels name, so it needs
+            ``labels`` too. With one, spray is laid behind each vehicle and
+            its lamps are lit where they are, by a network's reading and
+            not by colour. It is the dearest thing a provider runs.
         max_scenes: how many scenes to keep depth for. One is all a single
             pipeline call needs; the default leaves room for a few calls in
             flight at once (a thread pool sharing one provider), which would
@@ -266,6 +275,7 @@ class SharedDepthProvider:
         ),
         labels: SceneLabelEstimator | None = None,
         geometry: InstallationGeometry | GeometryEstimator | None = None,
+        vehicles: VehicleViewEstimator | None = None,
     ) -> None:
         """Wrap ``estimator``; see the class docstring for the arguments.
 
@@ -290,9 +300,14 @@ class SharedDepthProvider:
                 "geometry must be an InstallationGeometry, a GeometryEstimator or None, "
                 f"got {type(geometry).__name__}"
             )
+        if vehicles is not None and not isinstance(vehicles, VehicleViewEstimator):
+            raise TypeError(
+                f"vehicles must be a VehicleViewEstimator or None, got {type(vehicles).__name__}"
+            )
         self._estimator = estimator
         self._labels = labels
         self._geometry = geometry
+        self._vehicles = vehicles
         self._max_scenes = max_scenes
         self.depth_range_m = (float(near), float(far))
         self._init_state()
@@ -315,6 +330,7 @@ class SharedDepthProvider:
             "_estimator": self._estimator,
             "_labels": self._labels,
             "_geometry": self._geometry,
+            "_vehicles": self._vehicles,
             "_max_scenes": self._max_scenes,
             "depth_range_m": self.depth_range_m,
         }
@@ -324,6 +340,7 @@ class SharedDepthProvider:
         self._estimator = state["_estimator"]
         self._labels = state.get("_labels")
         self._geometry = state.get("_geometry")
+        self._vehicles = state.get("_vehicles")
         self._max_scenes = state["_max_scenes"]
         self.depth_range_m = state["depth_range_m"]
         self._init_state()
@@ -390,6 +407,7 @@ class SharedDepthProvider:
         elif geometry is None:
             geometry = self._geometry
         scene.geometry = geometry
+        self._read_vehicles(scene, frame)
 
         self._scenes.append(scene)
         self._prune()
@@ -412,6 +430,35 @@ class SharedDepthProvider:
             self._hits += scene.asked
             scene.asked = True
             return scene.depth
+
+    def _read_vehicles(self, scene: _Scene, frame: np.ndarray) -> None:
+        """Read which end of each of a scene's vehicles is seen, where there is a reader.
+
+        From the scene's labels, which say where its vehicles are: without
+        them there is nothing to read, and a scene with no vehicle labelled
+        is not shown to the network at all.
+        """
+        scene.vehicles = None
+        if self._vehicles is None or scene.labels is None:
+            return
+        named = scene.labels == int(SceneClass.VEHICLE)
+        if not named.any():
+            scene.vehicles = []
+            return
+        source = type(self._vehicles).__name__
+        scene.vehicles = check_views(self._vehicles.estimate(frame, named), source=source)
+
+    def get_vehicles(self, image: np.ndarray) -> list[VehicleView] | None:
+        """Which end of each vehicle of ``image``'s scene is seen, or ``None`` with nothing to say.
+
+        One :class:`~surmentations.perception.vehicles.VehicleView` for each
+        outline of the scene's vehicle label that was read, known by its
+        box. Made with the scene's depth and labels, from the same frame.
+        ``None`` when the provider has no vehicle estimator or the scene no
+        labels; an empty list for a scene with no vehicle in it.
+        """
+        with self._lock:
+            return self._scene_for(image).vehicles
 
     def get_labels(self, image: np.ndarray) -> np.ndarray | None:
         """What each pixel of ``image``'s scene is, or ``None`` with nothing to say.
@@ -465,6 +512,7 @@ class SharedDepthProvider:
                 frame = _reference_frame(image)
                 scene.labels = check_labels(labels, frame.shape[:2], source="remember()").view()
                 scene.labels.flags.writeable = False
+                self._read_vehicles(scene, frame)
             if geometry is not None:
                 scene.geometry = geometry
             scene.fov = scene.pitch = scene.metric = None
