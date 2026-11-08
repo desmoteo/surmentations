@@ -175,6 +175,18 @@ def test_a_headlamp_lights_the_road_ahead_of_its_vehicle_and_not_what_is_above_i
     scale = HEIGHT / oncoming.shape[0]
     near = _pixel_of(_ground_at(18.0))
     assert float(oncoming[int(near[1] / scale), int(near[0] / scale)]) > 0.3
+    # Which way it points is which end is seen, with nothing else to go
+    # by: away from the camera seen from behind, at it seen from the
+    # front. An outline that is long across that line says nothing.
+    for long_way in (None, (1.0, 0.0)):
+        frame = (HEIGHT, WIDTH)
+        rear = headlamp_light(points, middle, up, FOCAL, frame, [(foot, long_way, True)])
+        front = headlamp_light(points, middle, up, FOCAL, frame, [(foot, long_way, False)])
+        beyond, nearer = _pixel_of(_ground_at(40.0)), _pixel_of(_ground_at(15.0))
+        assert float(rear[int(beyond[1] / scale), int(beyond[0] / scale)]) > 0.3
+        assert float(rear[int(nearer[1] / scale), int(nearer[0] / scale)]) == 0.0
+        assert float(front[int(nearer[1] / scale), int(nearer[0] / scale)]) > 0.3
+        assert float(front[int(beyond[1] / scale), int(beyond[0] / scale)]) == 0.0
     # A wall across the road at 40 m: lit at its foot, dark at 3 m up.
     wall = points.copy()
     for above in (0.3, 3.0):
