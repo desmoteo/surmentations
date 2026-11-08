@@ -123,6 +123,7 @@ from surmentations.utils.road import (
     Lanes,
     RoadFrame,
     read_road,
+    road_mist,
     vehicle_spray,
     wheel_tracks,
 )
@@ -375,21 +376,20 @@ class RandomRain(CameraTransform):
             what is above it, sky mostly, and by day the brightest thing on
             a wet road; between puddles the road is dark and glossy. Scaled
             by how wet the ground is, so a damp road has none.
-        spray_range: how much spray the vehicles on a wet road throw up,
-            drawn per call. 0, the default, is none. Above it, each vehicle
-            on a road with a film of water trails a plume of mist: at 0.3 a
-            haze round its wheels, at 1 a cloud a couple of lengths long
-            that hides the lower half of whatever follows. It needs scene
+        spray_range: how much spray the traffic on a wet road throws up,
+            drawn per call. 0, the default, is none. Above it, a road with
+            a film of water and vehicles on it gets the three things spray
+            is made of: low dense tufts at the rear wheels; a long,
+            turbulent wake behind each vehicle, bigger behind a bigger one;
+            and a mist over the whole carriageway that thickens with
+            distance, so that far traffic is lost from the wheels up. At
+            0.3 it is a haze, at 1 a motorway in a downpour. It needs scene
             labels on the provider, for the vehicles and the road they are
             on, and does nothing without. Off by default because of what a
-            single frame cannot say: which vehicles are moving, and which
-            way. Each plume lies along its own vehicle's heading, read off
-            its outline. Which end is the tail is read off tail lamps where
-            they show, and otherwise each road's direction of travel is
-            drawn; each vehicle is given its own share of spray or none. A
-            parked car may get a plume, and a plume may trail the wrong
-            way. See
-            :func:`~surmentations.utils.road.vehicle_spray`.
+            single frame cannot say: how fast the traffic is moving, and,
+            where no lamp or lens shows, which way. See
+            :func:`~surmentations.utils.road.vehicle_spray` and
+            :func:`~surmentations.utils.road.road_mist`.
         lamp_glint_range: at night, how many times full scale the lamps in
             the frame are taken to be when they light the rain, drawn per
             call. Zero — the default — leaves every streak lit by the
@@ -924,11 +924,16 @@ class RandomRain(CameraTransform):
         spray = self.py_random.uniform(*self.spray_range)
         sprayed = False
         if spray > 0.0 and road is not None and film > 0.0 and labels is not None:
-            plumes = vehicle_spray(road, labels == int(SceneClass.VEHICLE), rng, linear_scene)
-            if float(plumes.max()) > 0.0:
-                # Mist is not even: it is torn by the air the vehicle drags.
-                torn = value_noise(height, width, rng=rng, octaves=5, base_cells=6)
-                thickness = np.float32(_SPRAY_DENSITY * spray * film) * plumes * (0.35 + 1.3 * torn)
+            named_vehicles = labels == int(SceneClass.VEHICLE)
+            plumes = vehicle_spray(road, named_vehicles, rng, linear_scene)
+            mist = road_mist(road, named_vehicles, depth_pm)
+            if float(plumes.max()) > 0.0 or float(mist.max()) > 0.0:
+                # Mist is not even: it is torn by the air the vehicles drag,
+                # in rags a few metres across.
+                torn = value_noise(height, width, rng=rng, octaves=5, base_cells=8)
+                wakes = np.float32(_SPRAY_DENSITY) * plumes * (0.3 + 1.4 * torn)
+                hanging = np.float32(_MIST_DENSITY) * mist * (0.75 + 0.5 * torn)
+                thickness = np.float32(spray * film) * (wakes + hanging)
                 drawn["spray"] = (1.0 - np.exp(-thickness)).astype(np.float32)
                 sprayed = True
         record_draw(spray=spray, spray_drawn=sprayed)
@@ -1331,7 +1336,10 @@ _HALO = 0.015
 # Spray: the optical depth of a plume at its densest, at full strength over
 # a soaked road; and how bright it is against the veil's own light, being
 # close to the ground and under the vehicle that throws it.
-_SPRAY_DENSITY = 1.1
+_SPRAY_DENSITY = 0.9
+# And of the mist over the carriageway, at the distance it has a depth of
+# one, at full strength.
+_MIST_DENSITY = 1.0
 _SPRAY_ALBEDO = 0.9
 # Rain on a puddle: the rate at which its reflection is twice as blurred as
 # still water's, and the most it is blurred by.
