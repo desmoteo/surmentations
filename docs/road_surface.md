@@ -32,50 +32,66 @@ rain = RandomRain(depth_provider=provider, wetness_probability=1.0, spray_range=
 
 ```mermaid
 flowchart TD
-    L["scene labels: road, vehicles, people"] --> MASK["mask of the carriageway and what stands on it"]
-    MASK --> ROWS["read row by row: follow one carriageway, fit a smooth curve to each side"]
-    ROWS --> ACROSS["position across the road, 0 to 1, per pixel"]
-    IMG["the picture"] --> PAINT["painted lines: thin, bright, long, lying along the road"]
-    ACROSS --> PAINT
-    PAINT --> VP["where they run to one point: redraw the road through it"]
-    VP --> ACROSS2["a truer position across"]
-    ACROSS2 --> PEAKS["paint counted by position: one peak per lane line"]
-    L --> VEH["vehicles: position of each foot, width of each"]
-    PEAKS --> LANES["lane lines"]
-    VEH --> LANES
-    LANES --> TRACKS["wheel tracks, ruts, gutters"]
-    VEH --> HEAD["each vehicle's heading, from its outline; tail lamps"]
-    ACROSS2 --> HEAD
-    HEAD --> SPRAY["spray plumes"]
+    L["scene labels: road, vehicles, people"] --> CUES
+    IMG["the picture"] --> CUES["cues to the road's direction:<br/>painted streaks, the road mask's edges, vehicle outlines"]
+    GEO["camera horizon and height, where known"] --> FIT
+    CUES --> FIT["robust fit of one road model:<br/>u = centre + offset (v - horizon) + bend / (v - horizon)"]
+    FIT --> OFF["offset: a position across the road for every pixel"]
+    OFF --> CARR["carriageways: stretches of offset that are solid road"]
+    CARR --> COMB["one comb of lane lines per carriageway"]
+    PAINT["paint lying along the road"] --> COMB
+    VEH["vehicles: position and width across the road"] --> COMB
+    GEO --> COMB
+    COMB --> TRACKS["wheel tracks, ruts, gutters"]
+    FIT --> DIR["the road's direction at every pixel"]
+    DIR --> SPRAY["spray plumes"]
+    LAMPS["each vehicle's own lamps: red = seen from behind"] --> SPRAY
 ```
 
-**The road's own coordinates.** For each pixel of road, how far it is from
-one side as a share of the way to the other. Lines of constant position run
-along the road: through its vanishing point where it is straight, round the
-bend where it is not. The mask is read row by row, following one
-carriageway, and a line or a parabola is fitted robustly to each side; a
-side hidden by the frame's edge is carried from the road's far end to the
-corner. What is left of the mask is read again, for the other carriageway
-and the slip road.
+**One model for the whole road.** On level ground, every line that runs
+along a road of constant curvature is, in the picture,
 
-**The lanes.** Three things say where they are, used in this order:
+    u = centre + offset * (v - horizon) + bend / (v - horizon)
 
-1. *Paint.* Lane lines are thin, brighter than the road, long, and lie the
-   way the road runs; the last is what tells them from a crossing, an
-   arrow or a patch of light. Where they run to one point, the road is
-   redrawn through that point, which corrects a mask that took in a hard
-   shoulder or lost a kerb behind a van. On such a road, and only there,
-   the paint counted by position across the road stands in peaks, one per
-   line. The gaps between them must each be a whole number of lanes of one
-   width, a worn line being a gap of two; paint that fits no such spacing
-   is ignored.
-2. *Vehicles.* Each one's foot gives a position across the road and its
-   width a size: a lane is about 1.7 vehicles wide. With one painted line
-   or none, that sets the width, and the lanes are slid to where the
-   vehicles sit in the middle of them.
-3. *A guess.* A road with neither gets two or three lanes.
+`horizon`, `centre` and `bend` are the road's, the same for every lane
+line, kerb and wheel track; `offset` is each line's own. So `offset` is a
+position across the road for every pixel, constant along a lane on a bend
+as on a straight, and across two carriageways as across one
+([`RoadModel`](../src/surmentations/utils/road.py)).
 
-Paint in magenta, lane lines in cyan, the tracks laid in them in orange:
+**Fitted to everything that points along the road.** Painted streaks, the
+edges of the road's mask and the long way of each vehicle's outline are
+each a short piece of line with a direction. None is trusted: a slip road,
+the end of a kerb and a zebra crossing are in there too. Two cues make a
+road, so many pairs are tried and the road kept is the one the largest
+share of the cues lies along to within a few degrees; a straight road is
+preferred unless a bend fits clearly better. Where the provider knows the
+camera's horizon ([scene understanding](scene_understanding.md)) it is
+used, which leaves two numbers to fit instead of three and is what keeps
+the fit from bending a road to pass through anything.
+
+**Carriageways.** Counted by offset, the road's mask is solid where there
+is a carriageway and empty where there is a reserve.
+
+**The lanes are one comb per carriageway**: a width and a phase, scored on
+everything at once.
+
+- *Paint lies on the comb's teeth.* The share of the paint that lies on a
+  lane line, lowered for lane lines with no paint and by a small cost per
+  line, so that a comb twice too fine does not win by having a tooth under
+  everything.
+- *Vehicles sit between the teeth*, in the middle of a lane.
+- *A lane has a size.* Where the camera's height is known the road's width
+  is known in metres, and a lane is 3.4 m give or take a quarter.
+  Otherwise a lane is 1.7 times the width of what drives in it, within a
+  wide margin.
+
+**When no such road fits**, one running across the picture or seen from
+straight above, the road is read off its mask alone, as before; and there
+lanes are laid only where the paint or the vehicles vouch for them, never
+guessed. Tracks ruled across a junction are worse than none.
+
+Cues in yellow, paint in magenta, lane lines in cyan, tracks in orange:
 
 ![roads as read](assets/road_surface/lanes.jpg)
 
@@ -117,15 +133,15 @@ lies on the road behind it: densest at the wheels and no higher than they
 are, as wide as the vehicle, then a little wider and up to about its roof,
 thinning out over a length and a half.
 
-- **Where it lies is the vehicle's own heading**, read off its outline
-  where the outline is long enough to say and lies near the road's
-  direction; otherwise the road's direction. A car changing lanes trails
-  its spray along its own line. The plume starts at the end of the outline
-  it trails from and is as wide there as the vehicle is across its heading.
-- **Which end is the tail** is read off tail lamps: a road on which two or
-  more vehicles show red lamps is seen from behind, and its plumes trail
-  towards the camera. Otherwise it is drawn once per road, since a
-  carriageway goes one way.
+- **Where it lies is the road's direction at the vehicle**, from the model
+  above, turned to the vehicle's own outline where that is long and close
+  to it: a car changing lanes trails its spray along its own line.
+- **Which end is the tail** comes from each vehicle's own picture. Red
+  lamps are tail lamps: it is seen from behind and driving away. White
+  lamps at night are headlamps: it is coming on. A vehicle showing neither
+  goes the way of the nearest one across the road that does, since the two
+  sides of a road run opposite ways. With no lamp showing on a road, its
+  direction is drawn.
 - **How fast** each vehicle goes is drawn: each gets its own share of
   spray, and more than a third get none.
 - **Some vehicles never get one**: a vehicle lying across the road, which
@@ -150,18 +166,19 @@ sheet of water off the tyres and no side spray.
   that names a crossing seen from straight above "building" leaves a piece
   of it that is read as a road running the wrong way. A road whose
   vehicles lie across it is caught; the rest is not.
-- **Lanes are approximate outside a straight, single carriageway.** The
-  road's shape comes from a network's mask, read row by row with a line or
-  a parabola for each side. On a bend the lanes drift from the paint; two
-  carriageways whose masks run together at the bottom of the frame are
-  read as one road, and lanes cross the barrier between them. Paint is
-  trusted only where its lines run to one vanishing point, which on the
-  sample scenes is one street; everywhere else the lanes come from where
-  the vehicles sit. Faint dashes on a pale road are not found at all.
-- **The reliable source is not in the picture.** A fixed camera's lanes do
-  not move. Lane lines given once per camera, as an installation geometry
-  is, or a lane-detection network, would replace all of the above; neither
-  is built.
+- **The road is taken to be level and of one curvature.** A hill, an
+  S-bend or a junction does not fit, and falls back to the mask.
+- **Carriageways divided by a low barrier are often read as one road**,
+  when the network labels the barrier as road. Lanes then keep one width
+  and phase across both, and are right on one side and a little off on the
+  other.
+- **Lane counts are estimates.** Without a camera height they rest on the
+  vehicles' widths; with one, on a height that is itself rough.
+- **Paint on a wet or night road** is mostly glare and is ignored when
+  there is too much of it to be paint.
+- **A fixed camera's lanes do not move.** Lane lines given once per
+  camera, as an installation geometry is, would be surer than any of
+  this; that is not built.
 - **Junctions, squares and car parks have no lanes.** A ragged mask gets
   no road; a tidy one is read as a road.
 - **Touching vehicles are one vehicle** to a semantic mask, so dense

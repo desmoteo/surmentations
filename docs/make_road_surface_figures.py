@@ -37,7 +37,12 @@ from surmentations.perception import (  # noqa: E402
 )
 from surmentations.presets.severity import GROUND_SEVERITY, SEVERITY  # noqa: E402
 from surmentations.utils.photometry import to_linear_unit  # noqa: E402
-from surmentations.utils.road import painted_lines, read_road, wheel_tracks  # noqa: E402
+from surmentations.utils.road import (  # noqa: E402
+    painted_lines,
+    read_road,
+    road_cues,
+    wheel_tracks,
+)
 
 OUT_DIR = REPO / "docs" / "assets" / "road_surface"
 REFERENCE = REPO / "docs" / "examples" / "00_base_scene.png"
@@ -79,7 +84,7 @@ def _save(name: str, tiles: list[np.ndarray], columns: int) -> None:
 
 
 def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
-    """Each scene with its paint in magenta, its lane lines in cyan and its tracks in orange."""
+    """Each scene with its cues in yellow, paint in magenta, lanes in cyan, tracks in orange."""
     tiles = []
     for name, image in images.items():
         labels = providers[name].get_labels(image)
@@ -88,7 +93,16 @@ def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPr
         on_road = vehicles | (labels == int(SceneClass.PERSON))
         carriageway = labels == int(SceneClass.ROAD)
         linear = to_linear_unit(image)[0]
-        read = read_road(linear, carriageway, on_road, vehicles, np.random.default_rng(0))
+        camera = providers[name].settle_camera(image)
+        read = read_road(
+            linear,
+            carriageway,
+            on_road,
+            vehicles,
+            np.random.default_rng(0),
+            horizon_row=providers[name].horizon_row(image),
+            camera_height_m=None if camera is None else camera.height_m,
+        )
         out = image.copy()
         if read is not None:
             frame, lanes = read
@@ -100,6 +114,10 @@ def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPr
                     near = np.abs(frame.across - line) * frame.width_px < 1.2
                     out[near & (frame.piece == road)] = (0, 255, 255)
             out[painted_lines(linear, frame, carriageway, on_road)] = (255, 0, 255)
+        for column, row, dx, dy, _weight in road_cues(linear, carriageway, on_road, vehicles):
+            first = (int(column - 6 * dx), int(row - 6 * dy))
+            last = (int(column + 6 * dx), int(row + 6 * dy))
+            cv2.line(out, first, last, (255, 255, 0), 1, cv2.LINE_AA)
         tiles.append(out)
     _save("lanes.jpg", tiles, 2)
 
