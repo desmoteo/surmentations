@@ -95,6 +95,9 @@ def test_veil_transmission_monotonic_with_depth(
         max_streaks=0,
         veil_beta_range=(0.05, 0.05),
         wetness_probability=0.0,
+        # The veil's mean, which is what thickens with depth: its grain is
+        # a count's, and goes up and down from row to row.
+        distant_rain_range=(0.0, 0.0),
     )
     out = t(image=scene)["image"].astype(np.float32)
     # Rain streaks and veil both composite toward the scene's own sky

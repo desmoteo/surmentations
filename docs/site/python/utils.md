@@ -13,6 +13,7 @@ surmentations.utils.filters
 surmentations.utils.grids
 surmentations.utils.ground
 surmentations.utils.illuminator
+surmentations.utils.night_light
 surmentations.utils.noise
 surmentations.utils.overcast
 surmentations.utils.photometry

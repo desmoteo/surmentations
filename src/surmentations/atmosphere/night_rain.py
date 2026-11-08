@@ -57,8 +57,10 @@ from surmentations.diagnostics import record_draw
 from surmentations.utils.grids import pixel_grid
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
+    far_field_texture,
     focal_length_px,
     gamma_dsd_slope,
+    marshall_palmer_slope,
     rain_number_density,
     raindrop_terminal_velocity,
     resolvable_fraction,
@@ -103,6 +105,13 @@ class NightRain(CameraTransform):
             ``1/z^2`` term a drop at 0.4 m saturates while one at 4 m is
             invisible. Values near 1 give a restrained drizzle; the upper end
             gives the hard white streaks of heavy rain in a strong beam.
+        backscatter_grain_range: how much of its grain that glow keeps, drawn
+            per call. At 0 it is an even wall of light, as it was. At 1 it
+            varies as a count of drops does: what comes back from the air
+            just beyond the last streak drawn is half of it, and there a
+            pixel looks through a handful of them, so the glow is a
+            fine streaked grain that thins into evenness with distance. See
+            :func:`~surmentations.utils.precipitation.far_field_texture`.
         backscatter_range: strength of the glow from the unresolved drops the
             beam lights. 0 disables it; heavy rain in a strong beam approaches
             the upper end and washes the frame out, as it does in reality.
@@ -162,6 +171,11 @@ class NightRain(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 20.0)),
         ]
+        backscatter_grain_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 2.0)),
+        ]
         backscatter_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -197,6 +211,7 @@ class NightRain(CameraTransform):
         exposure_time_range: tuple[float, float] = (0.020, 0.040),
         illuminator_gain_range: tuple[float, float] = (1.5, 6.0),
         backscatter_range: tuple[float, float] = (0.02, 0.14),
+        backscatter_grain_range: tuple[float, float] = (0.7, 1.2),
         horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
         aperture_diameter_range_mm: tuple[float, float] = (0.9, 2.6),
         focus_distance_range_m: tuple[float, float] = (8.0, 40.0),
@@ -216,6 +231,7 @@ class NightRain(CameraTransform):
         self.exposure_time_range = exposure_time_range
         self.illuminator_gain_range = illuminator_gain_range
         self.backscatter_range = backscatter_range
+        self.backscatter_grain_range = backscatter_grain_range
         self.horizontal_fov_range_deg = horizontal_fov_range_deg
         self.aperture_diameter_range_mm = aperture_diameter_range_mm
         self.focus_distance_range_m = focus_distance_range_m
@@ -313,7 +329,7 @@ class NightRain(CameraTransform):
             count_requested=count,
             illumination_p50=float(np.median(illumination)) if count else 0.0,
         )
-        return {
+        drawn = {
             "streaks": {
                 "x": rng.uniform(0.0, width, count).astype(np.float32),
                 "y": rng.uniform(0.0, height, count).astype(np.float32),
@@ -331,6 +347,23 @@ class NightRain(CameraTransform):
             "backscatter": backscatter,
             "angle": float(np.rad2deg(angle_rad)),
         }
+        # The grain of the glow, last of all the draws.
+        grain = self.py_random.uniform(*self.backscatter_grain_range)
+        grain_seed = self.py_random.randint(0, 2**31 - 1)
+        if grain > 0.0 and backscatter > 0.0:
+            falls = float(raindrop_terminal_velocity(3.0 / marshall_palmer_slope(rain_rate)))
+            drawn["backscatter_grain"] = far_field_texture(
+                np.zeros((height, width), dtype=np.float32),
+                np.random.default_rng(grain_seed),
+                rain_number_density(rain_rate, 0.0),
+                focal,
+                far,
+                focal * falls * exposure,
+                wind_angle,
+                grain,
+                lit_from_lens=True,
+            )
+        return drawn
 
     def apply(
         self,
@@ -339,6 +372,7 @@ class NightRain(CameraTransform):
         beam: np.ndarray,
         gain: float,
         backscatter: float,
+        backscatter_grain: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Add the lit streaks and the beam's backscatter to the frame.
@@ -363,7 +397,12 @@ class NightRain(CameraTransform):
             # Flat in depth because the 1/z^2 gain and the z^2 growth of the
             # illuminated volume cancel -- the same cancellation that makes a
             # fog bank in headlights an even wall rather than a gradient.
-            out = out + (backscatter * beam)[..., None]
+            # Not even across the frame, though: it is a count of drops,
+            # and has a count's grain.
+            glow = backscatter * beam
+            if backscatter_grain is not None:
+                glow = glow * backscatter_grain
+            out = out + glow[..., None]
 
         return from_linear_unit(np.clip(out, 0.0, None), scale, is_integer, img.dtype)
 

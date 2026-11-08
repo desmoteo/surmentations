@@ -124,6 +124,7 @@ from surmentations.utils.photometry import (
     to_linear_unit,
 )
 from surmentations.utils.precipitation import (
+    far_field_texture,
     focal_length_px,
     frustum_volume,
     gunn_marshall_slope,
@@ -363,6 +364,10 @@ _CANOPY_RELIEF = (0.18, 0.36)
 _DUSTING_SCALE_M = 0.35
 _DUSTING_GRAIN = 0.2
 
+# The flake that stands for the veil's: the mean melted diameter weighted
+# by what each flake takes out of a beam, in units of one over the
+# distribution's slope. It sets how far the far snow's speckle is smeared.
+_VEIL_FLAKE_SLOPES = 3.0
 # How much of what is under settled snow it hides.
 _SNOW_OPACITY = 0.95
 
@@ -545,6 +550,17 @@ class RandomSnow(CameraTransform):
             blown clear or melted. Kept low by default: the patches are
             noise on the ground, not tyre tracks, and at high values a
             covered road reads as cloud.
+        distant_snow_range: how much of its speckle the snow beyond the
+            drawn flakes keeps, drawn per call. The flakes are those within
+            ``distance_range_m``; the rest is a veil, and at 0 the veil is
+            an even grey, as fog is, which it was before. At 1 it varies as
+            a count of flakes does: a plain speckle just beyond the last
+            flake drawn, where a pixel looks through a handful of them,
+            finer and fainter with distance, and smooth where there are
+            thousands. Each distance's share of it is in front of only
+            what lies beyond that distance, so the snow has the scene's
+            depth in it; and over that the far veil hangs in sheets. See
+            :func:`~surmentations.utils.precipitation.far_field_texture`.
         wheel_track_range: how far traffic has worn the settled snow, drawn
             per call. Wheels run in the same two lines down every lane, and
             a snowed-in road that is driven on shows them before it shows
@@ -700,6 +716,11 @@ class RandomSnow(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        distant_snow_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 2.0)),
+        ]
         accumulation_falloff_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -736,6 +757,7 @@ class RandomSnow(CameraTransform):
         vehicle_cover_range: tuple[float, float] = (0.0, 0.6),
         accumulation_falloff_range: tuple[float, float] = (2.0, 5.0),
         overcast_range: tuple[float, float] = (0.7, 1.0),
+        distant_snow_range: tuple[float, float] = (0.7, 1.2),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -773,6 +795,7 @@ class RandomSnow(CameraTransform):
         self.vehicle_cover_range = vehicle_cover_range
         self.accumulation_falloff_range = accumulation_falloff_range
         self.overcast_range = overcast_range
+        self.distant_snow_range = distant_snow_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -1073,7 +1096,9 @@ class RandomSnow(CameraTransform):
             "blades": self.py_random.randint(*self.aperture_blades_range),
             "cats_eye": self.py_random.uniform(*self.cats_eye_strength_range),
             "rim_gain": self.py_random.uniform(*self.rim_gain_range),
-            "veil_transmission": np.exp(-veil_beta * lift_sky(depth_pm, sky)).astype(np.float32),
+            # The depth of air in front of each pixel for now: the veil is
+            # made of it at the end, once its speckle is drawn.
+            "veil_transmission": lift_sky(depth_pm, sky),
             "sky": sky,
             "overcast": self.py_random.uniform(*self.overcast_range)
             * cloud_cover(snowfall_rate, _OVERCAST_HALF_RATE_MM_H),
@@ -1119,7 +1144,31 @@ class RandomSnow(CameraTransform):
                 # the wet road under it now shows.
                 drawn["tracks"] = (cleared * np.clip(settled, 0.0, 1.0)).astype(np.float32)
                 drawn["settled"] = (settled * (1.0 - cleared)).astype(np.float32)
+        # The snow too far off to draw flake by flake, last of all the
+        # draws: not an even grey but the speckle of a count of flakes, in
+        # front of each thing by as much as there is air in front of it.
+        distant = self.py_random.uniform(*self.distant_snow_range)
+        distant_seed = self.py_random.randint(0, 2**31 - 1)
+        thickness = np.float32(veil_beta) * drawn["veil_transmission"]
+        if distant > 0.0 and veil_beta > 0.0:
+            slope = gunn_marshall_slope(snowfall_rate)
+            falls = float(snow_fall_speed(_VEIL_FLAKE_SLOPES / slope)) * fall_speed_scale
+            thickness *= far_field_texture(
+                drawn["veil_transmission"],
+                np.random.default_rng(distant_seed),
+                snow_number_density(snowfall_rate, 0.0),
+                focal,
+                self.distance_range_m[1],
+                focal * falls * exposure,
+                angle,
+                distant,
+            )
+        np.negative(thickness, out=thickness)
+        drawn["veil_transmission"] = np.exp(thickness, out=thickness).astype(
+            np.float32, copy=False
+        )
         record_draw(
+            distant_snow=distant,
             wheel_tracks=traffic,
             wheel_tracks_drawn=cleared is not None,
             road_share=lambda: 0.0 if road is None else float(road.mean()),

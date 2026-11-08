@@ -54,6 +54,7 @@ from surmentations.base import CameraTransform, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
+    far_field_texture,
     focal_length_px,
     gunn_marshall_slope,
     resolvable_fraction,
@@ -89,6 +90,13 @@ class NightSnow(CameraTransform):
             units of full scale. Snow is a bright diffuse scatterer, so this
             sits higher for a given lamp than a raindrop's does.
         beam_falloff_range: how sharply the beam dims off-axis.
+        backscatter_grain_range: how much of its grain that glow keeps, drawn
+            per call. At 0 it is an even wall of light, as it was. At 1 it
+            varies as a count of flakes does: what comes back from the air
+            just beyond the last flake drawn is half of it, and there a
+            pixel looks through a handful of them, so the glow is a
+            speckle that thins into evenness with distance. See
+            :func:`~surmentations.utils.precipitation.far_field_texture`.
         backscatter_range: glow from the flakes the beam lights but the lens
             cannot resolve. Heavy snow in a strong beam approaches the upper
             end and whites the frame out, as it does in reality.
@@ -159,6 +167,11 @@ class NightSnow(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 6.0)),
         ]
+        backscatter_grain_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 2.0)),
+        ]
         backscatter_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -217,6 +230,7 @@ class NightSnow(CameraTransform):
         illuminator_gain_range: tuple[float, float] = (0.6, 2.5),
         beam_falloff_range: tuple[float, float] = (0.6, 2.2),
         backscatter_range: tuple[float, float] = (0.03, 0.2),
+        backscatter_grain_range: tuple[float, float] = (0.7, 1.2),
         exposure_time_range: tuple[float, float] = (0.020, 0.040),
         fall_speed_scale_range: tuple[float, float] = (0.7, 1.8),
         fall_angle_range: tuple[float, float] = (-12.0, 12.0),
@@ -239,6 +253,7 @@ class NightSnow(CameraTransform):
         self.illuminator_gain_range = illuminator_gain_range
         self.beam_falloff_range = beam_falloff_range
         self.backscatter_range = backscatter_range
+        self.backscatter_grain_range = backscatter_grain_range
         self.exposure_time_range = exposure_time_range
         self.fall_speed_scale_range = fall_speed_scale_range
         self.fall_angle_range = fall_angle_range
@@ -337,7 +352,7 @@ class NightSnow(CameraTransform):
             count_requested=count,
             illumination_p50=float(np.median(illumination)) if count else 0.0,
         )
-        return {
+        drawn = {
             "flakes": {
                 "x": rng.uniform(0.0, width, count).astype(np.float32),
                 "y": rng.uniform(0.0, height, count).astype(np.float32),
@@ -353,6 +368,23 @@ class NightSnow(CameraTransform):
             "beam": _beam_profile(height, width, falloff),
             "backscatter": backscatter,
         }
+        # The grain of the glow, last of all the draws.
+        grain = self.py_random.uniform(*self.backscatter_grain_range)
+        grain_seed = self.py_random.randint(0, 2**31 - 1)
+        if grain > 0.0 and backscatter > 0.0:
+            falls = float(snow_fall_speed(3.0 / slope)) * fall_speed_scale
+            drawn["backscatter_grain"] = far_field_texture(
+                np.zeros((height, width), dtype=np.float32),
+                np.random.default_rng(grain_seed),
+                snow_number_density(snowfall_rate, 0.0),
+                focal,
+                far,
+                focal * falls * exposure,
+                fall_angle,
+                grain,
+                lit_from_lens=True,
+            )
+        return drawn
 
     def apply(
         self,
@@ -361,6 +393,7 @@ class NightSnow(CameraTransform):
         glare: float,
         beam: np.ndarray,
         backscatter: float,
+        backscatter_grain: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the lit flakes through a round stop and add them, with glare and backscatter.
@@ -403,6 +436,10 @@ class NightSnow(CameraTransform):
         if backscatter > 0.0:
             # The flakes the beam lights but the lens cannot resolve. Flat in
             # depth, because the 1/z^2 irradiance and the z^2 growth of the
-            # lit volume cancel.
-            out = out + (backscatter * beam)[..., None]
+            # lit volume cancel. Not even across the frame: it is a count
+            # of flakes, and has a count's grain.
+            glow = backscatter * beam
+            if backscatter_grain is not None:
+                glow = glow * backscatter_grain
+            out = out + glow[..., None]
         return from_linear_unit(np.clip(out, 0.0, None), scale, is_integer, img.dtype)

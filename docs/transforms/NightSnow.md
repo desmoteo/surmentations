@@ -74,6 +74,7 @@ both draw the falling flakes. The ready-made pipelines do exactly that.
 | `illuminator_gain_range` | `(0.6, 2.5)` | radiance a flake one metre away returns, in units of full scale. Snow is a bright diffuse scatterer, so this sits higher for a given lamp than a raindrop's does. |
 | `beam_falloff_range` | `(0.6, 2.2)` | how sharply the beam dims off-axis. |
 | `backscatter_range` | `(0.03, 0.2)` | glow from the flakes the beam lights but the lens cannot resolve. Heavy snow in a strong beam approaches the upper end and whites the frame out, as it does in reality. |
+| `backscatter_grain_range` | `(0.7, 1.2)` | how much of its grain that glow keeps, drawn per call. At 0 it is an even wall of light, as it was. At 1 it varies as a count of flakes does: what comes back from the air just beyond the last flake drawn is half of it, and there a pixel looks through a handful of them, so the glow is a speckle that thins into evenness with distance. See `far_field_texture`. |
 | `exposure_time_range` | `(0.02, 0.04)` | shutter time. The default is the 1/50-1/25 s of a night camera, long enough to draw near flakes out into streaks. |
 | `fall_speed_scale_range` | `(0.7, 1.8)` | multiplier on the still-air fall speed, for wind-driven snow. |
 | `fall_angle_range` | `(-12.0, 12.0)` | prevailing slant from vertical, in degrees. |
