@@ -42,7 +42,7 @@ STRIPS = [
     ("rain_4", "rain"),
     ("ground_fog_2", "ground fog"),
     ("snow_3", "snow"),
-    ("sun_flare_3", "sun flare"),
+    ("transmission_faults_3", "packet loss"),
     ("foliage_intrusion_3", "foliage"),
     ("night_ir_1", "night IR"),
     ("spider_web_3", "web"),
