@@ -356,17 +356,40 @@ provider knows where the points are
   further than in daylight rain because the camera has opened up for the
   dark, and they bloom. They are white whichever end they are on: with the
   infrared-cut filter out, a red lamp is a bright lamp and no more.
-- **Each lit vehicle throws its beam** on the road ahead of it: from its
-  front, widening, several times what a street lamp puts under itself,
-  half as strong at fourteen metres and gone by seventy-five, and cut off
-  above the height of a bonnet, as a dipped beam is. Which way it points
-  is which end is seen: away from the camera for a vehicle seen from
-  behind, whose beam shows as the road lit beyond it and to either side,
-  and at the camera for one seen from the front. Where the outline is
-  long, as seen from above, its long way is the heading. Where a
-  vehicle's lamps sit on its outline is not used: on a car seen from
-  behind at a low angle they are above its middle, and beams taken from
-  that were thrown back at the camera.
+- **Each lit vehicle throws two beams**, one from each headlamp, on the
+  road ahead of it: two narrow pools just ahead of its front that widen
+  and run into one within a few metres, several times what a street lamp
+  puts under itself, half as strong at fourteen metres and gone by
+  seventy-five, and cut off above the height of a bonnet, as a dipped beam
+  is.
+- **Which way a vehicle points** is first which end is seen: away from the
+  camera for one seen from behind, at it for one seen from the front. Then
+  how its outline leans from its pair of lamps: seen from one side as
+  well, its body shows on that side of them, and it is turned that way,
+  by an angle that is a ratio of two lengths in the picture and needs no
+  distances. Where no pair was found, the long way of an outline seen from
+  above. Neither where the lamps sit above or below the middle of the
+  outline nor the slope of the line between them is used: the first threw
+  beams back at the camera, the second turned a van through a right angle
+  for an error of a few pixels.
+- **Where its beams start, and how large they are, is its own lamps'
+  doing.** A pair of lamps is two points 1.4 m apart, 0.8 m up, on a known
+  end. The end that is seen is on the ground under the middle of them, and
+  the front of a vehicle seen from behind is a vehicle's length further
+  along its heading. Their spacing on the ground is the vehicle's scale: a
+  camera's height is known only roughly, the ground's plane with it, and a
+  car measured in the plane's units may be two cars long, so a vehicle's
+  length and its beam's reach are in its own metres. Two things were
+  tried first and were wrong: the lowest point of the outline, which is
+  the corner nearest the camera; and the far end of the outline, which,
+  shared out among touching vehicles, has pieces of its neighbours in it,
+  and put one car's beam on the bumper of the next.
+- **Where the road is**, for a beam, is the ground's plane wherever the
+  picture shows something at least as far off as the plane and not known
+  to stand on it. A road in the deep shade under a bridge comes out of a
+  depth map far beyond where it is and out of the labels as a wall; a car
+  driving into it lights it all the same, and the shade, which was the
+  day's light and not the road, does not keep it black.
 
 Lamps are added as light, after the illuminator's falloff and the
 auto-exposure, so neither dims them, and whatever follows in a pipeline,
