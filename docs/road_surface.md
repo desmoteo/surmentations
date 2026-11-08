@@ -128,37 +128,61 @@ wide (0.3) to lanes worn bare (1). Left, without; right, with:
 
 ## Spray
 
-Each vehicle on a road with a film of water trails a low cloud of mist that
-lies on the road behind it: densest at the wheels and no higher than they
-are, as wide as the vehicle, then a little wider and up to about its roof,
-thinning out over a length and a half.
+A tyre on a wet road throws water up four ways (Weir et al., 1978, as
+taken up by the FHWA's splash and spray work): a bow wave ahead of it and a
+side wave beside it, which are coarse drops on short ballistic paths; and
+tread pickup and capillary adhesion, which come off the tread as fine
+droplets and are carried away in the air the vehicle drags. So what is seen
+has three parts, and each is drawn:
 
-- **Where it lies is the road's direction at the vehicle**, from the model
-  above, turned to the vehicle's own outline where that is long and close
-  to it: a car changing lanes trails its spray along its own line.
-- **Which end is the tail** comes from each vehicle's own picture. Red
-  lamps are tail lamps: it is seen from behind and driving away. White
-  lamps at night are headlamps: it is coming on. A vehicle showing neither
-  goes the way of the nearest one across the road that does, since the two
-  sides of a road run opposite ways. With no lamp showing on a road, its
-  direction is drawn.
-- **How fast** each vehicle goes is drawn: each gets its own share of
-  spray, and more than a third get none.
-- **Some vehicles never get one**: a vehicle lying across the road, which
-  is crossing, turning or parked; and any vehicle on a scrap of road under
-  a twentieth of the frame, whose direction is a guess. Both used to
-  shoot a jet of mist out sideways.
-- The plume of a vehicle coming towards the camera is hidden by the
-  vehicle.
+- **Tufts at the wheels.** Coarse drops flung off the back of each tyre.
+  Drag stops them quickly: thrown at 36 m/s and 30°, a 200 µm drop is down
+  within about a metre and a half and never above about 0.6 m (von Bernuth,
+  Volk and Bringmann, 2021). Two low dense knots at the rear wheels of a
+  vehicle seen from behind.
+- **The wake.** The fine spray, carried along behind the vehicle: some
+  lengths long and longer the faster it goes (lidar studies of spray
+  report a cloud some twenty metres long behind a vehicle at motorway
+  speed; a figure met in a summary and not checked at source), as wide as
+  the vehicle and widening, as
+  tall as the vehicle a length back, thinning all the way, and turbulent,
+  so no two stretches of it are alike. It scales with the vehicle: a
+  lorry's is several cars' worth, and as tall as the lorry.
+- **The mist over the road.** What one vehicle throws up the next drives
+  through, and over a busy carriageway there is a layer of it a couple of
+  metres deep. A sight line runs through more of it the further off it
+  meets the road, so the nearest cars are clear and the far traffic is gone
+  from the wheels up, its roofs last. This, more than any one wake, is what
+  a motorway in rain looks like, and it is what the first version, a puff
+  behind each car, did not have at all.
+
+Where each wake lies, and which way:
+
+- **Along the road's direction at the vehicle**, from the model above,
+  turned to the vehicle's own outline where that is long and close to it.
+- **Behind the vehicle, which its own picture has to say.** A rear shows
+  red lenses, a pair of them at the corners of its near end: it is driving
+  away, and its wake is towards the camera, over its own wheels. A vehicle
+  large enough to show lenses and showing no red is seen from the front,
+  as is one with white lamps burning at night: its wake is behind it, up
+  the road. A red car says nothing. A vehicle that says nothing goes the
+  way of the nearest one across the road that does.
+- **One speed to a road.** How much is thrown up goes with the square of
+  the speed, and traffic on one carriageway moves at about one speed, drawn
+  per road, with a little either side for each vehicle.
+- **Some vehicles throw up nothing**: one lying across the road, which is
+  crossing, turning or parked; and any on a scrap of road under a
+  twentieth of the frame, whose direction is a guess.
 
 Left, a soaked road; right, the same with `spray_range=(0.6, 0.6)`:
 
 ![wet road and spray](assets/road_surface/wet_road_and_spray.jpg)
 
-It is off by default because of what one frame cannot say: a queue of
-standing traffic gets plumes, and without tail lamps a plume may trail the
-wrong way. It is a soft grey cloud and no more: there is no ballistic
-sheet of water off the tyres and no side spray.
+It is off by default because of what one frame cannot say: how fast the
+traffic is moving, so a standing queue is given the spray of a moving one;
+and, where no lamp or lens shows, which way it is going. Lamps are not
+lit: real traffic in rain drives with its lights on, and their glow in the
+mist and their streaks down the road are most of what is still missing.
 
 ## Limits
 
@@ -191,11 +215,24 @@ sheet of water off the tyres and no side spray.
 
 ## References
 
+- Weir, D. H., Strange, J. F., Heffley, R. K. (1978). Reduction of Adverse
+  Aerodynamic Effects of Large Trucks. Federal Highway Administration. (The
+  four mechanisms of splash and spray. Known here only through the next
+  entry, which summarises them; not read at source.)
+- Federal Highway Administration (2015). Assessing Pavement Surface Splash
+  and Spray Impact on Road Users. TechBrief FHWA-HRT-15-062.
+  [fhwa.dot.gov](https://www.fhwa.dot.gov/publications/research/infrastructure/pavements/ltpp/15062/index.cfm)
+- von Bernuth, A., Volk, G., Bringmann, O. (2021). Augmenting Image Data
+  Sets With Water Spray Caused by Vehicles on Wet Roads. IEEE Intelligent
+  Transportation Systems Conference (ITSC).
+  [uni-tuebingen.de](https://www.embedded.uni-tuebingen.de/assets/publications/vonBernuth-Volk-Bringmann_Spray.pdf)
+  (droplet size, and how far a drop thrown from a wheel travels)
+- Linnhoff, C., et al. (2022). Simulating Road Spray Effects in Automotive
+  Lidar Sensor Models. [arXiv:2212.08558](https://arxiv.org/abs/2212.08558)
+  (spray as a plume behind the vehicle, in a sensor model)
 - Hartley, R., Zisserman, A. (2004). Multiple View Geometry in Computer
   Vision, 2nd ed. Cambridge University Press.
   [doi:10.1017/CBO9780511811685](https://doi.org/10.1017/CBO9780511811685)
-  (lines through a vanishing point; the cross-ratio that keeps position
-  across a road constant along a lane line)
 - Lekner, J., Dorf, M. C. (1988). Why some things are darker when wet.
   Applied Optics 27(7), 1278–1280.
   [doi:10.1364/AO.27.001278](https://doi.org/10.1364/AO.27.001278)
