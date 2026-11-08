@@ -177,7 +177,7 @@ the vehicles are; a provider given none behaves as it always did.
 | Depth | first argument | how far each pixel is | `DepthAnythingV2Estimator` (Apache-2.0) | 11–15 ms |
 | Scene labels | `labels=` | what each pixel is: road, sky, vegetation, vehicle, person … | `SegmentationLabelEstimator` (UperNet/ConvNeXt, MIT) | 33 ms |
 | Installation geometry | `geometry=` | the camera's field of view, tilt, roll and height | `GroundPlaneGeometryEstimator`, or an `InstallationGeometry` you give | 5 ms |
-| Vehicle views | `vehicles=` | each vehicle apart from its neighbours, which end of it is seen, where its lamps are | `OpenVocabularyVehicleEstimator` (OWLv2, Apache-2.0) | 130–200 ms |
+| Vehicle views | `vehicles=` | each vehicle apart from its neighbours, which end of it is seen, where its lamps are; and where the street lamps stand | `OpenVocabularyVehicleEstimator` (OWLv2, Apache-2.0) | 130–200 ms |
 
 ```python
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
@@ -202,6 +202,7 @@ geometry = InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_
 labels = depth_provider.get_labels(image)        # (H, W) uint8 of SceneClass
 camera = depth_provider.settle_camera(image)     # field of view, pitch, roll, height
 views = depth_provider.get_vehicles(image)       # one VehicleView per vehicle
+lamps = depth_provider.get_street_lamps(image)   # one row per street lamp's head
 ```
 
 **Labels and geometry.** With labels, a wet road stays off the vehicles on
@@ -228,11 +229,13 @@ left as the road was and right with both:
 
 ![a soaked road without and with its traffic's spray and lamps](docs/assets/road_surface/wet_road_and_spray.jpg)
 
-and what `NightIrMode` needs to light the traffic's lamps at night, which a
-daylight photograph has switched off. The same draw without the vehicle
-reader and with it:
+and what `NightIrMode` needs to light a scene as a road is lit at night:
+from its street lamps, each throwing a pool that falls off with distance,
+and its traffic's lamps and beams, in place of one even level of light. The
+same draw with the lamps turned off, which is a daylight frame in grey, and
+with them:
 
-![infrared night without and with the vehicle reader](docs/assets/road_surface/night_lamps.jpg)
+![infrared night lit evenly, and lit by its lamps](docs/assets/road_surface/night_lamps.jpg)
 
 All of these are evidence and not a verdict: an effect weighs what a reader
 says against what it reads from depth and colour itself.
@@ -335,13 +338,14 @@ and the physics behind it.
 | Transform | Start with |
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels), `traffic_speed_range_kmh` (how fast that traffic is going, which is most of how much it throws up), `vehicle_lamp_range` (off by default: the traffic's head and tail lamps lit, with their glow and their streaks down the road) |
-| `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
-| `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels), `traffic_speed_range_kmh` (how fast that traffic is going, which is most of how much it throws up), `vehicle_lamp_range` (off by default: the traffic's head and tail lamps lit, with their glow and their streaks down the road), `distant_rain_range` (how much of its grain the rain beyond the drawn streaks keeps; 0 is the even veil) |
+| `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `backscatter_grain_range` (the grain of the unresolved drops' glow; 0 is an even wall) |
+| `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range`, `backscatter_grain_range` (the speckle of the unresolved flakes' glow; 0 is an even wall) |
 | `NightFog` | `visibility_range_m` (read against the provider's depth range), `visibility_range_scene` (as a multiple of the scene's depth instead), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
-| `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes`, `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `wheel_track_range` (how far traffic has worn the settled snow into tracks, with scene labels) |
+| `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes`, `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `wheel_track_range` (how far traffic has worn the settled snow into tracks, with scene labels), `distant_snow_range` (how much of its speckle the snow beyond the drawn flakes keeps; 0 is the even veil) |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `GroundFog` | `visibility_range_m` (at the ground), `layer_height_range_m` (how shallow the layer is), `camera_height_range_m`, `camera_pitch_range_deg`, `patchiness_range`, `patch_scale_range_m`, `depth_scale` (it shows along the distance) |
+| `RandomRain`, dry road | 27.7 | 86.0 |
 | `LocalPlumes` | `plume_count_range`, `source_width_range_m`, `rise_range_m`, `opacity_range`, `lean_range` (wind), `brightness_range` |
 | `HeatShimmer` | `log10_cn2_range` (-14 mild, -12 hot ground), `horizontal_fov_range_deg` (a long lens), `aperture_diameter_range_mm`, `depth_scale` (it needs a path of a kilometre or so) |
 | `NightInsects` | `insect_count_range`, `distance_range_m`, `flight_speed_range_m_s` and `exposure_time_range` (streak length), `wing_beat_range_hz` (lobes), `dust_count_range`, `illuminator_gain_range` |
@@ -355,14 +359,16 @@ and the physics behind it.
 | `FrostOnGlass` | `coverage_range` (how far in from the rim), `thickness_range`, `feather_range` (ferns or an even layer), `crystal_scale_range`, `ambient_light_range`, `illuminator_glow_range` (infrared ring on) |
 | `SnowOnHousing` | `cap_depth_range`, `lumpiness_range`, `patch_count_range`, `brightness_range` (by day), `glow_range` (infrared ring on) |
 | `LensTamper` | `kinds` (spray, tape, cover), `coverage_range`, `opacity_range`, `shade_range` (by day), `glow_range` (infrared ring on) |
+| `NightSnow` | 12.9 | 45.7 |
 | `FoliageIntrusion` | `branch_count_range`, `distance_range_m`, `leaf_length_range_mm`, `reach_range`, `sway_speed_range_m_s`, `illuminator_gain_range` (0 by day; at night also set `leaf_light_range` to 0), `beam_falloff_range` |
 | `FocusShift` | `focus_distance_range_m` (where the lens is in fact focused; nearer is worse), `aperture_diameter_range_mm`, `depth_provider` (optional) |
-| `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range`, `vehicle_lamp_range` (the traffic's lamps, lit where the provider's vehicle reader found them; nothing without one) |
+| `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range`, `street_lamp_range` (how much light each street lamp throws under itself: the scene is lit in pools from the lamps the provider knows of, not evenly), `vehicle_lamp_range` (the traffic's lamps and beams, lit where the provider's vehicle reader found them; nothing without one) |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
 | `RollingShutter` | `pan_shift_range_px`, `wobble_amplitude_range_px`, `wobble_cycles_range` |
 | `SensorNoise` | `gain_range_db` (the knob: how few electrons make a full-scale picture), `full_well_range_e`, `read_noise_range_e` |
 | `ExposureTransient` | `exposure_error_stops_range`, `assumed_temperature_range_k`, `actual_temperature_range_k` |
 | `WdrToneMapping` | `compression_range`, `detail_gain_range`, `halo_strength_range` |
+| `NightRain` | 26.1 | 63.0 |
 | `TemporalDenoiseArtifacts` | `strength_range`, `iterations_range`, `edge_threshold_range`, `chroma_blur_range` |
 | `VideoCodecArtifacts` | `codec` (`"h264"` / `"h265"`), `crf_range`, `stale_block_probability` |
 | `TransmissionFaults` | `packet_loss_range`, `burst_length_range`, `scene_motion_range` (how far the picture moved since the frame the decoder falls back on: what makes loss visible), `missing_reference_probability`, `concealment_probability` (a decoder that does not conceal shows green), `slices_range`, `frames_since_keyframe_range` |
@@ -547,7 +553,6 @@ Orin NX, and what exact mode costs.
 | `NightInsects` | 4.9 | 26.7 |
 | `HousingOccluders` | 6.1 | 16.7 |
 | `SensorNoise` | 6.1 | 27.5 |
-| `NightSnow` | 6.3 | 34.8 |
 | `DirtSoil` | 6.4 | 22.9 |
 | `IrCutFilterFault` | 6.5 | 33.0 |
 | `SunFlare` | 6.7 | 21.0 |
@@ -559,7 +564,6 @@ Orin NX, and what exact mode costs.
 | `TemporalDenoiseArtifacts` | 14.8 | 46.0 |
 | `SnowOnHousing` | 14.9 | 52.3 |
 | `AnalogVideoArtifacts` | 20.6 | 93.7 |
-| `NightRain` | 20.7 | 53.2 |
 | `WaterDroplets` | 22.7 | 70.1 |
 | `TransmissionFaults`, with PyAV | 23.2 | 79.3 |
 | `WdrToneMapping` | 26.0 | 39.6 |
@@ -578,20 +582,22 @@ once one provider holds the frame's depth.
 
 | Transform | 512 px | 1024 px |
 | --- | ---: | ---: |
-| `NightIrMode` | 9.4 | 41.5 |
+| `NightIrMode` | 10.1 | 42.8 |
 | `LocalPlumes` | 14.1 | 74.3 |
 | `HeatShimmer`, over a long view | 14.8 | 94.0 |
 | `RandomFog` | 20.6 | 91.7 |
-| `RandomRain`, dry road | 20.6 | 70.9 |
 | `CastShadows` | 20.8 | 46.9 |
 | `NightFog` | 24.2 | 90.5 |
 | `GroundFog` | 24.9 | 114.6 |
-| `RandomSnow` | 49.8 | 143.1 |
-| `RandomRain`, wet road | 73.1 | 164.6 |
+| `RandomSnow` | 59.9 | 161.7 |
+| `RandomRain`, wet road | 87.0 | 197.0 |
 
 `RandomRain` draws the wet road in 40% of frames by default
-(`wetness_probability`), so it costs about 42 ms at 512 px and 109 ms at
-1024 px on average.
+(`wetness_probability`), so it costs about 51 ms at 512 px and 130 ms at
+1024 px on average. `NightIrMode` is timed here on a provider with depth
+alone; lit from street lamps and vehicles on a provider that knows of them
+it costs more, by the amount given in
+[`docs/road_surface.md`](docs/road_surface.md).
 
 The depth map itself is estimated once per new frame on the GPU: 12 and
 16 ms at 512 and 1024 px (an RTX PRO 1000 Blackwell Laptop GPU, torch 2.11

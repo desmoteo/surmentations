@@ -1,6 +1,6 @@
 """Draw the figures of ``docs/road_surface.md``.
 
-Five pictures, made from the photographs the galleries use, with a
+Six pictures, made from the photographs the galleries use, with a
 provider that carries scene labels and an estimated geometry:
 
 * the roads as the library reads them: painted lines, lane lines and the
@@ -8,8 +8,9 @@ provider that carries scene labels and an estimated geometry:
 * settled snow without wheel tracks and with them;
 * each scene's vehicles as a network reads them: which end, and its lamps;
 * a soaked road as it was, and with its traffic's spray and lamps;
-* infrared night without a vehicle reader and with one, which lights the
-  traffic's lamps.
+* infrared night lit evenly, as a daylight frame is, and lit by its street
+  lamps and its traffic's lamps;
+* rain and snow with an even veil in the distance and with its grain.
 
 Run from the repository root, on a machine with a CUDA GPU::
 
@@ -204,24 +205,61 @@ def compare(
 
 
 def night_lamps(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
-    """Two scenes as an infrared night camera sees them: without a vehicle reader, and with one.
+    """Three scenes as an infrared night camera sees them: lit evenly, and lit by their lamps.
 
-    The same draw both times. A daylight photograph has its traffic's lamps
-    off; the reader says which end of each vehicle is seen and where its
-    lamps are, and they are lit.
+    The same draw both times. On the left with the lamps turned off, which
+    is a daylight frame in grey: as bright far off as near, with the sun's
+    shade still on the road. On the right the street lamps the reader
+    found throw their pools and burn, the traffic's lamps are lit where it
+    found them, and each lit vehicle throws its beam.
     """
     tiles = []
-    for name in ("urban_road_day", "underpass_from_above"):
-        for reader in (None, vehicles):
-            provider = _provider(name, depth, labels, reader)
-            night = NightIrMode(depth_provider=provider, p=1.0)
+    for name in ("urban_road_day", "reference", "urban_street_wet"):
+        provider = _provider(name, depth, labels, vehicles)
+        for lamps in ({"street_lamp_range": (0.0, 0.0), "vehicle_lamp_range": (0.0, 0.0)}, {}):
+            night = NightIrMode(depth_provider=provider, p=1.0, **lamps)
             night.set_random_seed(5)
             tiles.append(night(image=images[name])["image"])
     _save("night_lamps.jpg", tiles, 2)
 
 
+def far_field(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
+    """Rain and snow over two scenes, cut to their middle distance and enlarged.
+
+    The same draw twice: on the left with the far veil even
+    (``distant_rain_range`` and ``distant_snow_range`` at 0), which is fog
+    with a few streaks over it; on the right with the grain of the drops
+    and flakes too far off to draw one by one, each distance's share of it
+    in front of only what lies beyond.
+    """
+    tiles = []
+    cuts = {"underpass_from_above": (150, 60), "urban_street_wet": (380, 60)}
+    for name, (left, top) in cuts.items():
+        for transform, knob, level in (
+            (RandomRain, "distant_rain_range", 4),
+            (RandomSnow, "distant_snow_range", 3),
+        ):
+            for amount in (0.0, 1.0):
+                settings = {
+                    **SEVERITY[level][transform.__name__],
+                    "camera_pitch_range_deg": _pitch(name),
+                    knob: (amount, amount),
+                }
+                built = transform(depth_provider=providers[name], p=1.0, **settings)
+                built.set_random_seed(3)
+                out = built(image=images[name])["image"]
+                tiles.append(
+                    cv2.resize(
+                        out[top : top + 210, left : left + 320],
+                        (640, 420),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                )
+    _save("far_field.jpg", tiles, 2)
+
+
 def main() -> None:
-    """Make the five figures."""
+    """Make the six figures."""
     depth, labels = DepthAnythingV2Estimator(), SegmentationLabelEstimator()
     images = {name: _photograph(name) for name in SHOWN}
     vehicles = OpenVocabularyVehicleEstimator()
@@ -231,6 +269,7 @@ def main() -> None:
     compare(images, providers, "snow")
     compare(images, providers, "rain")
     night_lamps(images, depth, labels, vehicles)
+    far_field(images, providers)
     print(f"Wrote the figures to {OUT_DIR}")
 
 
