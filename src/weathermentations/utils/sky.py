@@ -119,3 +119,73 @@ def lift_sky(depth_m: np.ndarray, sky: np.ndarray) -> np.ndarray:
     """
     far = float(depth_m.max())
     return (depth_m * (1.0 - sky) + far * sky).astype(depth_m.dtype)
+
+
+# How far the sky mask is allowed to grow to meet the depth map's own edge,
+# as a fraction of the diagonal, and how close in relative depth a pixel has
+# to be to the sky's to be let in.
+_SKY_EDGE_REACH = 0.04
+_SKY_DEPTH_TOLERANCE = 0.04
+
+
+# How unlike the sky's own colour, in linear RGB, a pixel may be and still be
+# let into the mask when it is redrawn.
+_SKY_COLOUR_TOLERANCE = 0.06
+
+# How many times further from the sky's depth a pixel already in the mask
+# may be than one being added to it.
+_SKY_KEPT_TOLERANCE = 4.0
+
+
+def sky_to_depth_edge(
+    sky: np.ndarray, relative_depth: np.ndarray, linear_rgb: np.ndarray | None = None
+) -> np.ndarray:
+    """Redraw the sky mask's outline where the depth map puts it.
+
+    The mask is made at low resolution and its edge wanders a few percent of
+    the frame either side of the real skyline. By day that is mostly
+    hidden, a veil being about as bright as the sky. At night it is not:
+    fog and snow veils are brighter than the sky, so every patch of sky the
+    mask misses next to a tree stays a dark hole, and every patch of tree it
+    takes in is veiled as if it were miles away. The depth map has the
+    skyline to the pixel; what it lacks is which side is sky, which the mask
+    knows.
+
+    Depth alone is not enough to let a pixel in. A tower a mile off is at
+    the sky's depth as far as the network can tell, and growing the mask
+    over its edge drew a pale outline round the whole skyline. With
+    ``linear_rgb`` given, what is added must also be the sky's colour.
+    """
+    core = sky > 0.9
+    if not core.any():
+        return sky
+    level = float(np.median(relative_depth[core]))
+    near_level = np.clip(
+        2.0 - np.abs(relative_depth - level) / _SKY_DEPTH_TOLERANCE, 0.0, 1.0
+    )
+    # What the mask already holds is kept unless the depth map plainly says
+    # otherwise. Depth is blurred across every skyline, and holding the
+    # mask's own pixels to the tolerance used for new ones cut a band of sky
+    # out along it: left as photographed while the rest was relit, a pale
+    # outline round every building.
+    plainly_not = np.clip(
+        2.0 - np.abs(relative_depth - level) / (_SKY_KEPT_TOLERANCE * _SKY_DEPTH_TOLERANCE),
+        0.0,
+        1.0,
+    )
+    kept = sky * plainly_not
+    reach = max(3, round(_SKY_EDGE_REACH * float(np.hypot(*sky.shape))) | 1)
+    grown = cv2.dilate(sky, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach)))
+    if linear_rgb is not None:
+        # The sky's colour near each pixel, since a sky is not one colour.
+        sigma = float(reach)
+        weight = cv2.GaussianBlur(sky, (0, 0), sigmaX=sigma)
+        nearby = cv2.GaussianBlur(linear_rgb * sky[..., None], (0, 0), sigmaX=sigma)
+        nearby = nearby / np.maximum(weight, 1e-4)[..., None]
+        unlike = np.abs(linear_rgb - nearby).max(axis=2)
+        alike = np.clip(2.0 - unlike / _SKY_COLOUR_TOLERANCE, 0.0, 1.0) * (weight > 0.02)
+        # With colour to go by, depth only has to not contradict it: the
+        # last pixels of sky before a roofline are sky-coloured and, in a
+        # depth map blurred across that roofline, already half building.
+        return np.maximum(kept, grown * alike * plainly_not).astype(np.float32)
+    return np.maximum(kept, grown * near_level).astype(np.float32)

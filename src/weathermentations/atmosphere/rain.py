@@ -112,7 +112,7 @@ from weathermentations.utils.precipitation import (
     sample_resolvable_particles,
     width_cut_for_budget,
 )
-from weathermentations.utils.sky import lift_sky, sky_weight
+from weathermentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
 from weathermentations.utils.sources import light_sources, source_mask
 
 # Width of the sensor the field of view is taken across, for turning an
@@ -563,7 +563,9 @@ class RandomRain(WeatherTransform):
         relative_depth = self.depth_provider.get_depth(scene)
         depth_pm = self.depth_provider.to_metric(relative_depth)
         linear_scene, _scale, _is_integer = to_linear_unit(first_frame(scene))
-        sky = sky_weight(linear_scene, relative_depth)
+        sky = sky_to_depth_edge(
+            sky_weight(linear_scene, relative_depth), relative_depth, linear_scene
+        )
 
         # Every physical quantity is drawn per call. A scalar here would make
         # a whole dataset share one rain rate, one camera geometry and one
