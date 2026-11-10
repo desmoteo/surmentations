@@ -41,7 +41,7 @@ Optional runtime dependencies:
 | Need | Required for |
 | --- | --- |
 | CUDA GPU | the depth-conditioned effects (fog, rain, snow, night IR, cast shadows) |
-| `ffmpeg` on PATH | `VideoCodecArtifacts` only |
+| `ffmpeg` on PATH | `VideoCodecArtifacts` and `TransmissionFaults` |
 
 Everything else runs on CPU with no extra setup.
 
@@ -99,11 +99,11 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | Transform | Models | Needs depth |
 | --- | --- | --- |
 | `RandomFog` | Koschmieder extinction with per-channel scattering, the sky found and put at the far plane, and a veil the colour of the horizon sky, not of the brightest pixels | yes |
-| `RandomRain` | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground that darkens and mirrors the scene about the horizon with Fresnel-weighted reflectance | yes |
+| `RandomRain` | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground: dark surfaces darkened far more than pale ones, each object's reflection smeared down the road from its foot, Fresnel-weighted, with puddles that mirror the sky cleanly. At night, streaks lit by the lamps in the frame and a road that reflects them | yes |
 | `RandomSnow` | Gunn-Marshall sizes corrected for snow density, Locatelli-Hobbs fall speeds, and accumulation on upward-facing surfaces | yes |
 | `NightRain` | Rain lit by the camera's **own infrared illuminator**, brightness falling as 1/z² from the lamp. The one case where rain reads as streaks rather than haze — see [`docs/rain_visibility.md`](docs/rain_visibility.md). Needs no depth, so it runs on CPU | no |
 | `NightSnow` | Snow lit by the camera's own illuminator: each flake's brightness is set by *its* distance from the lamp, not by the scene behind it. `RandomSnow` before `NightIrMode` loses its flakes over anything distant; this is what puts them back. Needs no depth | no |
-| `NightFog` | Fog lit by the lamps in the frame: everything dims with distance and the light taken from each lamp returns as a glow round it, so dark areas stay dark. With the illuminator on, an even wall of backscatter across the beam | yes |
+| `NightFog` | Fog lit by the lamps in the frame: everything fades with distance into a veil as bright and as coloured as the light around it, brightest near the lamps, and each lamp gets a halo. With the illuminator on, an even wall of backscatter across the beam | yes |
 | `CastShadows` | Shadows of people, vehicles and foliage on upward-facing surfaces, all thrown by one sun — a classic false-positive source. A loss of the direct beam, so texture survives and the shadow is bluer | yes |
 
 ### Lens and housing
@@ -128,6 +128,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `WdrToneMapping` | Local tone mapping, with the black halos a cheap edge-preserving filter leaves | no |
 | `TemporalDenoiseArtifacts` | 3D-NR's "watercolour" flattening and chroma blotching | no |
 | `VideoCodecArtifacts` | H.264/H.265 **encoded for real via ffmpeg**, so deblocking, 4:2:0 chroma and rate control come out correct rather than approximated. Optionally simulates stale macroblocks from a lost P-frame | no |
+| `TransmissionFaults` | Packet loss, **decoded for real**: a short H.264 clip is encoded, packets are removed from the bitstream in bursts, and ffmpeg decodes what is left. Stale, smeared, green and garbage bands that start mid-row and stop at a slice boundary | no |
 
 ---
 
@@ -163,7 +164,7 @@ and the physics behind it.
 | Transform | Start with |
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
-| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `min_streak_width_px` |
+| `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were) |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
 | `NightFog` | `visibility_range_m` (read against the provider's depth range), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
@@ -182,6 +183,7 @@ and the physics behind it.
 | `WdrToneMapping` | `compression_range`, `detail_gain_range`, `halo_strength_range` |
 | `TemporalDenoiseArtifacts` | `strength_range`, `iterations_range`, `edge_threshold_range`, `chroma_blur_range` |
 | `VideoCodecArtifacts` | `codec` (`"h264"` / `"h265"`), `crf_range`, `stale_block_probability` |
+| `TransmissionFaults` | `packet_loss_range`, `burst_length_range`, `scene_motion_range` (how far the picture moved since the frame the decoder falls back on: what makes loss visible), `missing_reference_probability`, `concealment_probability` (a decoder that does not conceal shows green), `slices_range`, `frames_since_keyframe_range` |
 
 Two of these are worth singling out because their effect is not what the name
 suggests. `AcFlicker`'s `readout_time_range_s` matters more than
@@ -215,6 +217,13 @@ defaults are right for exploring one transform and wrong for stacking three.
 Measured at 512 px: `surveillance` 124 ms median, `surveillance_lite` 78 ms
 and no GPU. A typical frame keeps 75-81% of its high-frequency detail.
 
+Two arguments are worth knowing beside `severity`. `ground_severity` (0-5)
+fixes how wet the road is under rain and how much snow has settled; left
+unset, each frame draws it over the whole range, independently of how hard
+it is raining or snowing. `faults` is the probability of packet-loss damage
+(`TransmissionFaults`), 0.03 by default and 0 when `codec=0.0`, so that
+setting still runs without ffmpeg.
+
 `surveillance_lite` renders no night at all — nothing in it can relight a
 daylit frame, and tinting one does not approximate night. Its `night`
 fraction only raises the mains-flicker and denoiser artefacts. Use
@@ -240,6 +249,25 @@ from weathermentations.lens import WaterDroplets
 
 transform = WaterDroplets(p=1.0, **SEVERITY[3]["WaterDroplets"])
 ```
+
+The ground under rain and snow has a ladder of its own, `GROUND_SEVERITY`,
+from 0 (dry road, bare ground) to 5 (soaked, buried). How wet a road is and
+how much snow lies on it follow how long the weather has lasted, not how
+hard it is coming down, so the two are combined freely:
+
+```python
+from weathermentations.presets import GROUND_SEVERITY, SEVERITY
+
+# A blizzard that has only just started: heavy fall, bare ground.
+RandomSnow(depth_provider=provider, **SEVERITY[5]["RandomSnow"],
+           **GROUND_SEVERITY[0]["RandomSnow"])
+# The morning after: a few flakes over deep snow.
+RandomSnow(depth_provider=provider, **SEVERITY[1]["RandomSnow"],
+           **GROUND_SEVERITY[5]["RandomSnow"])
+```
+
+Without a ground entry the transform draws the ground's state itself, over
+the whole range. The pipelines do the same unless given `ground_severity`.
 
 ### Composition order
 
@@ -301,6 +329,7 @@ python scripts/benchmark.py --no-depth             # CPU-only subset
 | `TemporalDenoiseArtifacts` | 38.6 | 237.4 |
 | `WdrToneMapping` | 102.9 | 146.2 |
 | `WaterDroplets` | 112.7 | 194.7 |
+| `TransmissionFaults` | 151.4 | 190.0 |
 | `VideoCodecArtifacts` | 170.4 | 251.9 |
 
 ### Depth-conditioned transforms — total ms per image
@@ -349,8 +378,8 @@ A `DataLoader` worker must keep ahead of the GPU. Rough guidance:
 - **Moderate** (25-115 ms): `DirtSoil`, `TemporalDenoiseArtifacts`,
   `WaterDroplets`, `WdrToneMapping`, and any *warm* depth-conditioned
   transform.
-- **Expensive, keep `p` low**: `VideoCodecArtifacts` (two ffmpeg subprocesses
-  per call), and the first depth-conditioned transform in a pipeline.
+- **Expensive, keep `p` low**: `VideoCodecArtifacts` and `TransmissionFaults`
+  (two ffmpeg subprocesses per call each), and the first depth-conditioned transform in a pipeline.
 
 Cost is paid only when `p` fires, so a pipeline of ten effects at `p=0.2`
 costs about two of them per image, not ten. The depth estimate is the
@@ -493,6 +522,15 @@ full sweep.
 | Night snow | Wet glass under the infrared ring | Night fog | Glare from lamps |
 | --- | --- | --- | --- |
 | ![night snow](docs/examples/night_snow_3.png) | ![night droplets](docs/examples/night_droplets_3.png) | ![night fog](docs/examples/night_fog_3.png) | ![source glare](docs/examples/source_glare_3.png) |
+
+| Packet loss | Soaked road, light rain | Deep snow, light fall |
+| --- | --- | --- |
+| ![transmission faults](docs/examples/transmission_faults_3.png) | ![wet ground](docs/examples/wet_ground_4.png) | ![snow cover](docs/examples/snow_cover_4.png) |
+
+The `rain` and `snow` rows raise the ground with the weather, level for
+level, because a row has one axis. `wet_ground` and `snow_cover` hold the
+weather at level 1 and climb `GROUND_SEVERITY` alone: the two are separate
+ladders, and `snow_cover_4` is a light fall over deep snow.
 
 `night_rain` and `night_snow` are rendered over an IR night frame rather than
 the daylit base scene, because their particles are lit by the camera: on a

@@ -1,6 +1,6 @@
 # Proposed augmentations
 
-Effects the library does not have and should. Entries 1 to 4 have since
+Effects the library does not have and should. Entries 1 to 5 have since
 been built and are kept here as the record of what was intended, each with a
 note on what was done differently; the rest are not implemented.
 Each entry says what the effect is, why it is missing, how it would be
@@ -18,7 +18,7 @@ not proposed again.
 | 2 | [Overcast lighting](#2-overcast-lighting-for-rain-and-snow) — built | atmosphere | no | no | small |
 | 3 | [`SourceGlare`](#3-sourceglare) — built | optics | no | no | medium |
 | 4 | [`NightFog`](#4-nightfog) — built | atmosphere | yes | no | medium |
-| 5 | [`TransmissionFaults`](#5-transmissionfaults) | transmission | no | no | medium |
+| 5 | [`TransmissionFaults`](#5-transmissionfaults) — built | transmission | no | no | medium |
 | 6 | [`OnScreenOverlay`](#6-onscreenoverlay) | after transmission | no | no | small |
 | 7 | [`FocusShift` and `CameraVibration`](#7-focusshift-and-cameravibration) | optics | no | vibration does | medium |
 | 8 | [`HeatShimmer`](#8-heatshimmer) | atmosphere | yes | yes | medium |
@@ -210,6 +210,14 @@ runs it per source.
 > scene twice when the illuminator is on, which is the physics of a scene lit
 > by the camera. The backscatter term is its own, not shared with
 > `NightRain`; the two are three lines each. The open question stands.
+>
+> **Revised.** The model below — attenuation plus a glow, "neither of which
+> is a uniform veil" — rendered as a dimmed frame with a blurred copy of
+> itself on top, and read as blur. Fog at night does have a veil; it is
+> uneven, as bright as the light around it. The transform now fades the
+> scene towards a fog radiance estimated from the surfaces nearby, and
+> keeps the glow for the lamps alone. The "mean radiance does not rise"
+> check under *Shows it works* was wrong with it and is gone.
 
 **What.** Fog at night: a glow round each lamp, and the wall of backscatter
 from the camera's own illuminator.
@@ -246,6 +254,19 @@ frame with the illuminator off stays black, the test `WaterDroplets` has.
 **Open.** Lamps outside the frame light fog inside it and cannot be known.
 
 ## 5. `TransmissionFaults`
+
+> **Built**, as `camera/transmission.py`, by the first route: a real H.264
+> bitstream, packets removed, decoded by ffmpeg. Departures from the entry
+> below. The single-image question is settled by sliding the image into
+> place over a short clip (`scene_motion_range`), which gives concealment
+> something wrong to copy; `images=` clips are still treated frame by
+> frame, each as its own still, so a real previous frame is not used. The
+> parameters gained `missing_reference_probability`,
+> `concealment_probability` and `gap_passing_probability`, because whether
+> a hole is smeared, left green or filled with garbage is decided by the
+> receiver and not by the loss. In the pipelines `faults` defaults to 0.03
+> and to 0 when `codec=0`. Not done: H.265, and moving objects in the
+> reference.
 
 **What.** What a lost packet does to a decoded stream: blocks that freeze,
 smear or go grey-green, and frames torn part-way down.
