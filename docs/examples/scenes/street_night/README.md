@@ -45,6 +45,10 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![sensor_noise](effects/sensor_noise.jpg) | ![night_fog](effects/night_fog.jpg) | ![source_glare](effects/source_glare.jpg) |
 
+| transmission_faults | wet_ground | snow_cover |
+| --- | --- | --- |
+| ![transmission_faults](effects/transmission_faults.jpg) | ![wet_ground](effects/wet_ground.jpg) | ![snow_cover](effects/snow_cover.jpg) |
+
 Not rendered: `sun_flare`, `cast_shadows` — it needs the sun, and the scene is at night.
 
 Not rendered: `fog` — it is the daylight model, an even veil lit by the sky. `night_fog` is fog lit by the lamps.

@@ -45,9 +45,13 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![video_codec](effects/video_codec.jpg) | ![night_snow](effects/night_snow.jpg) | ![night_droplets](effects/night_droplets.jpg) |
 
-| sensor_noise |  |  |
+| sensor_noise | transmission_faults | wet_ground |
 | --- | --- | --- |
-| ![sensor_noise](effects/sensor_noise.jpg) |  |  |
+| ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![wet_ground](effects/wet_ground.jpg) |
+
+| snow_cover |  |  |
+| --- | --- | --- |
+| ![snow_cover](effects/snow_cover.jpg) |  |  |
 
 Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
 
