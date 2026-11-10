@@ -43,6 +43,8 @@ One representative draw each: the median of seven by how much the frame changed.
 
 Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow` — the scene is under a roof.
 
+Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
+
 ## `surveillance_lite` pipeline
 
 4 consecutive draws. Each is a different combination of effects.

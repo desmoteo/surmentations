@@ -21,13 +21,13 @@ Source: [Great Holm Milton Keynes at night.jpg](https://commons.wikimedia.org/wi
 
 One representative draw each: the median of seven by how much the frame changed.
 
-| water_droplets | dirt_soil | fog |
+| water_droplets | dirt_soil | rain |
 | --- | --- | --- |
-| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![fog](effects/fog.jpg) |
+| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![rain](effects/rain.jpg) |
 
-| rain | housing_occluders | night_ir |
+| snow | housing_occluders | night_ir |
 | --- | --- | --- |
-| ![rain](effects/rain.jpg) | ![housing_occluders](effects/housing_occluders.jpg) | ![night_ir](effects/night_ir.jpg) |
+| ![snow](effects/snow.jpg) | ![housing_occluders](effects/housing_occluders.jpg) | ![night_ir](effects/night_ir.jpg) |
 
 | night_rain | ac_flicker | rolling_shutter |
 | --- | --- | --- |
@@ -41,13 +41,13 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![video_codec](effects/video_codec.jpg) | ![night_snow](effects/night_snow.jpg) | ![night_droplets](effects/night_droplets.jpg) |
 
-| sensor_noise |  |  |
+| sensor_noise | night_fog | source_glare |
 | --- | --- | --- |
-| ![sensor_noise](effects/sensor_noise.jpg) |  |  |
+| ![sensor_noise](effects/sensor_noise.jpg) | ![night_fog](effects/night_fog.jpg) | ![source_glare](effects/source_glare.jpg) |
 
 Not rendered: `sun_flare`, `cast_shadows` — it needs the sun, and the scene is at night.
 
-Not rendered: `snow` — its settled snow is lit as by day, and comes out as a white floor under a black sky. `NightSnow` is the night model.
+Not rendered: `fog` — it is the daylight model, an even veil lit by the sky. `night_fog` is fog lit by the lamps.
 
 ## `surveillance_lite` pipeline
 

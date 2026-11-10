@@ -49,6 +49,8 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![sensor_noise](effects/sensor_noise.jpg) |  |  |
 
+Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
+
 ## `surveillance` pipeline
 
 4 consecutive draws. Each is a different combination of effects.
