@@ -21,29 +21,33 @@ Source: [Great Holm Milton Keynes at night.jpg](https://commons.wikimedia.org/wi
 
 One representative draw each: the median of seven by how much the frame changed.
 
-| water_droplets | dirt_soil | housing_occluders |
+| water_droplets | dirt_soil | fog |
 | --- | --- | --- |
-| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![housing_occluders](effects/housing_occluders.jpg) |
+| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![fog](effects/fog.jpg) |
 
-| night_ir | night_rain | ac_flicker |
+| rain | housing_occluders | night_ir |
 | --- | --- | --- |
-| ![night_ir](effects/night_ir.jpg) | ![night_rain](effects/night_rain.jpg) | ![ac_flicker](effects/ac_flicker.jpg) |
+| ![rain](effects/rain.jpg) | ![housing_occluders](effects/housing_occluders.jpg) | ![night_ir](effects/night_ir.jpg) |
 
-| rolling_shutter | exposure_transient | wdr_tone_mapping |
+| night_rain | ac_flicker | rolling_shutter |
 | --- | --- | --- |
-| ![rolling_shutter](effects/rolling_shutter.jpg) | ![exposure_transient](effects/exposure_transient.jpg) | ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) |
+| ![night_rain](effects/night_rain.jpg) | ![ac_flicker](effects/ac_flicker.jpg) | ![rolling_shutter](effects/rolling_shutter.jpg) |
 
-| denoise_artifacts | video_codec | night_snow |
+| exposure_transient | wdr_tone_mapping | denoise_artifacts |
 | --- | --- | --- |
-| ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) | ![night_snow](effects/night_snow.jpg) |
+| ![exposure_transient](effects/exposure_transient.jpg) | ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) | ![denoise_artifacts](effects/denoise_artifacts.jpg) |
 
-| night_droplets |  |  |
+| video_codec | night_snow | night_droplets |
 | --- | --- | --- |
-| ![night_droplets](effects/night_droplets.jpg) |  |  |
+| ![video_codec](effects/video_codec.jpg) | ![night_snow](effects/night_snow.jpg) | ![night_droplets](effects/night_droplets.jpg) |
+
+| sensor_noise |  |  |
+| --- | --- | --- |
+| ![sensor_noise](effects/sensor_noise.jpg) |  |  |
 
 Not rendered: `sun_flare`, `cast_shadows` — it needs the sun, and the scene is at night.
 
-Not rendered: `fog`, `rain`, `snow` — it is a daylight model: its veil takes its colour from the brightest pixels in the frame, which at night are the street lamps, and the whole frame turns their colour. `NightRain` and `NightSnow` are the night models.
+Not rendered: `snow` — its settled snow is lit as by day, and comes out as a white floor under a black sky. `NightSnow` is the night model.
 
 ## `surveillance_lite` pipeline
 

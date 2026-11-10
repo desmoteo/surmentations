@@ -37,6 +37,10 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) | ![night_droplets](effects/night_droplets.jpg) |
 
+| sensor_noise |  |  |
+| --- | --- | --- |
+| ![sensor_noise](effects/sensor_noise.jpg) |  |  |
+
 Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow` — the scene is under a roof.
 
 ## `surveillance_lite` pipeline

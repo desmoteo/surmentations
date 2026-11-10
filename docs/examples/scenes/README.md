@@ -31,15 +31,19 @@ are derived from them and carry the same licences, not the library's.
 
 They are unretouched output, and some of it is wrong in ways worth knowing:
 
-- **Wet ground is any level surface.** Rain puts a mirror on the fields in
-  `wooded_hills`, not only on paving.
-- **Reflections can read from above the frame.** Where the mirrored point is
-  outside the picture the top row is repeated, which shows as vertical smears
-  on the road in `underpass_from_above` and `crosswalk_day`.
+- **Wet ground is level ground that is not green.** Vegetation is left dry;
+  bare soil, gravel and roofs seen from above still get a film of water.
+- **A reflection from outside the frame is a guess.** Where the mirrored point
+  is above the picture the road reflects an estimate of the sky, which is
+  right under open sky and wrong under the flyover in `underpass_from_above`.
+- **Overcast light cannot remove shadows.** Rain and snow grey the sky and
+  lower contrast, but the hard shadows of a sunny photograph stay.
+- **Fog and rain at night stay dark and do not glow.** On `street_night` they
+  dim the lamps without lighting the air round them.
 - **Depth is relative and stretched to the range it is given.** The facades in
   `urban_street_wet` are placed further away than they are, so its fog is
   heavier than the stated visibility would make it.
-- **Daylight weather is not rendered on `street_night`**, because it would be
+- **Daylight snow is not rendered on `street_night`**, because it would be
   wrong: see that page.
 - **Flakes close to an infrared lamp are very large.** `night_snow` draws the
   nearest ones as long white bars.
