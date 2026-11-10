@@ -16,7 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from weathermentations.atmosphere import NightRain, NightSnow, RandomFog, RandomRain, RandomSnow
+from weathermentations.atmosphere import (
+    NightFog,
+    NightRain,
+    NightSnow,
+    RandomFog,
+    RandomRain,
+    RandomSnow,
+)
 from weathermentations.camera import (
     AcFlicker,
     ExposureTransient,
@@ -27,7 +34,13 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.lens import (
+    DirtSoil,
+    HousingOccluders,
+    SourceGlare,
+    SunFlare,
+    WaterDroplets,
+)
 from weathermentations.scene import CastShadows
 
 README = Path(__file__).resolve().parents[2] / "README.md"
@@ -35,8 +48,8 @@ README = Path(__file__).resolve().parents[2] / "README.md"
 TRANSFORMS = {
     cls.__name__: cls
     for cls in (
-        RandomFog, RandomRain, RandomSnow, NightRain, NightSnow,
-        WaterDroplets, DirtSoil, SunFlare, HousingOccluders,
+        RandomFog, RandomRain, RandomSnow, NightRain, NightSnow, NightFog,
+        WaterDroplets, DirtSoil, SunFlare, SourceGlare, HousingOccluders,
         CastShadows, NightIrMode, AcFlicker, RollingShutter, SensorNoise,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,
         VideoCodecArtifacts,

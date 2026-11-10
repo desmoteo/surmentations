@@ -35,7 +35,12 @@ VISIBLE_LEVELS = 1.0
 SEEDS = 8
 
 # Needs an ffmpeg binary and two subprocess round-trips per render.
-SKIP = {"video_codec"}
+SKIP = {
+    "video_codec",
+    # Acts only on the lights in a frame. The gallery shows it over a night
+    # street; over this daylit photograph it rightly does nothing.
+    "source_glare",
+}
 
 REFERENCE_IMAGE = Path(__file__).resolve().parents[2] / "docs" / "examples" / "reference.webp"
 

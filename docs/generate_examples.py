@@ -34,6 +34,7 @@ import numpy as np
 from tqdm import tqdm
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
@@ -51,7 +52,7 @@ from weathermentations.camera import (
 from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthAnythingV2Estimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.lens import DirtSoil, HousingOccluders, SourceGlare, SunFlare, WaterDroplets
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
 
@@ -83,6 +84,8 @@ EFFECTS: dict[str, str] = {
     "night_snow": "NightSnow",
     "night_droplets": "WaterDroplets",
     "sensor_noise": "SensorNoise",
+    "night_fog": "NightFog",
+    "source_glare": "SourceGlare",
 }
 
 # Needs the ffmpeg binary; skipped with a warning rather than crashing the run.
@@ -337,6 +340,10 @@ def _build(
         return RollingShutter(**kwargs)
     if name == "sensor_noise":
         return SensorNoise(**kwargs)
+    if name == "night_fog":
+        return NightFog(depth_provider=provider, **kwargs)
+    if name == "source_glare":
+        return SourceGlare(**kwargs)
     if name == "exposure_transient":
         return ExposureTransient(**kwargs)
     if name == "wdr_tone_mapping":
@@ -353,6 +360,24 @@ def _build(
 
 # How many draws to take per gallery cell before choosing one to show.
 _GALLERY_DRAWS = 7
+
+
+# Effects that are about the lights in a night scene, which the daylit
+# reference photograph does not have and an infrared conversion of it does
+# not give it. They are shown over a real night street from sample_scenes/
+# (CC0; see SOURCES.md there).
+LAMP_SCENE = Path(__file__).resolve().parents[1] / "sample_scenes" / "street_night.jpg"
+NEEDS_LAMPS = ("night_fog", "source_glare")
+
+
+def _lamp_scene(max_dim: int = 640) -> np.ndarray:
+    image = cv2.imread(str(LAMP_SCENE))
+    if image is None:
+        raise FileNotFoundError(f"Could not read {LAMP_SCENE}")
+    height, width = image.shape[:2]
+    scale = max_dim / max(height, width)
+    image = cv2.resize(image, (int(width * scale), int(height * scale)))
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
 def _night_base(
@@ -423,6 +448,8 @@ def main() -> None:
             # sunny road would illustrate the opposite of what they do.
             lamp_lit = name in ("night_rain", "night_snow", "night_droplets")
             base = _night_base(scene, depth_provider, level) if lamp_lit else scene
+            if name in NEEDS_LAMPS:
+                base = _lamp_scene()
             out = _render_representative(transform, base, rng)
             cv2.imwrite(
                 str(OUT_DIR / f"{name}_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)

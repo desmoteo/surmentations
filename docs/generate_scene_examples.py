@@ -29,8 +29,9 @@ transforms, which is the point of showing it done:
   car park's far wall visible at 40 m hides a mountain at 3 km completely.
   So fog is set by visibility, as a fraction of the scene's depth, and the
   distance veils of rain and snow are capped the same way.
-* **What applies.** Sunlight effects and daylight snow are skipped on the
-  night scene, and rain and snow under a roof. Nothing in the library works
+* **What applies.** Sunlight effects and daylight fog are skipped on the
+  night scene, the two effects that act on lamps on the daylit ones, and
+  rain and snow under a roof. Nothing in the library works
   that out for itself.
 """
 
@@ -84,7 +85,8 @@ PIPELINE_DRAWS = 4
 LAMP_LIT = ("night_rain", "night_snow", "night_droplets")
 NEEDS_SUN = ("sun_flare", "cast_shadows")
 NEEDS_OPEN_SKY = ("rain", "snow", "night_rain", "night_snow", *NEEDS_SUN)
-DAYLIGHT_WEATHER = ("snow",)
+DAYLIGHT_WEATHER = ("fog",)
+NEEDS_LAMPS = ("night_fog", "source_glare")
 
 # Meteorological visibility, as a multiple of the scene's farthest distance.
 # Fog is set to it outright. For rain and snow it is a floor: their veils
@@ -102,9 +104,10 @@ WHY_NOT = {
     "sun": "it needs the sun, and the scene is at night",
     "roof": "the scene is under a roof",
     "daylight": (
-        "its settled snow is lit as by day, and comes out as a white floor under a black "
-        "sky. `NightSnow` is the night model"
+        "it is the daylight model, an even veil lit by the sky. `night_fog` is fog lit by "
+        "the lamps"
     ),
+    "lamps": "it acts on artificial lights at night, and this is a daylit scene",
 }
 
 # An open iris, and rain metered for street lighting: see presets/pipelines.py.
@@ -173,6 +176,9 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
         # Against the scene's own distances, from the provider, in place of
         # the severity gallery's 40-90 m far plane.
         extra["depth_scale"] = None
+    if effect == "night_fog":
+        visibility = FOG_VISIBILITY * scene.depth_range_m[1]
+        extra["visibility_range_m"] = (0.85 * visibility, 1.15 * visibility)
     if effect == "dirt_soil" and not scene.sky_in_frame:
         extra["ambient_light_range"] = (2.5, 4.0)
     if scene.night and effect == "water_droplets":
@@ -191,6 +197,8 @@ def _why_not(effect: str, scene: Scene) -> str | None:
         return WHY_NOT["roof"]
     if scene.night and effect in DAYLIGHT_WEATHER:
         return WHY_NOT["daylight"]
+    if not scene.night and effect in NEEDS_LAMPS:
+        return WHY_NOT["lamps"]
     return None
 
 
@@ -359,13 +367,15 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "  right under open sky and wrong under the flyover in `underpass_from_above`.",
         "- **Overcast light cannot remove shadows.** Rain and snow grey the sky and",
         "  lower contrast, but the hard shadows of a sunny photograph stay.",
-        "- **Fog and rain at night stay dark and do not glow.** On `street_night` they",
-        "  dim the lamps without lighting the air round them.",
+        "- **Night fog knows only the lamps it can see.** One outside the frame lights",
+        "  fog inside it, and `night_fog` cannot show that.",
+        "- **Rain at night is the daylight model.** It stays dark, as it should, but its",
+        "  streaks are lit by the frame's average light and not by the nearest lamp.",
         "- **Depth is relative and stretched to the range it is given.** The facades in",
         "  `urban_street_wet` are placed further away than they are, so its fog is",
         "  heavier than the stated visibility would make it.",
-        "- **Daylight snow is not rendered on `street_night`**, because it would be",
-        "  wrong: see that page.",
+        "- **Wet ground stops at a few hundred metres.** Beyond that, level ground is",
+        "  taken to be terrain; a distant wet road loses its sheen with it.",
         "- **Flakes close to an infrared lamp are very large.** `night_snow` draws the",
         "  nearest ones as long white bars.",
     ]

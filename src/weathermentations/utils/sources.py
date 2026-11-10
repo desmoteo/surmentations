@@ -1,0 +1,100 @@
+"""Finding the lights that are in the frame.
+
+Glare, and the glow of fog at night, are both things a *light* does, and at
+night the lights are in the picture: street lamps, headlights, lit windows.
+A light is recorded as a small region at or near clipping. What it does not
+record is how bright the light was — a clipped pixel is a lower bound — so
+everything downstream takes an over-range factor as a parameter and does not
+pretend to have measured it.
+
+Large clipped regions are not lights in this sense. A blown-out sky or a
+sunlit wall saturates the sensor without being a compact source, and treating
+it as one puts a flare in the middle of every overexposed frame.
+"""
+
+from __future__ import annotations
+
+from typing import NamedTuple
+
+import cv2
+import numpy as np
+
+# Detection runs on a copy this wide, so thresholds on area mean the same
+# thing at every resolution.
+_WORK_WIDTH = 320
+
+# Linear-light level, in the brightest channel, from which a pixel counts as
+# part of a source: sRGB 243 and up.
+_SOURCE_LEVEL = 0.9
+
+# A region larger than this fraction of the frame is an overexposed surface,
+# not a lamp.
+_MAX_AREA_FRACTION = 0.03
+
+
+# Share of its bounding box a region must fill to count as compact. A disc
+# fills 79%; a diagonal line a few percent.
+_MIN_BOX_FILL = 0.45
+
+
+class LightSource(NamedTuple):
+    """One compact light in the frame.
+
+    ``x`` and ``y`` are normalised to ``[0, 1]``; ``area`` is the fraction of
+    the frame the clipped region covers; ``colour`` is its mean linear RGB,
+    normalised so its largest channel is 1.
+    """
+
+    x: float
+    y: float
+    area: float
+    colour: tuple[float, float, float]
+
+
+def source_mask(linear_rgb: np.ndarray) -> np.ndarray:
+    """``[0, 1]`` weight of how clipped each pixel is, shape ``(H, W)``."""
+    peak = linear_rgb.max(axis=2)
+    return np.clip((peak - _SOURCE_LEVEL) / (1.0 - _SOURCE_LEVEL), 0.0, 1.0).astype(np.float32)
+
+
+def light_sources(linear_rgb: np.ndarray, max_sources: int = 4) -> list[LightSource]:
+    """The compact lights in a linear-light frame, largest first."""
+    height, width = linear_rgb.shape[:2]
+    scale = _WORK_WIDTH / max(width, 1)
+    size = (max(8, round(width * scale)), max(8, round(height * scale)))
+    small = cv2.resize(linear_rgb, size, interpolation=cv2.INTER_AREA)
+    # Thresholded at full size and then reduced, so a lamp a few pixels wide
+    # is neither lost between samples nor diluted below the bar, and a bright
+    # but unclipped surface does not pass a bar lowered to catch it.
+    clipped = (linear_rgb.max(axis=2) >= _SOURCE_LEVEL).astype(np.float32)
+    lit = (cv2.resize(clipped, size, interpolation=cv2.INTER_AREA) > 0.2).astype(np.uint8)
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(lit, connectivity=8)
+
+    total = float(size[0] * size[1])
+    areas = stats[1:, cv2.CC_STAT_AREA].astype(np.float64) / total
+    # Largest first, and only the ones asked for: a noisy bright surface can
+    # break into thousands of specks, and reading each one's colour was most
+    # of this function's time.
+    # A lamp is compact. A clipped road marking or a lit kerb is as small in
+    # area and is not a light: it is long and thin, and fills little of the
+    # box around it.
+    boxes = stats[1:, cv2.CC_STAT_WIDTH] * stats[1:, cv2.CC_STAT_HEIGHT]
+    compact = stats[1:, cv2.CC_STAT_AREA] >= _MIN_BOX_FILL * boxes
+    order = [
+        int(i) + 1
+        for i in np.argsort(-areas)
+        if areas[i] <= _MAX_AREA_FRACTION and compact[i]
+    ]
+    found = []
+    for label in order[:max_sources]:
+        colour = small[labels == label].mean(axis=0)
+        colour = colour / max(float(colour.max()), 1e-6)
+        found.append(
+            LightSource(
+                float(centroids[label, 0] + 0.5) / size[0],
+                float(centroids[label, 1] + 0.5) / size[1],
+                float(areas[label - 1]),
+                (float(colour[0]), float(colour[1]), float(colour[2])),
+            )
+        )
+    return found

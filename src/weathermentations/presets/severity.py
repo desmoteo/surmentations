@@ -191,6 +191,18 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "edge_threshold_range": (_lerp(18.0, 35.0, t), _lerp(40.0, 90.0, t)),
                 "chroma_blur_range": (_lerp(0.005, 0.008, t), _lerp(0.014, 0.035, t)),
             },
+            "NightFog": {
+                # The same span as RandomFog's beta, as visibility: mist at
+                # level 1, 30-55 m at level 5.
+                # Interpolated in the logarithm: visibility is a ratio, and a
+                # straight line from 330 m to 30 m spends three levels in
+                # fog too thin to see over a 50 m scene.
+                "visibility_range_m": (330.0 * (30.0 / 330.0) ** t, 900.0 * (55.0 / 900.0) ** t),
+            },
+            "SourceGlare": {
+                "intensity_range": (_lerp(0.05, 0.25, t), _lerp(0.12, 0.6, t)),
+                "ghost_count_range": (int(_lerp(1, 4, t)), int(_lerp(3, 8, t))),
+            },
             "NightRain": {
                 # Rate drives the count, and the illuminator gain drives how
                 # hard the lamp lights each drop. Both move with severity

@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
+from weathermentations.atmosphere.night_fog import NightFog
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 from weathermentations.camera import (
@@ -113,6 +114,7 @@ def _transforms() -> dict[str, Any]:
         "DirtSoil": DirtSoil(p=1.0),
         "SunFlare": SunFlare(p=1.0),
         "RandomFog": RandomFog(depth_provider=provider, p=1.0),
+        "NightFog": NightFog(depth_provider=provider, p=1.0),
         "RandomRain": RandomRain(depth_provider=provider, p=1.0),
         "RandomSnow": RandomSnow(depth_provider=provider, p=1.0, accumulation_probability=1.0),
         # Surveillance-stream effects. VideoCodecArtifacts is excluded: it

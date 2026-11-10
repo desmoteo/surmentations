@@ -39,6 +39,8 @@ _STAGE_ORDER: dict[str, int] = {
     "DirtSoil": 2,
     "HousingOccluders": 2,
     "SunFlare": 3,
+    # The same optics, on the lights that are in the frame.
+    "SourceGlare": 3,
     # Sensor: exposure, readout and their artefacts.
     "NightIrMode": 4,
     # Rain lit by the camera's own illuminator, so it has to follow the IR
@@ -48,6 +50,10 @@ _STAGE_ORDER: dict[str, int] = {
     "NightRain": 5,
     # Likewise lit by the illuminator, and for the same reason.
     "NightSnow": 5,
+    # Fog lit by lamps and by the illuminator. After the infrared conversion
+    # for the same reason as the two above: its backscatter is the camera's
+    # own light.
+    "NightFog": 5,
     "AcFlicker": 6,
     "RollingShutter": 6,
     "SensorNoise": 6,
