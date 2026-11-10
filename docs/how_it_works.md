@@ -307,6 +307,33 @@ sub-pixel, which means invisible.
 
 ---
 
+### What the photograph does not say: sky, veil colour, paving, light
+
+Four things every weather model needs and no depth map gives.
+
+**Where the sky is.** Not at the far plane: the depth network puts sky at
+mid-range in most frames and, over a skyline, nearer than the buildings
+under it. What sky reliably is, is featureless, all at *one* depth to three
+decimals, and reachable from the top of the frame (`utils/sky.py`). Found
+that way it is lifted to the far plane, so fog thickens up into the sky
+instead of stopping at the roofline.
+
+**What colour a veil is.** The horizon sky's. It used to be read off the
+frame's brightest pixels, which at night are lamps. Now it is read off the
+sky where there is one — at its bright end and mostly desaturated, because
+droplets scatter all colours alike — and where there is none it is inferred
+from the frame's mean and a typical albedo (`utils/color.py`).
+
+**What is paving.** Rain's mirror goes on level ground that is not green
+vegetation. And where a reflection's source row is above the frame the road
+reflects that sky estimate; repeating the top row, as it did, drew vertical
+stripes down any steeply viewed road.
+
+**What the light is.** Rain and snow fall from cloud. In step with the rate,
+the frame is pulled towards its local average (the direct beam is gone, so
+shadows fill), desaturated, and its sky turned to even grey
+(`utils/overcast.py`). Shadow edges already in the photograph stay.
+
 ## 5. Optics — things on or in the lens
 
 ### Water droplets: a droplet is a lens, not a blur
@@ -450,7 +477,7 @@ flowchart LR
     OPT --> SENS["sensor"]
     SENS --> ISP["ISP"]
     ISP --> CODEC["codec"]
-    SENS -.-> S1["NightIrMode, NightRain, NightSnow, AcFlicker, RollingShutter"]
+    SENS -.-> S1["NightIrMode, NightRain, NightSnow, AcFlicker, RollingShutter, SensorNoise"]
     ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts"]
     CODEC -.-> S3["VideoCodecArtifacts"]
 ```
@@ -493,6 +520,20 @@ gradient, and the eye discounts those as an exposure difference however deep
 they are. Readout time therefore matters more than depth: a rolling shutter
 reads out over roughly its frame period, so 25-30 fps gives 33-40 ms and a
 bandwidth-limited 17 fps stream gives 60 ms, for 2-7 bands rather than 1-3.
+
+### Sensor noise: counted in electrons, drawn on the mosaic
+
+Shot noise is the square root of the electrons a pixel collected; read noise
+is a few electrons whatever it collected. Gain creates neither. It decides
+how few electrons count as full scale, so `gain_range_db` is the knob:
+`electrons = image x full_well / gain`.
+
+The noise is drawn per site of the Bayer mosaic and then demosaiced with the
+picture's own interpolation. One sample in four is red and one in four blue,
+so their noise comes out spread over more pixels than green's: the coarse,
+coloured blotching of a real low-light frame, which independent per-channel
+noise does not have. It runs before the ISP, which is what gives
+`TemporalDenoiseArtifacts` something to remove.
 
 ### Night rain: the same drop, lit by the camera
 

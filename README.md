@@ -98,7 +98,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 
 | Transform | Models | Needs depth |
 | --- | --- | --- |
-| `RandomFog` | Koschmieder extinction with per-channel scattering, and a cap that keeps the sky's gradient | yes |
+| `RandomFog` | Koschmieder extinction with per-channel scattering, the sky found and put at the far plane, and a veil the colour of the horizon sky, not of the brightest pixels | yes |
 | `RandomRain` | Marshall-Palmer (or Ulbrich gamma) drop sizes, Gunn-Kinzer fall speeds, Garg-Nayar streak photometry, a distance veil, and wet ground that darkens and mirrors the scene about the horizon with Fresnel-weighted reflectance | yes |
 | `RandomSnow` | Gunn-Marshall sizes corrected for snow density, Locatelli-Hobbs fall speeds, and accumulation on upward-facing surfaces | yes |
 | `NightRain` | Rain lit by the camera's **own infrared illuminator**, brightness falling as 1/z² from the lamp. The one case where rain reads as streaks rather than haze — see [`docs/rain_visibility.md`](docs/rain_visibility.md). Needs no depth, so it runs on CPU | no |
@@ -121,6 +121,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `NightIrMode` | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise | yes |
 | `AcFlicker` | Mains banding. Cancels exactly when the exposure is a whole number of flicker periods — the basis of a camera's anti-flicker setting | no |
 | `RollingShutter` | Row-dependent shear and wobble from camera motion during readout. The one transform that moves pixels, so masks, boxes and keypoints move with it | no |
+| `SensorNoise` | Shot and read noise in photoelectrons, set by sensor gain, drawn on the Bayer mosaic and demosaiced, so the grain is coarse and coloured as in a real low-light frame | no |
 | `ExposureTransient` | AE/AWB caught mid-correction. White-balance error is the ratio of two blackbody colours, so it stays on the blue-orange axis real illuminants vary on | no |
 | `WdrToneMapping` | Local tone mapping, with the black halos a cheap edge-preserving filter leaves | no |
 | `TemporalDenoiseArtifacts` | 3D-NR's "watercolour" flattening and chroma blotching | no |
@@ -172,6 +173,7 @@ and the physics behind it.
 | `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range` |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
 | `RollingShutter` | `pan_shift_range_px`, `wobble_amplitude_range_px`, `wobble_cycles_range` |
+| `SensorNoise` | `gain_range_db` (the knob: how few electrons make a full-scale picture), `full_well_range_e`, `read_noise_range_e` |
 | `ExposureTransient` | `exposure_error_stops_range`, `assumed_temperature_range_k`, `actual_temperature_range_k` |
 | `WdrToneMapping` | `compression_range`, `detail_gain_range`, `halo_strength_range` |
 | `TemporalDenoiseArtifacts` | `strength_range`, `iterations_range`, `edge_threshold_range`, `chroma_blur_range` |
@@ -287,6 +289,7 @@ python scripts/benchmark.py --no-depth             # CPU-only subset
 | `RollingShutter` | **0.2** | 1.1 |
 | `AcFlicker` | 4.1 | 21.3 |
 | `ExposureTransient` | 4.8 | 24.3 |
+| `SensorNoise` | 13.1 | 50.1 |
 | `HousingOccluders` | 10.8 | 66.7 |
 | `SunFlare` | 21.4 | 125.5 |
 | `DirtSoil` | 35.4 | 173.5 |
@@ -334,7 +337,8 @@ and 0.93x at 1024 px, dirt 1.08x and 1.01x, rain 1.21x and 1.13x).
 A `DataLoader` worker must keep ahead of the GPU. Rough guidance:
 
 - **Cheap enough to apply liberally** (under ~25 ms at 512 px):
-  `RollingShutter`, `AcFlicker`, `ExposureTransient`, `HousingOccluders`,
+  `RollingShutter`, `AcFlicker`, `ExposureTransient`, `SensorNoise`,
+  `HousingOccluders`,
   `SunFlare`.
 - **Moderate** (25-115 ms): `DirtSoil`, `TemporalDenoiseArtifacts`,
   `WaterDroplets`, `WdrToneMapping`, and any *warm* depth-conditioned
@@ -396,13 +400,25 @@ and leaves a blank frame. For long views, set fog
 by visibility (`beta = 3.912 / visibility_m`) and cap the precipitation veils
 with `veil_beta_range`, as `docs/generate_scene_examples.py` does.
 
-**The scene's own conditions are not detected.** Nothing here knows that a
-frame is already night, or under a roof. `RandomFog`, `RandomRain` and
-`RandomSnow` are daylight models: their veil takes its colour from the
-brightest pixels in the frame, which on a real night frame are the street
-lamps, and the whole frame turns that colour. Use `NightRain` and `NightSnow`
-there. Rain's wet-ground pass likewise treats any level surface as paving,
-and snow settles indoors if you ask it to.
+**The scene's own conditions are mostly not detected.** Nothing here knows
+that a frame is under a roof, so snow settles indoors if you ask it to.
+Three things are inferred, by heuristics that are documented as such:
+
+- **Where the sky is** (`utils/sky.py`): featureless, at a single depth, and
+  reached from the top of the frame. It misses sky seen through branches and
+  can take a pale distant surface touching the top edge for sky.
+- **What colour a veil is** (`utils/color.py`): the horizon sky's, read off
+  the sky where there is one and inferred where there is not. On a real night
+  frame fog, rain and snow therefore stay dark instead of taking the colour
+  of the street lamps. They are still daylight models: fog at night does not
+  glow round the lamps, and settled snow is lit as by day. `NightRain` and
+  `NightSnow` are the night models.
+- **What is paving** (`atmosphere/rain.py`): everything level that is not
+  green vegetation. Bare soil and gravel still get a film of water.
+
+Rain and snow also relight the frame towards overcast in step with their
+rate (`overcast_range`). That softens a sunny scene; it cannot remove the
+shadows it has.
 
 **Clips.** Passed as `images=`, an `(N, H, W, 3)` array is treated the way
 Albumentations treats it: one set of parameters for every frame. Depth is

@@ -1,6 +1,8 @@
 # Proposed augmentations
 
-Effects the library does not have and should. None of this is implemented.
+Effects the library does not have and should. Entries 1 and 2 have since
+been built and are kept here as the record of what was intended, each with a
+note on what was done differently; the rest are not implemented.
 Each entry says what the effect is, why it is missing, how it would be
 modelled, where it sits in the imaging chain, and what would show that it
 works, so that any one of them can be picked up cold.
@@ -12,8 +14,8 @@ not proposed again.
 
 | # | Working name | Chain stage | Needs depth | Moves pixels | Size |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [`SensorNoise`](#1-sensornoise) | sensor | no | no | small |
-| 2 | [Overcast lighting](#2-overcast-lighting-for-rain-and-snow) | atmosphere | no | no | small |
+| 1 | [`SensorNoise`](#1-sensornoise) — built | sensor | no | no | small |
+| 2 | [Overcast lighting](#2-overcast-lighting-for-rain-and-snow) — built | atmosphere | no | no | small |
 | 3 | [`SourceGlare`](#3-sourceglare) | optics | no | no | medium |
 | 4 | [`NightFog`](#4-nightfog) | atmosphere | yes | no | medium |
 | 5 | [`TransmissionFaults`](#5-transmissionfaults) | transmission | no | no | medium |
@@ -62,6 +64,13 @@ A transform that moves pixels must also carry masks, boxes and keypoints, set
 
 ## 1. `SensorNoise`
 
+> **Built**, as `camera/sensor_noise.py`. As specified, with two departures.
+> `scene_illuminance_range_lux` was left out: gain is drawn directly, and
+> the pipelines choose its range from the lighting state. And `NightIrMode`'s
+> noise was not moved onto the shared helper, because doing so would re-roll
+> its published images for no change in behaviour; `photon_transfer_noise` is
+> there for it when that transform is next touched.
+
 **What.** Shot noise, read noise and the chroma blotches a demosaiced
 low-light frame carries, for cameras still in colour at night.
 
@@ -103,6 +112,14 @@ kept without the noise.
 **Open.** Whether to model fixed-pattern noise here (see the rejected list).
 
 ## 2. Overcast lighting for rain and snow
+
+> **Built**, as `utils/overcast.py`, applied inside `RandomRain` and
+> `RandomSnow` through `overcast_range`. The frame's level is not lowered:
+> the transforms normalise it anyway, so the illuminance figures below were
+> never needed and remain unchecked. The open question was answered by
+> `utils/sky.py`, which finds sky as a featureless region at one depth that
+> reaches the top of the frame (five of the six test scenes with open sky,
+> none of the three without).
 
 **What.** The light that comes with precipitation: a grey sky, lower
 contrast and saturation, a dimmer frame.
@@ -184,11 +201,11 @@ runs it per source.
 **What.** Fog at night: a glow round each lamp, and the wall of backscatter
 from the camera's own illuminator.
 
-**Why it is missing.** `RandomFog` is a daylight model. Its veil takes its
-colour from the brightest pixels in the frame, which on a real night frame
-are the street lamps, and the whole frame turns their colour: measured, the
-estimate was 17.8 times the frame's median. The scene examples skip fog on
-`street_night` for this reason.
+**Why it is missing.** `RandomFog` is a daylight model. Its veil used to
+take its colour from the brightest pixels in the frame, which on a real night
+frame are the street lamps: measured, 17.8 times the frame's median. That is
+fixed — the veil now takes the sky's radiance and stays dark at night — but
+dark is all it is. Nothing lights the fog round a lamp.
 
 **Model.** Two terms, neither of which is a uniform veil:
 
