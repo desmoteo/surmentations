@@ -1,6 +1,6 @@
 # Proposed augmentations
 
-Effects the library does not have and should. Entries 1 and 2 have since
+Effects the library does not have and should. Entries 1 to 4 have since
 been built and are kept here as the record of what was intended, each with a
 note on what was done differently; the rest are not implemented.
 Each entry says what the effect is, why it is missing, how it would be
@@ -16,8 +16,8 @@ not proposed again.
 | --- | --- | --- | --- | --- | --- |
 | 1 | [`SensorNoise`](#1-sensornoise) — built | sensor | no | no | small |
 | 2 | [Overcast lighting](#2-overcast-lighting-for-rain-and-snow) — built | atmosphere | no | no | small |
-| 3 | [`SourceGlare`](#3-sourceglare) | optics | no | no | medium |
-| 4 | [`NightFog`](#4-nightfog) | atmosphere | yes | no | medium |
+| 3 | [`SourceGlare`](#3-sourceglare) — built | optics | no | no | medium |
+| 4 | [`NightFog`](#4-nightfog) — built | atmosphere | yes | no | medium |
 | 5 | [`TransmissionFaults`](#5-transmissionfaults) | transmission | no | no | medium |
 | 6 | [`OnScreenOverlay`](#6-onscreenoverlay) | after transmission | no | no | small |
 | 7 | [`FocusShift` and `CameraVibration`](#7-focusshift-and-cameravibration) | optics | no | vibration does | medium |
@@ -163,6 +163,13 @@ engaged on one of nine sample scenes; depth alone is not enough.
 
 ## 3. `SourceGlare`
 
+> **Built**, as `lens/source_glare.py`, with sources found by
+> `utils/sources.py`. `sun_flare.py` was not refactored: the transform holds
+> a `SunFlare` and calls it once per source, which reuses every line of the
+> optics without moving any. Strength comes from clipped area times
+> `intensity_range`; there is no separate `over_range_range`. The open
+> question stands: it costs one flare render per source.
+
 **What.** Veiling glare, starbursts and ghosts from the lights actually in
 the frame: headlights, street lamps, shop fronts.
 
@@ -197,6 +204,12 @@ invariant `SunFlare` is already tested for.
 runs it per source.
 
 ## 4. `NightFog`
+
+> **Built**, as `atmosphere/night_fog.py`. One transform, not the two-part
+> split described under Stage: it sits after `NightIrMode` and attenuates the
+> scene twice when the illuminator is on, which is the physics of a scene lit
+> by the camera. The backscatter term is its own, not shared with
+> `NightRain`; the two are three lines each. The open question stands.
 
 **What.** Fog at night: a glow round each lamp, and the wall of backscatter
 from the camera's own illuminator.

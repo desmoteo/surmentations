@@ -383,6 +383,15 @@ night branches its `aperture_diameter_range_mm` is pinned to an open iris,
 them dissolve into soft patches, while the day branch keeps the transform's
 default range, which also covers lenses that stop down in sunlight.
 
+Fog follows the lighting state too. By day it is `RandomFog`, an even veil
+lit by the sky. In the street-lit branch it is `NightFog`, lit by the lamps
+in the frame; under infrared it is `NightFog` placed *after* `NightIrMode`
+with `illuminator_backscatter_range` set, because the wall of light it raises
+is the camera's own. Both night branches also carry `SourceGlare` at
+`p=0.35`, which flares the lamps and headlights the frame contains and does
+nothing to a frame without any. (The printed recipe above keeps `RandomFog`
+in all three branches for brevity; the importable pipelines do not.)
+
 The rain in the street-lit night branch is seen by the same camera, so it is
 metered for 5-150 lux with that open iris. `RandomRain` derives its shutter
 time from the light level and the aperture, and at those levels it sits at

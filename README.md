@@ -103,6 +103,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `RandomSnow` | Gunn-Marshall sizes corrected for snow density, Locatelli-Hobbs fall speeds, and accumulation on upward-facing surfaces | yes |
 | `NightRain` | Rain lit by the camera's **own infrared illuminator**, brightness falling as 1/z² from the lamp. The one case where rain reads as streaks rather than haze — see [`docs/rain_visibility.md`](docs/rain_visibility.md). Needs no depth, so it runs on CPU | no |
 | `NightSnow` | Snow lit by the camera's own illuminator: each flake's brightness is set by *its* distance from the lamp, not by the scene behind it. `RandomSnow` before `NightIrMode` loses its flakes over anything distant; this is what puts them back. Needs no depth | no |
+| `NightFog` | Fog lit by the lamps in the frame: everything dims with distance and the light taken from each lamp returns as a glow round it, so dark areas stay dark. With the illuminator on, an even wall of backscatter across the beam | yes |
 | `CastShadows` | Shadows of people, vehicles and foliage on upward-facing surfaces, all thrown by one sun — a classic false-positive source. A loss of the direct beam, so texture survives and the shadow is bluer | yes |
 
 ### Lens and housing
@@ -112,6 +113,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `WaterDroplets` | Water on the glass of a camera focused far beyond it: every drop a lobe of one refracting surface, so drops merge; large drops individually shaped — lopsided and bottom-heavy when pinned, and as runners anything from a blunt slug to a head trailing a thread that breaks into beads; sharpness set by the lens aperture, not chosen; condensation as scattering of the scene's own light; lit by the infrared ring at night | no |
 | `DirtSoil` | Grime as a *scattering* layer, not paint, with per-deposit albedos from grey dust through yellow pollen to brown spray. Lit from the whole hemisphere in front of the glass, so it glows under a sky the camera is not looking at; patches over an even film of settled dust | no |
 | `SunFlare` | Veiling glare, halo, coating-tinted ghost chain, diffraction starburst, dispersion corona, plus CCTV-specific dome scratches, smear and IR leak | no |
+| `SourceGlare` | The same optics on each compact light found in the frame (street lamps, headlights), with strength from the clipped area. Leaves a frame with no lights unchanged | no |
 | `HousingOccluders` | Insects and webs on the dome — hugely magnified and defocused, silhouetted by day, glowing under the IR ring | no |
 
 ### Sensor, ISP and transmission
@@ -164,11 +166,13 @@ and the physics behind it.
 | `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `min_streak_width_px` |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range` |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range` |
+| `NightFog` | `visibility_range_m` (read against the provider's depth range), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `min_flake_width_px`, `max_flakes` |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `WaterDroplets` | `droplet_count_range`, `droplet_radius_range`, `pane_width_range_mm` (sets the physical scale), `aperture_diameter_range_mm` (sets how sharp the water looks), `coalescence_range`, `condensation_coverage_range`, `condensation_milkiness_range`, `illuminator_glow_range` (infrared ring on) |
 | `DirtSoil` | `coverage_range`, `dust_film_range` (even film between the patches), `ambient_light_range` (how much brighter the surroundings are than the frame), `veil_strength_range`, `highlight_boost_range`, `deposits` (which substances), `smudge_count_range` |
 | `SunFlare` | `flare_position`, `intensity_range`, `ghost_count_range`, `aperture_blades_range`, `dispersion_ring_probability`, `scratch_count_range` |
+| `SourceGlare` | `intensity_range` (stands for how far past full scale the lights were), `max_sources_range`, `ghost_count_range`, `streak_probability` |
 | `HousingOccluders` | `insect_count_range`, `insect_size_range`, `web_count_range`, `defocus_range`, `glow_range` (0 by day, >0 under the IR ring) |
 | `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range` |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
@@ -293,6 +297,7 @@ python scripts/benchmark.py --no-depth             # CPU-only subset
 | `HousingOccluders` | 10.8 | 66.7 |
 | `SunFlare` | 21.4 | 125.5 |
 | `DirtSoil` | 35.4 | 173.5 |
+| `SourceGlare` | 38.7 | 196.1 |
 | `TemporalDenoiseArtifacts` | 38.6 | 237.4 |
 | `WdrToneMapping` | 102.9 | 146.2 |
 | `WaterDroplets` | 112.7 | 194.7 |
@@ -308,6 +313,7 @@ depth-conditioned transform costs when they share one provider.
 | `CastShadows` | 61.5 | **24.2** | 209.0 | 126.7 |
 | `NightIrMode` | 81.4 | **13.5** | 136.0 | 77.3 |
 | `RandomFog` | 86.7 | **19.8** | 212.7 | 114.0 |
+| `NightFog` | — | 28.9 | — | 125.0 |
 | `RandomRain` | 140.1 | 81.4 | 384.4 | 304.8 |
 | `RandomSnow` | 135.4 | **32.1** | 245.8 | 177.0 |
 
@@ -411,8 +417,8 @@ Three things are inferred, by heuristics that are documented as such:
   the sky where there is one and inferred where there is not. On a real night
   frame fog, rain and snow therefore stay dark instead of taking the colour
   of the street lamps. They are still daylight models: fog at night does not
-  glow round the lamps, and settled snow is lit as by day. `NightRain` and
-  `NightSnow` are the night models.
+  glow round the lamps: `NightFog`, `NightRain` and `NightSnow` are the
+  night models, and the pipelines use them.
 - **What is paving** (`atmosphere/rain.py`): everything level that is not
   green vegetation. Bare soil and gravel still get a film of water.
 
@@ -484,16 +490,18 @@ full sweep.
 | --- | --- | --- | --- |
 | ![night ir](docs/examples/night_ir_3.png) | ![night rain](docs/examples/night_rain_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![cast shadows](docs/examples/cast_shadows_3.png) |
 
-| Night snow | Wet glass under the infrared ring |
-| --- | --- |
-| ![night snow](docs/examples/night_snow_3.png) | ![night droplets](docs/examples/night_droplets_3.png) |
+| Night snow | Wet glass under the infrared ring | Night fog | Glare from lamps |
+| --- | --- | --- | --- |
+| ![night snow](docs/examples/night_snow_3.png) | ![night droplets](docs/examples/night_droplets_3.png) | ![night fog](docs/examples/night_fog_3.png) | ![source glare](docs/examples/source_glare_3.png) |
 
 `night_rain` and `night_snow` are rendered over an IR night frame rather than
 the daylit base scene, because their particles are lit by the camera: on a
 sunny road they would be as invisible as `RandomRain`'s streaks, which is the
 finding the transforms exist to answer. `night_droplets` is `WaterDroplets`
 over the same frame with `illuminator_glow_range` set, which is how the
-pipelines build it at night.
+pipelines build it at night. `night_fog` and `source_glare` act on the lights
+in a frame, which the daylit reference does not have, so they are rendered
+over the night street from `sample_scenes/`.
 
 The `water_droplets` row alternates a stopped-down iris with an open one
 (0.6, 2.4, 0.9, 2.8 and 0.5 mm). That is the largest single difference
