@@ -337,12 +337,19 @@ of whatever stands on it. Three things are its own.
 - **Foliage is not ground.** From above a canopy reads as level and was
   covered into a grey smear. Vegetation with relief in it, light and
   shadow at every scale, is a canopy and takes snow in clumps on the parts
-  that catch the light; flat vegetation is a lawn and is buried.
+  that catch the light; flat vegetation is a lawn and is buried. At night
+  nothing is green, and a tree is told by its "level ground" coming and
+  going from patch to patch.
+- **A car is not ground either.** A connected patch of level surface a
+  car's width across is a roof or a bonnet, and `vehicle_cover_range` says
+  how much snow it keeps: none for moving traffic.
 - **Snow is lit by the light on the spot, with a floor.** The light on a
   patch is what it sends back over a typical albedo, but black asphalt
   sends back a quarter of that and snow shaded by it was grey. By day the
   frame's own illuminant puts a floor under the estimate; at night the
-  floor is low, so snow stays dark where no lamp reaches.
+  floor is low, so snow stays dark where no lamp reaches. The cost is
+  that shadows falling on daylit snow all but vanish: a dark patch of
+  ground is either shaded or dark, and nothing here tells which.
 - **It takes the colour of the light when the light has one.** Under
   sodium lamps the whole frame is orange, and so is the snow.
 
