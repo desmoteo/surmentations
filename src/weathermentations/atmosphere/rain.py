@@ -93,7 +93,12 @@ from weathermentations.depth.normals import horizon_row, upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
-from weathermentations.utils.noise import value_noise
+from weathermentations.utils.ground import (
+    fill_to_edges,
+    ground_noise,
+    level_ground_weight,
+    vegetation_weight,
+)
 from weathermentations.utils.overcast import apply_overcast, cloud_cover
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 from weathermentations.utils.precipitation import (
@@ -718,14 +723,12 @@ class RandomRain(WeatherTransform):
             # Level ground is wet all over. The bare power left a real road,
             # whose estimated normals wander a few degrees, at 40-70% of the
             # effect, so a soaked road came out half dry.
-            wetness = np.clip(cosine**wetness_falloff / _LEVEL_GROUND_WEIGHT, 0.0, 1.0).astype(
-                np.float32
-            )
+            wetness = level_ground_weight(cosine, wetness_falloff)
             # Up to the foot of whatever stands on it. The depth map blurs
             # the edge of every object, and the band of road inside that
             # blur has no orientation to read, so it was left dry: a pale
             # outline round each car on a dark road.
-            wetness = _fill_to_edges(wetness, linear_scene)
+            wetness = fill_to_edges(wetness, linear_scene)
             # Water lies as a film on paving. On grass and crops it is held
             # in the canopy and the soil, and there is no mirror.
             wetness *= _paved_weight(linear_scene)
@@ -1083,12 +1086,6 @@ _WET_GROUND_FAR_M = 400.0
 # mirrored picture to the sky, as its source row nears the top edge.
 _OFF_FRAME_BLEND = 0.08
 
-# Vegetation, for the purpose of not paving it: hue between yellow-green and
-# blue-green, with enough saturation to have a hue at all.
-_VEGETATION_HUE_DEG = (50.0, 170.0)
-_VEGETATION_MIN_SATURATION = 0.18
-
-
 def _paved_weight(linear_rgb: np.ndarray) -> np.ndarray:
     """``[0, 1]`` weight of ground a film of water can lie on.
 
@@ -1098,31 +1095,11 @@ def _paved_weight(linear_rgb: np.ndarray) -> np.ndarray:
     most of what level ground is when it is not paved. Bare soil, gravel and
     water are not caught, and painted green surfaces are wrongly left dry.
     """
-    high = linear_rgb.max(axis=2)
-    low = linear_rgb.min(axis=2)
-    chroma = high - low
-    saturation = chroma / np.maximum(high, 1e-4)
-    red, green, blue = linear_rgb[..., 0], linear_rgb[..., 1], linear_rgb[..., 2]
-    # Hue, needed only where green is the largest channel.
-    hue = 60.0 * (2.0 + (blue - red) / np.maximum(chroma, 1e-6))
-    in_band = (green >= high - 1e-6) & (hue > _VEGETATION_HUE_DEG[0]) & (
-        hue < _VEGETATION_HUE_DEG[1]
-    )
-    strength = np.clip((saturation - _VEGETATION_MIN_SATURATION) / 0.12, 0.0, 1.0)
-    vegetation = (in_band * strength).astype(np.float32)
-    sigma = max(1.0, 0.004 * float(np.hypot(*linear_rgb.shape[:2])))
-    return (1.0 - cv2.GaussianBlur(vegetation, (0, 0), sigmaX=sigma)).astype(np.float32)
+    return (1.0 - vegetation_weight(linear_rgb)).astype(np.float32)
 
 
-# Value of ``cosine ** falloff`` from which ground counts as level, and is
-# wet all over.
-_LEVEL_GROUND_WEIGHT = 0.35
-
-# Size of the hollows water collects in, in metres, and of the noise tile
-# they are cut from, in pixels.
+# Size of the hollows water collects in, in metres.
 _PUDDLE_SCALE_M = 1.2
-_PUDDLE_TILE_PX = 256
-_PUDDLE_CELLS = 8
 
 
 def _puddle_map(
@@ -1136,35 +1113,13 @@ def _puddle_map(
 
     Puddles are patches of the road, so they are foreshortened with it:
     wide and thin towards the horizon, round at the camera's feet. The
-    pattern is noise in ground coordinates, recovered from depth, and the
-    lowest-lying ``coverage`` of it is under water.
+    lowest-lying ``coverage`` of a noise pattern in ground coordinates is
+    under water.
     """
-    height, width = depth_m.shape
-    noise = value_noise(
-        _PUDDLE_TILE_PX, _PUDDLE_TILE_PX, rng=rng, octaves=3, base_cells=_PUDDLE_CELLS
-    )
+    noise = ground_noise(depth_m, focal_px, camera_pitch_deg, _PUDDLE_SCALE_M, rng)
     level = float(np.quantile(noise, coverage))
     edge = 0.03
-    water = np.clip((level + edge - noise) / (2.0 * edge), 0.0, 1.0).astype(np.float32)
-
-    pitch = np.deg2rad(camera_pitch_deg)
-    xs = (np.arange(width, dtype=np.float32) - width / 2.0).reshape(1, -1)
-    ys = (np.arange(height, dtype=np.float32) - height / 2.0).reshape(-1, 1)
-    across = xs * depth_m / focal_px
-    down = ys * depth_m / focal_px
-    along = depth_m * np.float32(np.cos(pitch)) - down * np.float32(np.sin(pitch))
-
-    def tile(metres: np.ndarray) -> np.ndarray:
-        # Reflected at the tile's edges, so the pattern repeats without a seam.
-        pixels = metres * (_PUDDLE_TILE_PX / (_PUDDLE_CELLS * _PUDDLE_SCALE_M))
-        period = 2.0 * (_PUDDLE_TILE_PX - 1)
-        folded = np.mod(pixels, period)
-        return np.where(folded > period / 2.0, period - folded, folded).astype(np.float32)
-
-    offset = rng.uniform(0.0, 100.0, size=2)
-    return cv2.remap(
-        water, tile(across + offset[0]), tile(along + offset[1]), interpolation=cv2.INTER_LINEAR
-    )
+    return np.clip((level + edge - noise) / (2.0 * edge), 0.0, 1.0).astype(np.float32)
 
 
 # How close to white a pixel has to be before it is spared the darkening.
@@ -1209,34 +1164,6 @@ _FILM_GRAZING_EXPONENT = 3.5
 # Below this weight a pixel is not wet ground: it is something standing on
 # the ground, or beyond it.
 _GROUND_EDGE_WEIGHT = 0.3
-
-
-# How far the wet ground is grown towards the objects standing on it, as a
-# fraction of the diagonal, and how alike in linear RGB a pixel has to be to
-# the ground beside it to be taken for more of the same ground.
-_EDGE_FILL_REACH = 0.012
-_EDGE_FILL_TOLERANCE = 0.08
-
-
-def _fill_to_edges(wetness: np.ndarray, linear_rgb: np.ndarray) -> np.ndarray:
-    """Extend the wet ground over the unreadable band round each object.
-
-    Grown outwards by a few pixels, and only over pixels that look like the
-    ground already found next to them, so the road under a car's bumper is
-    taken in and the bumper is not.
-    """
-    diagonal = float(np.hypot(*wetness.shape))
-    reach = max(3, round(_EDGE_FILL_REACH * diagonal) | 1)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
-    grown = cv2.dilate(wetness, kernel)
-    # The colour of the ground nearby: an average over wet pixels only.
-    sigma = 0.6 * reach
-    weight = cv2.GaussianBlur(wetness, (0, 0), sigmaX=sigma)
-    ground = cv2.GaussianBlur(linear_rgb * wetness[..., None], (0, 0), sigmaX=sigma)
-    ground = ground / np.maximum(weight, 1e-4)[..., None]
-    distance = np.abs(linear_rgb - ground).max(axis=2)
-    alike = np.clip(2.0 - distance / _EDGE_FILL_TOLERANCE, 0.0, 1.0)
-    return np.maximum(wetness, grown * alike * (weight > 0.02)).astype(np.float32)
 
 
 # Tallest thing, as a fraction of the frame's height, that is given a

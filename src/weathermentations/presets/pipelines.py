@@ -326,6 +326,10 @@ def weather_state(
         else {}
     )
 
+    # Cloud changes nothing about light that comes from a pole, for snow as
+    # for rain.
+    lamplit: dict[str, Any] = {"overcast_range": (0.0, 0.0)} if night else {}
+
     def _droplets(probability: float) -> Any:
         return _at(WaterDroplets, "WaterDroplets", probability, droplet_severity, **glass)
 
@@ -356,6 +360,7 @@ def weather_state(
                         RandomSnow, "RandomSnow", 1.0, severity,
                         depth_provider=depth_provider,
                         **_ground("RandomSnow", ground_severity),
+                        **lamplit,
                     ),
                     _droplets(wet_snow),
                 ],
@@ -450,6 +455,7 @@ def _infrared_night(
                         RandomSnow, "RandomSnow", 1.0, weather_severity,
                         # Veil and settled snow only; the flakes are NightSnow's.
                         depth_provider=depth_provider, max_flakes=0,
+                        overcast_range=(0.0, 0.0),
                         **_ground("RandomSnow", ground_severity),
                     ),
                     ir,
