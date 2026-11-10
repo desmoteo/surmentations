@@ -83,3 +83,79 @@ def illuminant_radiance_linear(linear_rgb: np.ndarray, percentile: float = 97.0)
         return sky
     # Keep the scene's own colour balance; only lift the level.
     return (sky * (implied / sky_luma)).astype(np.float32)
+
+
+# Sky has to cover this much of the frame before its radiance is read off it.
+_MIN_SKY_FRACTION = 0.01
+
+# How far the veil's colour is pulled from the sky's towards neutral, and
+# which percentile of the sky's luminance sets its level.
+_VEIL_DESATURATION = 0.75
+_SKY_LEVEL_PERCENTILE = 85.0
+
+# Blur, as a fraction of the image diagonal, applied before reading the
+# brightest region of a frame with no sky in it. Wide enough to dilute a
+# street lamp to nothing while leaving a pale wall or a patch of road alone.
+_SOURCE_DILUTION_SIGMA = 0.04
+
+
+def veil_radiance_linear(linear_rgb: np.ndarray, sky: np.ndarray | None = None) -> np.ndarray:
+    """Radiance of the light scattered along a long path: the veil's colour.
+
+    Fog, and the distance veils of rain and snow, converge on the radiance
+    of the horizon sky. The obvious estimate of that — the brightest pixels
+    in the frame — is right when those pixels are sky and badly wrong when
+    they are lamps: on a real night street it came out at 17.8 times the
+    frame's median and the colour of sodium, and fog turned the whole frame
+    yellow.
+
+    So, in order:
+
+    * **If sky is in frame, read it.** ``sky`` is a mask from
+      :func:`weathermentations.utils.sky.sky_weight`. By day this is what the
+      bright percentile was reaching for; at night it is dark, and the veil
+      is dark with it. Taken at the sky's bright end and mostly desaturated.
+    * **Otherwise infer it.** A surface-only frame under an open sky is lit
+      by something about ``1 / albedo`` times brighter than it looks — the
+      same grey-world argument as :func:`illuminant_radiance_linear` — and
+      neutral in colour. That is floored by the brightest *region* of the
+      frame, read after a blur wide enough that point lights do not count.
+
+    Returns an ``(C,)`` linear-light colour.
+    """
+    channels = linear_rgb.shape[-1]
+    if sky is not None and float(sky.mean()) >= _MIN_SKY_FRACTION:
+        weight = sky[..., None]
+        colour = (linear_rgb * weight).sum(axis=(0, 1)) / weight.sum()
+        # Two corrections, because the sky in the photograph is the sky
+        # before the weather. Water droplets scatter all wavelengths alike,
+        # so the veil is nearly white where a clear sky is blue; and it is as
+        # bright as the sky's bright end — its haze and cloud — not as its
+        # zenith. Without them fog under a blue sky came out as blue smoke.
+        luma = luminance(linear_rgb)
+        level = float(np.percentile(luma[sky > 0.5], _SKY_LEVEL_PERCENTILE))
+        mean_level = max(float(luminance(colour.reshape(1, 1, -1)).ravel()[0]), 1e-6)
+        colour = colour * (level / mean_level)
+        return (colour + _VEIL_DESATURATION * (level - colour)).astype(np.float32)
+
+    height, width = linear_rgb.shape[:2]
+    # The blur is in proportion to the frame, so it is done on a small copy.
+    small = linear_rgb[:: max(1, height // 128), :: max(1, width // 128)]
+    small = np.ascontiguousarray(small, dtype=np.float32)
+    sigma = max(1.0, _SOURCE_DILUTION_SIGMA * float(np.hypot(*small.shape[:2])))
+    kernel = int(sigma * 6) | 1
+    blurred = _gaussian(small, kernel, sigma)
+    region = sky_radiance_linear(blurred, 97.0)
+
+    mean_luma = float(luminance(linear_rgb.reshape(-1, channels).mean(axis=0)[None, None, :])[0, 0])
+    implied = min(mean_luma / TYPICAL_SCENE_ALBEDO, 1.0)
+    region_luma = float(luminance(region.reshape(1, 1, -1)).ravel()[0])
+    if region_luma >= implied:
+        return region.astype(np.float32)
+    return np.full(channels, implied, dtype=np.float32)
+
+
+def _gaussian(image: np.ndarray, kernel: int, sigma: float) -> np.ndarray:
+    import cv2
+
+    return np.asarray(cv2.GaussianBlur(image, (kernel, kernel), sigmaX=sigma))

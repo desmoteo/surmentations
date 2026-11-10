@@ -40,6 +40,7 @@ from weathermentations.camera import (
     ExposureTransient,
     NightIrMode,
     RollingShutter,
+    SensorNoise,
     TemporalDenoiseArtifacts,
     WdrToneMapping,
 )
@@ -104,6 +105,7 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     "HousingOccluders": lambda k: HousingOccluders(p=1.0, **k),
     "AcFlicker": lambda k: AcFlicker(p=1.0, **k),
     "RollingShutter": lambda k: RollingShutter(p=1.0, **k),
+    "SensorNoise": lambda k: SensorNoise(p=1.0, **k),
     "ExposureTransient": lambda k: ExposureTransient(p=1.0, **k),
     "WdrToneMapping": lambda k: WdrToneMapping(p=1.0, **k),
     "TemporalDenoiseArtifacts": lambda k: TemporalDenoiseArtifacts(p=1.0, **k),

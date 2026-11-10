@@ -27,6 +27,7 @@ from weathermentations.camera import (
     ExposureTransient,
     NightIrMode,
     RollingShutter,
+    SensorNoise,
     TemporalDenoiseArtifacts,
     WdrToneMapping,
 )
@@ -120,6 +121,7 @@ def _transforms() -> dict[str, Any]:
         # its own beyond the CRF.
         "AcFlicker": AcFlicker(p=1.0),
         "RollingShutter": RollingShutter(p=1.0),
+        "SensorNoise": SensorNoise(p=1.0),
         "ExposureTransient": ExposureTransient(p=1.0),
         "WdrToneMapping": WdrToneMapping(p=1.0),
         "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts(p=1.0),

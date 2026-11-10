@@ -89,6 +89,7 @@ def test_zero_density_no_accumulation_is_identity(
         flake_count_scale=0.0,
         accumulation_probability=0.0,
         veil_beta_range=(0.0, 0.0),
+        overcast_range=(0.0, 0.0),
     )
     out = t(image=scene)["image"]
     np.testing.assert_allclose(out.astype(np.float32), scene.astype(np.float32), atol=1.0)
@@ -176,6 +177,7 @@ def test_accumulation_follows_surface_orientation(scene: np.ndarray) -> None:
         p=1.0,
         flake_count_scale=0.0,
         veil_beta_range=(0.0, 0.0),
+        overcast_range=(0.0, 0.0),
         accumulation_probability=1.0,
         accumulation_strength_range=(0.8, 0.8),
         accumulation_patchiness_range=(0.0, 0.0),
@@ -205,6 +207,7 @@ def test_accumulation_never_fires_when_probability_zero(
         flake_count_scale=0.0,
         accumulation_probability=0.0,
         veil_beta_range=(0.0, 0.0),
+        overcast_range=(0.0, 0.0),
     )
     for seed in range(10):
         t.set_random_seed(seed)

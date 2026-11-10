@@ -122,11 +122,30 @@ def test_fixed_atmospheric_light_is_respected(
     np.testing.assert_allclose(out[-1].mean(axis=0), np.array(airlight, dtype=np.float32), atol=2.0)
 
 
-def test_sky_keeps_its_gradient(provider: SharedDepthProvider, scene: np.ndarray) -> None:
-    """Uncapped, the far field collapses to exactly the airlight colour and the
-    sky goes flat. The cap must leave measurable variation up there."""
+def test_sky_keeps_its_gradient() -> None:
+    """Uncapped, the sky collapses to exactly the airlight colour and goes
+    flat. The cap must leave measurable variation up there.
+
+    The sky is found by what it looks like — featureless, at one depth,
+    reaching the top of the frame — and not by being far, so the scene here
+    has one: a smooth gradient above textured ground, at the arbitrary flat
+    depth a network gives it."""
+
+    class _SkyOverGround(DepthEstimator):
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            height, width = image.shape[:2]
+            depth = np.full((height, width), 0.4, dtype=np.float32)
+            ground = height - height // 2
+            depth[height // 2 :] = np.linspace(1.0, 0.0, ground, dtype=np.float32)[:, None]
+            return depth
+
+    rng = np.random.default_rng(0)
+    scene = np.empty((96, 96, 3), dtype=np.uint8)
+    scene[:48] = np.linspace(200, 150, 48).astype(np.uint8)[:, None, None]
+    scene[48:] = rng.integers(30, 120, size=(48, 96, 1), dtype=np.uint8)
+
     common = dict(
-        depth_provider=provider,
+        depth_provider=SharedDepthProvider(_SkyOverGround()),
         p=1.0,
         beta_range=(0.5, 0.5),
         scattering_gamma_range=(0.0, 0.0),
@@ -136,5 +155,6 @@ def test_sky_keeps_its_gradient(provider: SharedDepthProvider, scene: np.ndarray
     flat = RandomFog(sky_optical_depth_cap=10.0, **common)(image=scene)["image"]
     capped = RandomFog(sky_optical_depth_cap=1.0, **common)(image=scene)["image"]
 
-    far_rows = slice(-8, None)
-    assert capped[far_rows].astype(np.float32).std() > flat[far_rows].astype(np.float32).std()
+    sky_rows = slice(4, 40)
+    assert flat[sky_rows].astype(np.float32).std() < 0.5, "uncapped, the sky is all airlight"
+    assert capped[sky_rows].astype(np.float32).std() > 2.0

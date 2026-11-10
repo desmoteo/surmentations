@@ -70,6 +70,9 @@ def test_zero_density_and_zero_veil_beta_is_near_identity(
         max_streaks=0,
         veil_beta_range=(0.0, 0.0),
         wetness_probability=0.0,
+        # The light that comes with rain is part of the effect; off, like
+        # every other part, nothing is left.
+        overcast_range=(0.0, 0.0),
     )
     out = t(image=scene)["image"]
     np.testing.assert_allclose(out.astype(np.float32), scene.astype(np.float32), atol=1.0)
