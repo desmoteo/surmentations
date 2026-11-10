@@ -14,6 +14,7 @@ from weathermentations.camera.night_ir import NightIrMode
 from weathermentations.camera.rolling_shutter import RollingShutter
 from weathermentations.camera.sensor_noise import SensorNoise
 from weathermentations.camera.tone_mapping import WdrToneMapping
+from weathermentations.camera.transmission import TransmissionFaults
 
 __all__ = [
     "AcFlicker",
@@ -22,6 +23,7 @@ __all__ = [
     "RollingShutter",
     "SensorNoise",
     "TemporalDenoiseArtifacts",
+    "TransmissionFaults",
     "VideoCodecArtifacts",
     "WdrToneMapping",
 ]

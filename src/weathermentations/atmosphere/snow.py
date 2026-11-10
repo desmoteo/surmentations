@@ -363,9 +363,15 @@ class RandomSnow(WeatherTransform):
             centre (>1 = bright-rimmed, as most modern fast lenses render).
         cats_eye_strength: how strongly off-axis bokeh is clipped into
             lemon shapes by optical vignetting.
-        accumulation_probability: chance of rendering settled snow.
+        accumulation_probability: chance of rendering settled snow. Not
+            tied to the snowfall rate: what lies on the ground is how long
+            it has been snowing and how cold the ground was, so a blizzard
+            over bare tarmac and a flurry over deep snow are both ordinary.
+            ``GROUND_SEVERITY`` in ``presets/severity.py`` is a ladder for
+            this and the strength on their own, from bare to buried.
         accumulation_strength_range: how strongly upward-facing surfaces are
-            pushed toward the settled-snow colour.
+            pushed toward the settled-snow colour: 0.1 is a dusting the road
+            shows through, 1 a coat that hides it. The default spans both.
         camera_pitch_deg: how far the camera is tilted **down** from level,
             which is how world "up" is oriented relative to the image. The
             usual mounting for a surveillance camera is a few degrees down.
@@ -527,7 +533,7 @@ class RandomSnow(WeatherTransform):
         rim_gain_range: tuple[float, float] = (0.95, 1.45),
         cats_eye_strength_range: tuple[float, float] = (0.15, 0.7),
         accumulation_probability: float = 0.4,
-        accumulation_strength_range: tuple[float, float] = (0.35, 0.85),
+        accumulation_strength_range: tuple[float, float] = (0.1, 1.0),
         camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
         accumulation_patchiness_range: tuple[float, float] = (0.15, 0.6),
         accumulation_falloff_range: tuple[float, float] = (2.0, 5.0),

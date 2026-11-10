@@ -46,7 +46,11 @@ def main() -> None:
     cv2.imwrite(str(args.out / "00_scene.png"), cv2.cvtColor(scene, cv2.COLOR_RGB2BGR))
 
     provider = SharedDepthProvider(DepthAnythingV2Estimator())
-    names = [n for n in EFFECTS if n != "video_codec" or ffmpeg_path() is not None]
+    names = [
+        n
+        for n in EFFECTS
+        if n not in ("video_codec", "transmission_faults") or ffmpeg_path() is not None
+    ]
 
     rng = np.random.default_rng(20260914)
     records: list[dict[str, Any]] = []

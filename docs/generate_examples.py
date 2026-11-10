@@ -46,6 +46,7 @@ from weathermentations.camera import (
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
+    TransmissionFaults,
     VideoCodecArtifacts,
     WdrToneMapping,
 )
@@ -53,7 +54,7 @@ from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthAnythingV2Estimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SourceGlare, SunFlare, WaterDroplets
-from weathermentations.presets.severity import SEVERITY
+from weathermentations.presets.severity import GROUND_SEVERITY, SEVERITY
 from weathermentations.scene import CastShadows
 
 OUT_DIR = Path(__file__).parent / "examples"
@@ -86,10 +87,24 @@ EFFECTS: dict[str, str] = {
     "sensor_noise": "SensorNoise",
     "night_fog": "NightFog",
     "source_glare": "SourceGlare",
+    "transmission_faults": "TransmissionFaults",
+    # The ground's own ladder, under light weather that does not change
+    # along the row. See GROUND_ROWS.
+    "wet_ground": "RandomRain",
+    "snow_cover": "RandomSnow",
 }
 
+# Rows that climb `GROUND_SEVERITY` and hold the weather still, and the row
+# each one borrows its per-variant overrides from. In the `rain` and `snow`
+# rows the ground climbs with the weather, level for level, because a row has
+# one axis; these two are there to show that it does not have to.
+GROUND_ROWS: dict[str, str] = {"wet_ground": "rain", "snow_cover": "snow"}
+GROUND_ROW_WEATHER_LEVEL = 1
+# Pitch of the camera in the reference photograph, estimated by eye.
+REFERENCE_PITCH_DEG = (14.0, 22.0)
+
 # Needs the ffmpeg binary; skipped with a warning rather than crashing the run.
-_NEEDS_FFMPEG = {"video_codec"}
+_NEEDS_FFMPEG = {"video_codec", "transmission_faults"}
 
 LEVELS = sorted(SEVERITY)
 
@@ -309,9 +324,22 @@ def _build(
     a transform what it cannot read off the picture: how far the camera is
     pitched, whether it is night, how bright the sky outside the frame is.
     """
-    preset: dict[str, Any] = SEVERITY[level][EFFECTS[name]]
+    key = EFFECTS[name]
+    preset: dict[str, Any] = SEVERITY[level][key]
+    if name in GROUND_ROWS:
+        preset = {**SEVERITY[GROUND_ROW_WEATHER_LEVEL][key], **GROUND_SEVERITY[level][key]}
+    elif name in ("rain", "snow"):
+        preset = {**preset, **GROUND_SEVERITY[level][key]}
+    ground_row = name in GROUND_ROWS
+    name = GROUND_ROWS.get(name, name)
     kwargs: dict[str, Any] = {"p": 1.0, **preset}
     kwargs.update(_variant_kwargs(name, index, rng, preset))
+    if ground_row:
+        # Which pixels are level ground depends on the camera's pitch, and
+        # the rain and snow rows vary it over 0-28 degrees to show what it
+        # does to streaks. A row about the ground is told the pitch this
+        # photograph was taken at, or half its cells find half the road.
+        kwargs["camera_pitch_range_deg"] = REFERENCE_PITCH_DEG
     kwargs.update(extra or {})
 
     if name in ("water_droplets", "night_droplets"):
@@ -352,9 +380,9 @@ def _build(
         return TemporalDenoiseArtifacts(**kwargs)
     if name == "video_codec":
         return VideoCodecArtifacts(**kwargs)
-    # Settled snow is half of what the transform does, so the gallery always
-    # shows it rather than leaving it to a coin flip.
-    return RandomSnow(depth_provider=provider, accumulation_probability=1.0, **kwargs)
+    if name == "transmission_faults":
+        return TransmissionFaults(**kwargs)
+    return RandomSnow(depth_provider=provider, **kwargs)
 
 
 

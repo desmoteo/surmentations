@@ -4,9 +4,10 @@ from weathermentations.presets.pipelines import (
     surveillance_lite,
     weather_state,
 )
-from weathermentations.presets.severity import SEVERITY
+from weathermentations.presets.severity import GROUND_SEVERITY, SEVERITY
 
 __all__ = [
+    "GROUND_SEVERITY",
     "SEVERITY",
     "physical_order",
     "stage_of",

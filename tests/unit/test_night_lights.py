@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere.night_fog import NightFog
+from weathermentations.atmosphere.rain import RandomRain, _apply_ground_wetness, _lamp_light
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import recording
@@ -151,7 +152,7 @@ def _fog(image: np.ndarray, visibility: float, **kwargs: object) -> np.ndarray:
 
 def test_night_fog_glows_round_the_lamp_and_dims_its_core() -> None:
     """What a daylight veil cannot do: the light the fog takes from a lamp
-    comes back around it, and nowhere else."""
+    comes back around it, and the fog is brightest where the lamp is."""
     image = _night()
     out = _fog(image, 40.0)
 
@@ -159,32 +160,57 @@ def test_night_fog_glows_round_the_lamp_and_dims_its_core() -> None:
     halo = _ring(out, LAMP, 8, 24).mean() - _ring(image, LAMP, 8, 24).mean()
     assert halo > 6.0, f"no glow round the lamp: +{halo:.2f} levels"
     corner = out[-30:, -30:].astype(np.float32).mean()
-    assert corner < 12.0 + 3.0, "fog far from any light must stay dark"
+    beside = _ring(out, LAMP, 30, 50).mean()
+    assert beside > corner + 8.0, "fog is lit by the lamp, so it must fade away from it"
+    assert corner < 30.0, "fog far from any light must stay dark"
 
 
-def test_thicker_fog_spreads_the_glow_further() -> None:
+def test_night_fog_is_a_veil_and_not_a_blur() -> None:
+    """The failure this replaced: with a halo and no veil, fog was a dimmed
+    frame plus a blurred copy of it. Real fog lifts the blacks and leaves
+    edges where they were, so a sharp dark edge in a lit scene must come out
+    paler on its dark side and no softer."""
+    image = np.full((SIZE, SIZE, 3), 90, dtype=np.uint8)
+    image[:, SIZE // 2 :] = 8
+    out = _fog(image, 300.0).astype(np.float32).mean(axis=2)
+
+    row = out[SIZE // 2]
+    edge = SIZE // 2 - 1
+    assert row[edge + 20] > 8.0 + 15.0, "the dark side was not veiled"
+    step = np.abs(np.diff(row))
+    beside = np.concatenate([step[edge - 4 : edge], step[edge + 1 : edge + 5]])
+    assert step[edge] > 8.0 * beside.max(), "the edge was smeared over its neighbours"
+    assert row[edge + 20] > row[-10], "the veil is brightest next to the light"
+
+
+def test_thicker_fog_moves_a_lamp_s_light_from_its_core_to_its_halo() -> None:
     image = _night()
-    thin, thick = _fog(image, 400.0), _fog(image, 30.0)
 
-    def spread(out: np.ndarray) -> float:
-        gain = np.clip(out.astype(np.float32).mean(axis=2) - 12.0, 0.0, None)
-        yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-        distance = np.hypot(xx - LAMP[0], yy - LAMP[1])
-        return float((gain * distance).sum() / gain.sum())
+    def halo_to_core(visibility: float) -> float:
+        out = _fog(image, visibility).astype(np.float32)
+        veil = out[-30:, -30:].mean()
+        return float((_ring(out, LAMP, 8, 24).mean() - veil) / out[LAMP[1], LAMP[0]].mean())
 
-    assert spread(thick) > 1.5 * spread(thin)
+    assert halo_to_core(30.0) > 3.0 * halo_to_core(400.0)
 
 
-def test_night_fog_adds_no_light_of_its_own() -> None:
-    """With the illuminator off, all the light in the frame was already
-    there, and the total can only fall. (For lamps the sensor did not clip:
-    a clipped one is counted as brighter than its recorded value, which is
-    the point of the over-range and not a creation of light.)"""
-    image = _night(lamps=((60, 80), (170, 140)), peak=225)
-    out = _fog(image, 60.0)
-    assert float(srgb_to_linear(out).sum()) <= float(srgb_to_linear(image).sum()) * 1.02
+def test_night_fog_is_lit_by_the_scene_s_own_light() -> None:
+    """The veil's brightness and colour come from the light in the frame. A
+    black frame has none and stays black; a warm lamp makes warm fog; and a
+    scene twice as bright has fog twice as bright, not fog of a fixed grey."""
     black = np.zeros((SIZE, SIZE, 3), dtype=np.uint8)
     assert int(_fog(black, 60.0).max()) == 0
+
+    beside = _ring(_fog(_night(), 60.0), LAMP, 30, 50).mean(axis=0)
+    assert beside[0] > beside[2] + 3.0, "fog round a warm lamp came out neutral"
+
+    def veil(level: int) -> float:
+        image = np.full((SIZE, SIZE, 3), level, dtype=np.uint8)
+        gain = srgb_to_linear(_fog(image, 60.0)).mean() - srgb_to_linear(image).mean()
+        return float(gain)
+
+    dim, bright = veil(40), veil(57)  # sRGB 57 is twice the light of sRGB 40
+    assert bright == pytest.approx(2.0 * dim, rel=0.15)
 
 
 def test_the_illuminator_raises_a_wall_of_light_in_the_fog() -> None:
@@ -195,7 +221,7 @@ def test_the_illuminator_raises_a_wall_of_light_in_the_fog() -> None:
     on = _fog(dark, 50.0, illuminator_backscatter_range=(0.2, 0.2), beam_falloff_range=(1.5, 1.5))
     on = on.astype(np.float32)
 
-    assert off.max() <= 13.0
+    assert off.max() <= 22.0, "lamp-lit fog over a dim frame is dim"
     centre, edge = on[100:140, 100:140].mean(), on[:20, :20].mean()
     assert centre > 60.0, "the wall should cost the frame its blacks"
     assert centre > edge > off.mean(), "brightest on the beam's axis, present across it"
@@ -210,3 +236,74 @@ def test_night_fog_visibility_is_recorded() -> None:
         transform(image=_night())
     assert log[0]["drew"]["visibility_m"] == pytest.approx(80.0)
     assert log[0]["drew"]["beta"] == pytest.approx(3.912 / 80.0, rel=1e-3)
+
+
+# --------------------------------------------------------------------- rain
+
+
+def _added_by_rain(lamp_glint: float) -> tuple[float, float]:
+    """Mean light rain adds beside the lamp and in the far corner, in levels."""
+    size = 480
+    lamp = (120, 160)
+    image = np.full((size, size, 3), 12, dtype=np.uint8)
+    cv2.circle(image, lamp, 6, (255, 235, 190), -1)
+    transform = RandomRain(
+        depth_provider=_provider(),
+        p=1.0,
+        rain_rate_range_mm_h=(100.0, 100.0),
+        scene_illuminance_range_lux=(50.0, 50.0),
+        veil_beta_range=(0.0, 0.0),
+        wetness_probability=0.0,
+        overcast_range=(0.0, 0.0),
+        lamp_glint_range=(lamp_glint, lamp_glint),
+    )
+    added = np.zeros((size, size), dtype=np.float32)
+    for seed in range(6):
+        transform.set_random_seed(seed)
+        added += (transform(image=image)["image"].astype(np.float32) - image).mean(axis=2)
+    added /= 6.0
+    yy, xx = np.mgrid[0:size, 0:size]
+    distance = np.hypot(xx - lamp[0], yy - lamp[1])
+    return float(added[(distance > 10) & (distance < 40)].mean()), float(added[-120:, -120:].mean())
+
+
+def test_night_rain_shows_round_the_lamps_and_nowhere_else() -> None:
+    """Rain at night is seen where a lamp lights it. Lit by the frame's
+    average, as by day, it is either invisible everywhere or — when the
+    average is read off the lamps — a grey hatching over a black sky."""
+    beside, far = _added_by_rain(lamp_glint=8.0)
+    assert beside > 8.0, f"no streaks lit beside the lamp: +{beside:.2f} levels"
+    assert far < 1.0, f"streaks lit in the dark, far from any lamp: +{far:.2f} levels"
+
+    beside_by_day_model, _ = _added_by_rain(lamp_glint=0.0)
+    assert beside > 10.0 * max(beside_by_day_model, 0.1)
+
+
+def test_lamp_light_on_rain_is_local_and_takes_the_lamp_s_colour() -> None:
+    image = _night(lamps=((60, 80),), radius=5)
+    light = _lamp_light(srgb_to_linear(image))
+    at_lamp, far_away = light[80, 60], light[-1, -1]
+    assert at_lamp.max() > 0.5 and far_away.max() < 1e-3
+    assert at_lamp[0] > at_lamp[2], "a warm lamp lit the rain blue-white"
+
+    unlit = np.full((SIZE, SIZE, 3), 40, dtype=np.uint8)
+    assert float(_lamp_light(srgb_to_linear(unlit)).max()) == 0.0
+
+
+def test_a_wet_road_reflects_a_lamp_at_more_than_its_clipped_value() -> None:
+    """Two percent of a clipped pixel is nothing, and a real wet street is
+    striped with the lamps' reflections: the lamp was far brighter than the
+    sensor could record, and the reflection is a share of that."""
+    image = _night(lamps=((120, 60),), radius=5)
+    linear = srgb_to_linear(image)
+    wet = np.zeros((SIZE, SIZE), dtype=np.float32)
+    wet[SIZE // 2 :] = 1.0
+
+    def reflection(lamp_gain: float) -> float:
+        out = _apply_ground_wetness(
+            linear, wet, darkening=0.5, horizon_px=SIZE / 2.0, focal_px=200.0, lamp_gain=lamp_gain
+        )
+        mirrored_row = SIZE - 60
+        return float(out[mirrored_row - 6 : mirrored_row + 6, 114:126].mean())
+
+    assert reflection(8.0) > 3.0 * reflection(1.0)

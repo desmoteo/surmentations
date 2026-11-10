@@ -59,6 +59,7 @@ from weathermentations.camera import (  # noqa: E402
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
+    TransmissionFaults,
     VideoCodecArtifacts,
     WdrToneMapping,
 )
@@ -88,6 +89,7 @@ DEPTH_FREE = (
     "wdr_tone_mapping",
     "denoise_artifacts",
     "video_codec",
+    "transmission_faults",
     "night_rain",
     "night_snow",
 )
@@ -131,6 +133,7 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
     # here and the one whose cost is least about this library.
     if ffmpeg_path() is not None:
         transforms["video_codec"] = VideoCodecArtifacts(p=1.0)
+        transforms["transmission_faults"] = TransmissionFaults(p=1.0)
     if depth_provider is not None:
         transforms |= {
             "fog": RandomFog(depth_provider=depth_provider, p=1.0),

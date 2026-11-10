@@ -42,6 +42,7 @@ from weathermentations.camera import (
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
+    TransmissionFaults,
     VideoCodecArtifacts,
     WdrToneMapping,
 )
@@ -86,9 +87,12 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "WdrToneMapping": lambda: WdrToneMapping(p=1.0),
     "TemporalDenoiseArtifacts": lambda: TemporalDenoiseArtifacts(p=1.0),
     "VideoCodecArtifacts": lambda: VideoCodecArtifacts(p=1.0),
+    "TransmissionFaults": lambda: TransmissionFaults(p=1.0),
 }
 ALL = [
-    pytest.param(name, marks=_needs_ffmpeg) if name == "VideoCodecArtifacts" else name
+    pytest.param(name, marks=_needs_ffmpeg)
+    if name in ("VideoCodecArtifacts", "TransmissionFaults")
+    else name
     for name in BUILDERS
 ]
 # Every effect that models light. `RollingShutter` only moves pixels, so it is

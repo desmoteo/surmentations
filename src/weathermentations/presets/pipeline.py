@@ -63,6 +63,8 @@ _STAGE_ORDER: dict[str, int] = {
     "TemporalDenoiseArtifacts": 9,
     # Transmission: last, because it acts on the finished picture.
     "VideoCodecArtifacts": 10,
+    # What the link then loses of the encoded stream.
+    "TransmissionFaults": 11,
 }
 
 # Anything unknown sorts here — after the optics, before the ISP. A neutral
