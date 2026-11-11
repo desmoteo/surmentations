@@ -5,7 +5,7 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 out=${TMPDIR:-/tmp}/wm_hashes
 cc=${CC:-cc}
-flags="-O3 -std=c11 -ffp-contract=off -fno-math-errno -fno-trapping-math -fno-thread-jumps -I$here/.."
+flags="-O3 -std=c11 -ffp-contract=off -fno-math-errno -fno-trapping-math -fno-thread-jumps -funroll-loops -I$here/.."
 build() { # tier, extra flags
     $cc $flags $2 -DWM_TIER="$1" -DWM_TABLE="wm_table_$1" \
         "$here/../wm_kernels.c" "$here/wm_hashes.c" -lm -o "$out" && "$out"
