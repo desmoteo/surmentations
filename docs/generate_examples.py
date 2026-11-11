@@ -399,6 +399,7 @@ NEEDS_LAMPS = ("night_fog", "source_glare")
 
 
 def _lamp_scene(max_dim: int = 640) -> np.ndarray:
+    """The night street the lamp-lit effects are shown over, as RGB, at most ``max_dim`` across."""
     image = cv2.imread(str(LAMP_SCENE))
     if image is None:
         raise FileNotFoundError(f"Could not read {LAMP_SCENE}")
@@ -449,6 +450,11 @@ def _render_representative(
 
 
 def main() -> None:
+    """Render the severity gallery: every effect at five levels over the reference photograph.
+
+    Each cell is the median of several draws by how much it changed the
+    frame, so that it shows a typical draw and not the strongest.
+    """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     scene = _base_scene()
     cv2.imwrite(str(OUT_DIR / "00_base_scene.png"), cv2.cvtColor(scene, cv2.COLOR_RGB2BGR))

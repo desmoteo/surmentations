@@ -137,6 +137,11 @@ def ground_noise(
 
     def tile(metres: np.ndarray) -> np.ndarray:
         # Reflected at the tile's edges, so the pattern repeats without a seam.
+        """Ground coordinates in metres as coordinates in the noise tile, folded into it.
+
+        The tile is reflected at its edges, so the pattern repeats without a
+        seam. Fast mode folds with a floor where exact mode takes a remainder.
+        """
         pixels = metres * (_TILE_PX / (_TILE_CELLS * scale_m))
         period = 2.0 * (_TILE_PX - 1)
         if mode.fast():

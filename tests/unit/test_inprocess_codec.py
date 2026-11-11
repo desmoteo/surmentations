@@ -36,12 +36,14 @@ requires_binary = pytest.mark.skipif(not HAS_BINARY, reason="needs the ffmpeg bi
 
 @pytest.fixture(autouse=True)
 def _restore_mode():
+    """Restore the fast or exact mode a test changed."""
     before = mode.fast()
     yield
     mode.set_fast(before)
 
 
 def _scene(height: int = 144, width: int = 192, seed: int = 0) -> np.ndarray:
+    """Blocks with edges between them and noise: content a codec has work to do on."""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:height, 0:width]
     blocks = ((xx // 24) * 61 + (yy // 18) * 89) % 180
@@ -50,6 +52,7 @@ def _scene(height: int = 144, width: int = 192, seed: int = 0) -> np.ndarray:
 
 
 def _without_pyav(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make PyAV look absent for the rest of the test."""
     monkeypatch.setattr(_inprocess, "has_encoder", lambda encoder: False)
     monkeypatch.setattr(_inprocess, "available", lambda: False)
 

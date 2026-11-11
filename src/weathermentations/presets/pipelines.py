@@ -337,6 +337,7 @@ def weather_state(
     lamplit: dict[str, Any] = {"overcast_range": (0.0, 0.0)} if night else {}
 
     def _droplets(probability: float) -> Any:
+        """``WaterDroplets`` at ``probability``, at this pipeline's severity and glass."""
         return _at(WaterDroplets, "WaterDroplets", probability, droplet_severity, **glass)
 
     return A.OneOf(
@@ -432,6 +433,7 @@ def _infrared_night(
     ir = _at(NightIrMode, "NightIrMode", 1.0, severity, depth_provider=depth_provider)
 
     def _with(*before: Any) -> list[Any]:
+        """The stages given, followed by the camera stages of an infrared night."""
         return [*before, *_stream(lit_by_mains=True, infrared=True, severity=severity, **tail)]
 
     def _droplets(probability: float) -> Any:
@@ -439,6 +441,7 @@ def _infrared_night(
         # from the lamp, and the iris is wide open. Both are properties of
         # this lighting state, not draws: a wet dome under its own
         # illuminator glows, and by day it cannot.
+        """``WaterDroplets`` lit by the infrared ring, with the iris wide open, as at night."""
         return _at(
             WaterDroplets, "WaterDroplets", probability, severity,
             illuminator_glow_range=_IR_RING_GLOW,

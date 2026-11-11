@@ -121,6 +121,7 @@ def test_runs_after_the_infrared_conversion() -> None:
 
 
 def stage_of_night_ir() -> int:
+    """The pipeline stage ``NightIrMode`` belongs to."""
     from weathermentations.camera import NightIrMode
 
     return stage_of(NightIrMode)

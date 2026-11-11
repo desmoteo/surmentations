@@ -451,6 +451,7 @@ class _RunnerBody:
         gain: np.ndarray,
         cap: float,
     ) -> None:
+        """Hold a running drop's outline row by row; see the class docstring."""
         self.top = top
         self.centre = centre
         self.left = left
@@ -712,6 +713,7 @@ class _DropOptics:
         reflect: np.ndarray,
         glint: np.ndarray,
     ) -> None:
+        """Hold the optics of the wet pixels; see the class docstring."""
         self.wet = wet
         self.alpha = alpha
         self.map_x = map_x
@@ -739,6 +741,7 @@ def _drop_optics(
     cols = level.shape[1]
 
     def _at_wet(field: np.ndarray, dx: int, dy: int) -> np.ndarray:
+        """A field's smoothed derivative along x or y, at the wet pixels only."""
         gradient = cv2.Sobel(field, cv2.CV_32F, dx, dy, ksize=3, scale=0.125)
         return np.asarray(gradient.ravel()[wet])
 
@@ -783,11 +786,17 @@ def _drop_optics(
     glint = np.exp((aligned - 1.0) * (2.0 / _GLINT_ANGULAR_RADIUS_RAD**2)) * (1.0 - reflect)
 
     def _column(values: np.ndarray) -> np.ndarray:
+        """Values as a contiguous float32 column, the shape the per-pixel arrays are kept in."""
         return np.ascontiguousarray(values, dtype=np.float32).reshape(-1, 1)
 
     def _lookup(values: np.ndarray) -> np.ndarray:
         # cv2.remap takes its coordinates as an image and refuses one with
         # more than 32767 rows, so the list is folded into a block.
+        """Values folded into a block of rows, for ``cv2.remap`` to take as coordinates.
+
+        It refuses a map with more than 32767 rows, which a list of every
+        wet pixel would be.
+        """
         padded = np.zeros(-(-wet.size // _REMAP_BLOCK_WIDTH) * _REMAP_BLOCK_WIDTH, np.float32)
         padded[: wet.size] = values
         return padded.reshape(-1, _REMAP_BLOCK_WIDTH)
@@ -798,6 +807,10 @@ def _drop_optics(
 
 
 def _disc_kernel(diameter_px: float) -> np.ndarray:
+    """A uniform disc ``diameter_px`` across, with an antialiased rim, summing to 1.
+
+    The image of the aperture: what an out-of-focus point is.
+    """
     radius = diameter_px / 2.0
     half = int(math.ceil(radius))
     axis = np.arange(-half, half + 1, dtype=np.float32)
@@ -1022,6 +1035,9 @@ class WaterDroplets(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``WaterDroplets`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         droplet_count_range: Annotated[
             tuple[int, int],
             AfterValidator(nondecreasing),
@@ -1157,6 +1173,7 @@ class WaterDroplets(WeatherTransform):
         min_gap_ratio: float = 0.12,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.droplet_count_range = droplet_count_range
         self.droplet_radius_range = droplet_radius_range
@@ -1185,6 +1202,14 @@ class WaterDroplets(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the water on the glass and work out what it does to each ray.
+
+        Runners first, whose tracks clear what they pass; then beads placed
+        apart, with outlines that sag under gravity and merge where they
+        touch; the condensation film. Returns the ``optics`` of the water
+        surface (refraction maps, reflection, glint, coverage), which depend
+        only on the water and the lens, and the camera's focus and aperture.
+        """
         height, width = params["shape"][:2]
         diagonal = float(np.hypot(width, height))
         rng = self.random_generator
@@ -1250,6 +1275,7 @@ class WaterDroplets(WeatherTransform):
             runners.append((cx, cy, radius, elongation, head_y, tail_px, path))
 
         def _swept(x: float, y: float) -> bool:
+            """Whether ``(x, y)`` lies on a track a runner has already wiped clear."""
             column, row = int(round(x)), int(round(y))
             return 0 <= row < height and 0 <= column < width and wipe[row, column] > 0.5
 
@@ -1263,6 +1289,7 @@ class WaterDroplets(WeatherTransform):
         n_occupied = 0
 
         def _occupy(x: float, y: float, r: float) -> None:
+            """Reserve a circle of radius ``r`` at ``(x, y)`` for a drop placed there."""
             nonlocal occupied, n_occupied
             if n_occupied == len(occupied):
                 occupied = np.concatenate([occupied, np.empty_like(occupied)])
@@ -1270,6 +1297,11 @@ class WaterDroplets(WeatherTransform):
             n_occupied += 1
 
         def _fits(x: float, y: float, r: float, gap: float, skip: int = -1) -> bool:
+            """Whether a drop of radius ``r`` at ``(x, y)`` clears every reserved circle by ``gap``.
+
+            ``skip`` names a reservation not to test against: the drop's own,
+            when it is being moved.
+            """
             placed = occupied[:n_occupied]
             reach = (placed[:, 2] + r) * (1.0 + gap)
             clash = (placed[:, 0] - x) ** 2 + (placed[:, 1] - y) ** 2 < reach * reach
@@ -1291,6 +1323,7 @@ class WaterDroplets(WeatherTransform):
         capillary_px = capillary_length_mm() / mm_per_px
 
         def _shape() -> tuple[float, float, float, float]:
+            """Draw a drop's cap height, irregularity and its outline's two angles."""
             return (
                 self.py_random.uniform(*self.cap_height_ratio_range),
                 self.py_random.uniform(*self.shape_irregularity_range),
@@ -1304,6 +1337,11 @@ class WaterDroplets(WeatherTransform):
             # Most of the drops on a pane are a few pixels across, where an
             # outline has nothing to show; drawing one for each of them was a
             # fifth of this method's time.
+            """A drop's egg and sag terms and outline harmonics; a round outline for a small drop.
+
+            Most drops are a few pixels across, where an outline has nothing
+            to show.
+            """
             if radius < _MIN_RADIUS_FOR_WOBBLE_PX:
                 return 0.0, 0.0, round_outline
             return _drop_outline(rng, irregularity, deformation)
@@ -1441,6 +1479,13 @@ class WaterDroplets(WeatherTransform):
         glow: float,
         **params: Any,
     ) -> np.ndarray:
+        """Render the scene through the water: the film's scatter, then the drops over it.
+
+        In linear light. Each drop shows the scene refracted through it, from
+        a softened copy, plus what it reflects of the housing and the source;
+        the drops are blurred by the aperture when the camera focuses on the
+        scene.
+        """
         has_film = condensation is not None and float(condensation.max()) > 1e-3
         # The film's light and how much of it each pixel takes, and the drops
         # as a premultiplied layer: laid over the scene at the end, together.

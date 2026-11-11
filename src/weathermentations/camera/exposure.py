@@ -71,6 +71,9 @@ class ExposureTransient(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``ExposureTransient`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         exposure_error_stops_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -100,6 +103,7 @@ class ExposureTransient(WeatherTransform):
         tint_error_range: tuple[float, float] = (-0.08, 0.08),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.exposure_error_stops_range = exposure_error_stops_range
         self.assumed_temperature_range_k = assumed_temperature_range_k
@@ -109,6 +113,12 @@ class ExposureTransient(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the exposure error and the white-balance error the camera is caught with.
+
+        Returns the overall ``exposure_gain`` and the ``channel_gain``: the
+        ratio between the illuminant the white balance assumed and the one
+        that was really there.
+        """
         del data
         assumed = self.py_random.uniform(*self.assumed_temperature_range_k)
         actual = self.py_random.uniform(*self.actual_temperature_range_k)
@@ -139,6 +149,7 @@ class ExposureTransient(WeatherTransform):
         channel_gain: np.ndarray,
         **params: Any,
     ) -> np.ndarray:
+        """Scale the frame in linear light by both gains; encoding it back clips past white."""
         linear, scale, is_integer = to_linear_unit(img)
         linear = linear * exposure_gain * channel_gain[None, None, :]
         return from_linear_unit(linear, scale, is_integer, img.dtype)

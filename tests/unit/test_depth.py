@@ -1,3 +1,8 @@
+"""Depth: the estimator's contract, metric scaling, horizon recovery, and the shared provider.
+
+Tests that need the real network need CUDA and skip without it.
+"""
+
 from unittest.mock import patch
 
 import numpy as np
@@ -27,9 +32,11 @@ class _FakeEstimator(DepthEstimator):
     """Counts calls so the provider's caching behavior can be verified without a GPU."""
 
     def __init__(self) -> None:
+        """Start counting calls at zero."""
         self.call_count = 0
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """A flat depth equal to the number of calls so far: a new value each time it runs."""
         self.call_count += 1
         return np.full(image.shape[:2], float(self.call_count), dtype=np.float32)
 

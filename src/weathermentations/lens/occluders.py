@@ -138,6 +138,9 @@ class HousingOccluders(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``HousingOccluders`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         insect_count_range: Annotated[
             tuple[int, int],
             AfterValidator(nondecreasing),
@@ -185,6 +188,7 @@ class HousingOccluders(WeatherTransform):
         glow_range: tuple[float, float] = (0.0, 1.6),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.insect_count_range = insect_count_range
         self.insect_size_range = insect_size_range
@@ -197,6 +201,12 @@ class HousingOccluders(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw what is on or in front of the housing, defocused as the lens sees it.
+
+        Webs anchored near a corner or the illuminator ring, insects anywhere.
+        Returns the blurred ``occluder`` mask, its ``opacity``, and its
+        ``glow`` when the illuminator behind it is on.
+        """
         del data
         height, width = params["shape"][:2]
         diagonal = float(np.hypot(width, height))
@@ -261,6 +271,7 @@ class HousingOccluders(WeatherTransform):
         glow: float,
         **params: Any,
     ) -> np.ndarray:
+        """Block the scene behind the occluder, and add its glow where the illuminator is on."""
         if float(occluder.max()) < 1e-3:
             return img
 

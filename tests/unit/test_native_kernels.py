@@ -152,6 +152,7 @@ def _flakes(count: int, size: tuple[int, int], largest: float, seed: int) -> dic
 
 
 def _both_ways(size, flakes, **optics) -> tuple[np.ndarray, np.ndarray]:
+    """The same flake field rendered with the kernel and with numpy."""
     native = np.zeros(size, dtype=np.float32)
     render_flake_field(native, flakes, **optics)
     reference = np.zeros(size, dtype=np.float32)
@@ -278,6 +279,7 @@ def _streaks(count: int, size: int, seed: int, widths: tuple[int, int], blur: fl
 
 
 def _layers(size: int, streaks: dict) -> tuple[np.ndarray, np.ndarray]:
+    """The same streak layer rendered with the kernel and with numpy."""
     native = rain_module.render_streak_layer(size, size, streaks)
     with _native.disabled():
         reference = rain_module.render_streak_layer(size, size, streaks)
@@ -455,6 +457,7 @@ def _noisy_blocks(height: int, width: int, seed: int) -> np.ndarray:
 
 
 def _opencv_filter(image: np.ndarray, sigma_s: float, sigma_r: float) -> np.ndarray:
+    """OpenCV's own edge-preserving filter, the reference the kernel is held to."""
     return cv2.edgePreservingFilter(
         image, flags=cv2.RECURS_FILTER, sigma_s=sigma_s, sigma_r=sigma_r
     )
@@ -548,6 +551,8 @@ def test_fast_mode_denoising_depends_on_the_kernels_by_a_level_or_two() -> None:
 
 
 def _dirt_inputs(seed: int, pixels: tuple[int, int] = (97, 131)) -> dict[str, np.ndarray]:
+    """Random inputs for the dirt, veil and overcast kernels, some past the ranges the clips allow.
+    """
     rng = np.random.default_rng(seed)
     f32 = np.float32
     return {
@@ -690,6 +695,7 @@ def test_the_overcast_kernel_is_the_numpy_it_stands_in_for(tier: str, with_sky: 
 
 
 def _grow_inputs(seed: int, shape: tuple[int, int] = (83, 117)) -> dict[str, np.ndarray]:
+    """Random inputs for the grown-mask kernel, with a fifth of the pixels nowhere near the mask."""
     rng = np.random.default_rng(seed)
     f32 = np.float32
     weight = rng.uniform(0.0, 1.0, shape).astype(f32)
@@ -762,6 +768,7 @@ def test_a_mask_grown_by_colour_declines_what_it_was_not_written_for() -> None:
 
 
 def _placement(seed: int) -> list[tuple[float, float, float, float]]:
+    """Drop positions drawn by the placement routine from one seed."""
     rng = np.random.default_rng(seed)
     return droplets_module._sample_positions(
         rng, 400, 320, 240, (0.8, 14.0), 2.2, 9.0, (1.5, 4.0), 0.15
@@ -779,6 +786,7 @@ def test_drops_are_placed_where_the_numpy_loop_places_them() -> None:
 
 
 def _lobes(seed: int, count: int = 80) -> tuple[np.ndarray, np.ndarray]:
+    """``count`` drop lobes with outline harmonics, some off the frame, many overlapping."""
     rng = np.random.default_rng(seed)
     lobes = np.column_stack(
         [
@@ -904,6 +912,7 @@ def test_every_tier_gives_the_same_bytes() -> None:
 
 
 def _water_surface_fast(seed: int) -> np.ndarray:
+    """The water surface of :func:`_lobes` drawn by the kernel, level and thickness stacked."""
     lobes, harmonics = _lobes(seed)
     level = np.zeros((240, 320), dtype=np.float32)
     weighted = np.zeros((240, 320), dtype=np.float32)
@@ -923,6 +932,7 @@ def test_an_unknown_tier_is_refused() -> None:
 
 
 def _night_street() -> np.ndarray:
+    """A dark noisy street with a brighter road and one saturated lamp."""
     rng = np.random.default_rng(0)
     image = rng.integers(5, 40, (240, 320, 3), dtype=np.uint8)
     image[150:] += 25

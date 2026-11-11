@@ -17,6 +17,7 @@ from weathermentations.lens import SunFlare
 
 
 def _image() -> np.ndarray:
+    """A flat grey frame."""
     return np.full((64, 96, 3), 120, dtype=np.uint8)
 
 

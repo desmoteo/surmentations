@@ -336,6 +336,9 @@ class DirtSoil(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``DirtSoil`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         smudge_count_range: Annotated[
             tuple[int, int],
             AfterValidator(nondecreasing),
@@ -415,6 +418,11 @@ class DirtSoil(WeatherTransform):
         deposits: tuple[str, ...] | None = None,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` if ``deposits`` names a deposit that is not in
+        :data:`DEPOSIT_ALBEDOS`, or names none.
+        """
         super().__init__(p=p)
         self.smudge_count_range = smudge_count_range
         self.smudge_size_range = smudge_size_range
@@ -442,6 +450,13 @@ class DirtSoil(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw what is on the glass: where each deposit is, what it is, and how it scatters.
+
+        Returns the ``dirt_mask`` and the ``deposit_albedo`` field, built from
+        independently drawn smudges, wipe marks and water spots, defocused and
+        normalised to the drawn coverage (at a quarter of the size in fast
+        mode), and the veil, highlight, scatter and absorption settings.
+        """
         height, width = params["shape"][:2]
         diagonal = float(np.hypot(width, height))
         rng = self.random_generator
@@ -581,6 +596,12 @@ class DirtSoil(WeatherTransform):
         ambient_light: float = 1.0,
         **params: Any,
     ) -> np.ndarray:
+        """Lerp the frame towards the light the deposit scatters in, then block where it is caked.
+
+        The scattered light is a heavy-tailed blur of the scene with its
+        highlights weighted up, plus the surroundings outside the frame,
+        times the deposit's albedo: energy-conserving by construction.
+        """
         linear, scale, is_integer = to_linear_unit(img)
         mask = dirt_mask[..., None]
 

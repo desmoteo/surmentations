@@ -35,6 +35,7 @@ class _RampDepth(DepthEstimator):
     """Depth increasing with row: near at the top, far at the bottom."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth rising from 0.05 at the top row to 1 at the bottom."""
         height, width = image.shape[:2]
         rows = np.linspace(0.05, 1.0, height, dtype=np.float32).reshape(height, 1)
         return np.broadcast_to(rows, (height, width)).astype(np.float32)
@@ -42,6 +43,7 @@ class _RampDepth(DepthEstimator):
 
 @pytest.fixture
 def scene() -> np.ndarray:
+    """A muted scene with one saturated red block and a little noise, as a fixture."""
     rng = np.random.default_rng(0)
     img = np.zeros((240, 320, 3), dtype=np.uint8)
     img[:, :] = (110, 120, 105)
@@ -483,6 +485,7 @@ def test_flicker_band_count_follows_readout_time() -> None:
 
 
 def _annotated_scene() -> tuple[np.ndarray, np.ndarray, list[tuple[int, int, int, int]]]:
+    """A scene with three boxes drawn in it, its mask, and the boxes, for geometric targets."""
     image = np.zeros((240, 320, 3), dtype=np.uint8)
     mask = np.zeros((240, 320), dtype=np.uint8)
     boxes = [(60, 40, 120, 200), (200, 100, 260, 230), (10, 5, 40, 30)]

@@ -653,6 +653,17 @@ python docs/generate_examples.py          # the severity gallery
 python docs/generate_scene_examples.py    # every effect over sample_scenes/
 ```
 
+The code reference is a site generated from the source: Python by autodoc,
+the C kernels by Hawkmoth through libclang, the shell scripts and CI
+workflows from their header comments. Every module, class, function and C
+declaration is documented in the source, and `tests/unit/test_documentation.py`
+fails if one is not:
+
+```bash
+pip install -e ".[docs]"
+sphinx-build -W --keep-going -b html docs/site docs/site/_build/html
+```
+
 Two test files are worth knowing about because they guard properties rather
 than pixels: `test_severity_ladders.py` checks every severity ladder is
 monotonic and that level 1 is visible, and `test_gallery_configs.py` renders

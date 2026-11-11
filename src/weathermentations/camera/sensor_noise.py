@@ -156,6 +156,9 @@ class SensorNoise(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``SensorNoise`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         gain_range_db: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -179,6 +182,7 @@ class SensorNoise(WeatherTransform):
         read_noise_range_e: tuple[float, float] = (1.5, 5.0),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.gain_range_db = gain_range_db
         self.full_well_range_e = full_well_range_e
@@ -187,6 +191,11 @@ class SensorNoise(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the gain and the sensor it is applied to.
+
+        Returns the analogue ``gain``, the ``full_well_e`` and ``read_noise_e``
+        in electrons, and a seed for the noise.
+        """
         gain_db = self.py_random.uniform(*self.gain_range_db)
         full_well = self.py_random.uniform(*self.full_well_range_e)
         read_noise = self.py_random.uniform(*self.read_noise_range_e)
@@ -215,6 +224,7 @@ class SensorNoise(WeatherTransform):
         noise_seed: int,
         **params: Any,
     ) -> np.ndarray:
+        """Add shot and read noise drawn on the colour filter mosaic, demosaiced."""
         linear, scale, is_integer = to_linear_unit(img)
         rng = np.random.default_rng(noise_seed)
         noise = photon_transfer_noise(linear, rng, gain, full_well_e, read_noise_e)

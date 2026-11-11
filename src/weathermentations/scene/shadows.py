@@ -65,11 +65,13 @@ SHADOW_CASTERS = ("person", "vehicle", "foliage")
 
 
 def _ellipse(cx: float, cy: float, rx: float, ry: float, points: int = 20) -> np.ndarray:
+    """An ellipse centred on ``(cx, cy)`` as a polygon of ``points`` vertices."""
     theta = np.linspace(0.0, 2.0 * np.pi, points, endpoint=False)
     return np.stack([cx + rx * np.cos(theta), cy + ry * np.sin(theta)], axis=1)
 
 
 def _limb(start: tuple[float, float], end: tuple[float, float], half_width: float) -> np.ndarray:
+    """A straight limb from ``start`` to ``end``, ``2 * half_width`` wide, as a quadrilateral."""
     (x0, y0), (x1, y1) = start, end
     return np.array(
         [
@@ -117,6 +119,7 @@ def _rounded_box(half_width: float, half_length: float, points: int = 32) -> np.
 
 
 def _fill(mask: np.ndarray, polygon: np.ndarray) -> None:
+    """Fill ``polygon`` into ``mask`` with 1, antialiased."""
     cv2.fillPoly(mask, [np.round(polygon).astype(np.int32)], 1.0, lineType=cv2.LINE_AA)
 
 
@@ -253,6 +256,9 @@ class CastShadows(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``CastShadows`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         depth_provider: SharedDepthProvider
         shadow_count_range: Annotated[
             tuple[int, int],
@@ -298,6 +304,11 @@ class CastShadows(WeatherTransform):
         horizontal_fov_deg: float = 60.0,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` without a ``depth_provider``, and if ``casters``
+        names an unknown kind of caster or none.
+        """
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.shadow_count_range = shadow_count_range
@@ -318,6 +329,13 @@ class CastShadows(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw one sun and the shadows it throws onto the surfaces in view.
+
+        Every shadow is thrown the same way and stretched by the same amount.
+        Returns the ``occlusion``: the shadow shapes, softened by the
+        penumbra, on upward-facing surfaces only, and the share of the light
+        that was direct.
+        """
         scene = scene_of(data)
         height, width = params["shape"][:2]
         diagonal = float(np.hypot(width, height))
@@ -380,6 +398,7 @@ class CastShadows(WeatherTransform):
         direct_fraction: float,
         **params: Any,
     ) -> np.ndarray:
+        """Remove the direct light where the shadow falls, leaving the bluer skylight."""
         if float(occlusion.max()) < 1e-3:
             return img
 

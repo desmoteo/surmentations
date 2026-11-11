@@ -113,6 +113,7 @@ def test_a_costly_diagnostic_is_computed_only_while_recording() -> None:
     assert not calls, "nobody was recording"
 
     class _Ground(DepthEstimator):
+        """Depth rising from 0.2 at the top row to 1 at the bottom."""
         def estimate(self, image: np.ndarray) -> np.ndarray:
             rows = np.linspace(0.2, 1.0, image.shape[0], dtype=np.float32)
             return np.repeat(rows[:, None], image.shape[1], axis=1)

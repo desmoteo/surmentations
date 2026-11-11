@@ -57,8 +57,10 @@ class SourceGlare(WeatherTransform):
             set for, so useful values are a fraction of ``SunFlare``'s.
             Larger clipped regions flare more, as the square root of their
             area, within a factor of two either way.
-        ghost_count_range, halo_radius_range, aperture_blades_range,
-            streak_probability: as for ``SunFlare``.
+        ghost_count_range: as for ``SunFlare``.
+        halo_radius_range: as for ``SunFlare``.
+        aperture_blades_range: as for ``SunFlare``.
+        streak_probability: as for ``SunFlare``.
 
     Targets:
         image
@@ -68,6 +70,9 @@ class SourceGlare(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``SourceGlare`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         max_sources_range: Annotated[
             tuple[int, int],
             AfterValidator(nondecreasing),
@@ -105,6 +110,12 @@ class SourceGlare(WeatherTransform):
         streak_probability: float = 0.75,
         p: float = 0.5,
     ):
+        """Store the ranges and build the lens model it shares with ``SunFlare``.
+
+        The internal ``SunFlare`` has everything that belongs to an ageing
+        camera in sunlight switched off: the dispersion ring, sensor smear,
+        scratches, infrared leak and the window ghost.
+        """
         super().__init__(p=p)
         self.max_sources_range = max_sources_range
         self.intensity_range = intensity_range
@@ -131,6 +142,12 @@ class SourceGlare(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Find the frame's own light sources and draw a flare for each.
+
+        Returns ``flares``: for each source found, the parameters ``SunFlare``
+        draws, with its intensity set by the source's clipped area. One random
+        generator serves every flare, so a seed fixes all of them.
+        """
         linear, _scale, _is_integer = to_linear_unit(first_frame(scene_of(data)))
         sources = light_sources(linear, self.py_random.randint(*self.max_sources_range))
         base = self.py_random.uniform(*self.intensity_range)
@@ -157,6 +174,7 @@ class SourceGlare(WeatherTransform):
         return {"flares": flares}
 
     def apply(self, img: np.ndarray, flares: list[dict[str, Any]], **params: Any) -> np.ndarray:
+        """Render every flare in turn, each over the result of the last."""
         for flare in flares:
             img = self._flare.apply(img, **flare)
         return img

@@ -55,6 +55,7 @@ _EXACT_BELOW = 1 << 13
 
 
 def _srgb_to_linear_exact(image: np.ndarray) -> np.ndarray:
+    """The sRGB decoding curve, evaluated, for arrays too small for the table."""
     image = np.clip(image, 0.0, 1.0)
     return np.where(
         image <= 0.04045,
@@ -64,6 +65,7 @@ def _srgb_to_linear_exact(image: np.ndarray) -> np.ndarray:
 
 
 def _linear_to_srgb_exact(image: np.ndarray) -> np.ndarray:
+    """The sRGB encoding curve, evaluated, for arrays too small for the table."""
     image = np.clip(image, 0.0, 1.0)
     return np.where(
         image <= 0.0031308,
@@ -103,6 +105,11 @@ def _lut_index(image: np.ndarray) -> np.ndarray:
 
 
 def _through_lut(image: np.ndarray, lut: np.ndarray) -> np.ndarray:
+    """``image`` through a float32 table of :data:`TABLE_SIZE` entries over ``[0, 1]``.
+
+    By the colour kernel where it is built, by numpy where it is not; a NaN
+    is refused either way.
+    """
     out = _native.encode_f32(image, lut)
     if out is None:
         out = np.take(lut, _lut_index(image))
@@ -125,6 +132,7 @@ def through_table(image: np.ndarray, table: np.ndarray) -> np.ndarray:
 
 
 def _decode_u8(image: np.ndarray) -> np.ndarray:
+    """An 8-bit frame in linear light through the 256-entry table, by the kernel or numpy."""
     out = _native.decode_u8(image, _U8_TO_LINEAR_LUT)
     if out is None:
         # `take` is the same gather as `lut[image]`, a quarter faster.

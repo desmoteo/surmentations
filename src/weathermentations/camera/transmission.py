@@ -84,6 +84,7 @@ def split_nal_units(stream: bytes) -> list[bytes]:
 
 
 def _is_slice(unit: bytes) -> bool:
+    """Whether a NAL unit carries picture data: a slice of an ordinary picture or a keyframe."""
     return bool(unit) and (unit[0] & 0x1F) in _SLICE_TYPES
 
 
@@ -198,6 +199,7 @@ def _encode_clip(frames: np.ndarray, crf: int, slices: int) -> bytes | None:
 
 
 def _binary_encode_clip(frames: np.ndarray, crf: int, slices: int) -> bytes | None:
+    """``_encode_clip`` with the ``ffmpeg`` binary; ``None`` if there is none or it fails."""
     binary = _codec.ffmpeg_path()
     if binary is None:
         return None
@@ -234,6 +236,11 @@ def _decode_last_frame(
 def _binary_decode_last_frame(
     stream: bytes, height: int, width: int, conceal: bool = True
 ) -> np.ndarray | None:
+    """``_decode_last_frame`` with the ``ffmpeg`` binary; ``None`` if nothing decodes.
+
+    It decodes what is there and shows it, as a player does, concealing
+    losses from the previous picture when ``conceal`` is set.
+    """
     binary = _codec.ffmpeg_path()
     if binary is None:
         return None
@@ -378,6 +385,9 @@ class TransmissionFaults(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``TransmissionFaults`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         packet_loss_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -425,6 +435,11 @@ class TransmissionFaults(WeatherTransform):
         gap_passing_probability: float = 0.5,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``RuntimeError`` where there is neither the ``ffmpeg`` binary
+        nor PyAV: this transform damages and decodes a real H.264 stream.
+        """
         super().__init__(p=p)
         if not _codec.codec_available("libx264"):
             raise RuntimeError(
@@ -446,6 +461,13 @@ class TransmissionFaults(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the link and the stream: how much is lost, in what bursts, and how it is decoded.
+
+        Returns the packet ``loss`` and ``mean_burst``, the clip's ``frames``
+        since a keyframe, ``slices`` and ``crf``, the scene's motion
+        ``shift_px``, whether the decoder holds the reference, passes gaps on
+        or conceals, and the ``link_seed`` that decides which packets go.
+        """
         del data
         height, width = params["shape"][:2]
         low, high = self.packet_loss_range
@@ -492,6 +514,11 @@ class TransmissionFaults(WeatherTransform):
         link_seed: int,
         **params: Any,
     ) -> np.ndarray:
+        """Encode a short clip, drop packets from it, and decode the last frame.
+
+        The frame is padded to even dimensions for 4:2:0 chroma and cropped
+        back. If the codec fails the input is returned unchanged.
+        """
         is_integer = np.issubdtype(img.dtype, np.integer)
         rgb = img if is_integer else np.clip(img * 255.0, 0, 255).astype(np.uint8)
         height, width = rgb.shape[:2]

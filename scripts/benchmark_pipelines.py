@@ -38,6 +38,7 @@ REFERENCE = Path(__file__).resolve().parent.parent / "docs" / "examples" / "refe
 
 
 def _scene(size: int) -> np.ndarray:
+    """The reference photograph as RGB, resized to ``size`` by ``size``."""
     image = cv2.imread(str(REFERENCE))
     if image is None:  # pragma: no cover - the asset ships with the repo
         raise SystemExit(f"reference image not found at {REFERENCE}")
@@ -65,6 +66,14 @@ def _contact_sheet(frames: list[np.ndarray], columns: int) -> np.ndarray:
 def _run(
     name: str, transform: Any, scene: np.ndarray, runs: int, out: Path, seed: int
 ) -> dict[str, Any]:
+    """Render a pipeline ``runs`` times from one seed, and save and summarise what came out.
+
+    The seed is set once and left to run: reseeding before every frame
+    correlates the transforms' own probability draws. Each frame is saved
+    with what fired and how far it moved the scene, with a contact sheet of
+    all of them, and the summary gives the timing and how many effects a
+    frame carried.
+    """
     directory = out / name
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -126,6 +135,7 @@ def _run(
 
 
 def main() -> int:
+    """Parse the command line and render, time and summarise each shipped pipeline."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--runs", type=int, default=50, help="renders per pipeline")
     parser.add_argument("--size", type=int, default=512, help="square frame size")

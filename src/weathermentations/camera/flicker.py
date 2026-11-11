@@ -149,7 +149,7 @@ class AcFlicker(WeatherTransform):
             labelled "shows flicker banding". Whether a frame flickers is
             what ``p`` is for; this range decides how strongly it does.
             Widen it past the null deliberately to explore cancellation, and
-            the sinc will duly cancel: median |sinc| over 1-16 ms is 0.76 at
+            the sinc will duly cancel: median ``|sinc|`` over 1-16 ms is 0.76 at
             50 Hz and 0.66 at 60 Hz with 17-24% of draws essentially blank,
             against 0.88 and 0.82 with none and 7% below 1-8 ms.
         pulse_exponent_range: shape of the lamp's output over one flicker
@@ -172,6 +172,9 @@ class AcFlicker(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``AcFlicker`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         mains_frequency_hz: float = Field(gt=0.0, le=400.0)
         readout_time_range_s: Annotated[
             tuple[float, float],
@@ -203,6 +206,7 @@ class AcFlicker(WeatherTransform):
         modulation_depth_range: tuple[float, float] = (0.05, 0.35),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.mains_frequency_hz = mains_frequency_hz
         self.readout_time_range_s = readout_time_range_s
@@ -213,6 +217,14 @@ class AcFlicker(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the shutter, the readout and the lamps' waveform, and what banding they make.
+
+        The exposure is drawn log-uniformly, the readout uniformly. Each
+        harmonic of the flicker is box-filtered by the exposure, so it carries
+        its own sinc and cancels with the rest when the exposure is a whole
+        number of periods. Returns the band ``depth`` per harmonic, the
+        ``cycles_per_frame`` across the readout and the ``phase``.
+        """
         del data
         readout = self.py_random.uniform(*self.readout_time_range_s)
         # Log-uniform: see exposure_time_range_s. Readout time stays uniform -
@@ -261,6 +273,7 @@ class AcFlicker(WeatherTransform):
         phase: float,
         **params: Any,
     ) -> np.ndarray:
+        """Multiply each row by the flicker profile the rolling readout sampled it at."""
         if float(np.abs(harmonics).sum()) < 1e-4:
             return img
 

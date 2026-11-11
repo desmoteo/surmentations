@@ -518,6 +518,9 @@ class RandomSnow(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``RandomSnow`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         depth_provider: SharedDepthProvider
         flake_count_scale: float = Field(ge=0.0, le=20.0)
         max_flakes: int = Field(ge=0, le=200000)
@@ -662,6 +665,12 @@ class RandomSnow(WeatherTransform):
         overcast_range: tuple[float, float] = (0.7, 1.0),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring.
+
+        Raises ``ValueError`` without a ``depth_provider``: the one
+        :class:`~weathermentations.depth.provider.SharedDepthProvider` of the
+        pipeline must be passed in, so that depth is estimated once per frame.
+        """
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.flake_count_scale = flake_count_scale
@@ -693,6 +702,15 @@ class RandomSnow(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the snow for one frame: the weather, the optics, every flake, and the ground.
+
+        The number of flakes follows from the snowfall rate, the size cut-off
+        and the volume of the column in view; past the budget the width
+        threshold rises rather than the field being truncated. Returns the
+        ``flakes`` with the aperture's shape (``blades``, ``cats_eye``,
+        ``rim_gain``), the veil's transmission, and the ``settled`` snow laid
+        on level ground, kept off foliage and sky.
+        """
         scene = scene_of(data)
         height, width = params["shape"][:2]
         rng = self.random_generator
@@ -969,6 +987,12 @@ class RandomSnow(WeatherTransform):
         overcast: float = 0.0,
         **params: Any,
     ) -> np.ndarray:
+        """Relight the frame for overcast, veil it, draw the flakes, and lay the settled snow.
+
+        In linear light. Flakes take the illuminant's radiance and the veil
+        the sky's; settled snow is lit by the scene's own brightness around
+        it.
+        """
         height, width = img.shape[:2]
         frame_centre = (width / 2.0, height / 2.0)
 

@@ -595,6 +595,7 @@ def _add_compact_glow(
 def _paste_additive(
     canvas: np.ndarray, patch: np.ndarray, color: np.ndarray, cx: float, cy: float
 ) -> None:
+    """Add ``patch * color`` to ``canvas``, centred on ``(cx, cy)``, clipped to the frame."""
     size = patch.shape[0]
     half = size / 2.0
     x0, y0 = int(round(cx - half)), int(round(cy - half))
@@ -686,6 +687,9 @@ class SunFlare(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``SunFlare`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         flare_position: tuple[float, float] | None
         intensity_range: Annotated[
             tuple[float, float],
@@ -799,6 +803,7 @@ class SunFlare(WeatherTransform):
         window_ghost_offset_range: tuple[float, float] = (0.03, 0.14),
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.flare_position = flare_position
         self.intensity_range = intensity_range
@@ -826,6 +831,14 @@ class SunFlare(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the source, the lens, and every artefact the flare will have.
+
+        Ghost positions along the source-centre line, each ghost's coating
+        pair and bounce count (its tint comes from thin-film interference),
+        size, elongation and chromatic split; the starburst, the dispersion
+        ring, and the artefacts of a surveillance housing: scratches, sensor
+        smear, infrared leak and a window ghost.
+        """
         height, width = params["shape"][:2]
 
         if self.flare_position is not None:
@@ -989,6 +1002,12 @@ class SunFlare(WeatherTransform):
         window_ghost_offset: tuple[float, float] | None,
         **params: Any,
     ) -> np.ndarray:
+        """Accumulate the flare's light on a canvas and add it to the frame in linear light.
+
+        Veiling glare, halo, dispersion ring, ghosts, starburst, scratches,
+        infrared glow, window ghost and sensor smear, in that order; the
+        canvas is clipped and added as radiance, not painted over.
+        """
         height, width = img.shape[:2]
         # Fast mode keeps the flare's colours float32, and with them every
         # field they multiply; a float64 colour widens each one.

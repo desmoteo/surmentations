@@ -49,10 +49,16 @@ class _Recorder:
     """Collects one record per transform call."""
 
     def __init__(self) -> None:
+        """Start with no records and nothing pending."""
         self.records: list[dict[str, Any]] = []
         self._pending: dict[str, Any] = {}
 
     def note(self, **values: Any) -> None:
+        """Hold named values a transform drew, until its parameters are complete.
+
+        A value given as a function is called now: a statistic of a whole
+        frame is only computed when someone is recording.
+        """
         for name, value in values.items():
             # A statistic of a whole frame is passed as a function, so that
             # it is computed here, when someone is recording, and not on
@@ -60,6 +66,7 @@ class _Recorder:
             self._pending[name] = value() if callable(value) else value
 
     def commit(self, transform: Any, params: dict[str, Any]) -> None:
+        """Record one call: the transform, its arguments, what it drew and what it returned."""
         record: dict[str, Any] = {"t": type(transform).__name__}
         record["init"] = _summarise(_init_args(transform))
         if self._pending:
@@ -148,6 +155,7 @@ def instrument(method: Callable[..., dict[str, Any]]) -> Callable[..., dict[str,
 
     @wraps(method)
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Call the method and, while a recorder is active, record what it returned."""
         params = method(self, *args, **kwargs)
         if _ACTIVE is not None:
             _ACTIVE.commit(self, params)

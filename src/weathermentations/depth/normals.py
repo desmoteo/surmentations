@@ -98,6 +98,7 @@ def _one_sided_tangent(point: _Planes, axis: int, step: int) -> _Planes:
     step = max(1, min(step, (size - 1) // 2))
 
     def along(start: int | None, stop: int | None) -> tuple[slice, ...]:
+        """An index taking ``start:stop`` along the differencing axis and all of the other."""
         index = [slice(None), slice(None)]
         index[axis] = slice(start, stop)
         return tuple(index)
@@ -105,6 +106,11 @@ def _one_sided_tangent(point: _Planes, axis: int, step: int) -> _Planes:
     def delta(plane: np.ndarray) -> np.ndarray:
         # delta[i] = plane[i + step] - plane[i]: the forward difference at i
         # and the backward difference at i + step.
+        """The difference ``plane[i + step] - plane[i]`` along the axis.
+
+        The forward difference at ``i`` and the backward one at
+        ``i + step``.
+        """
         difference: np.ndarray = plane[along(step, None)] - plane[along(None, -step)]
         return difference
 
@@ -116,6 +122,7 @@ def _one_sided_tangent(point: _Planes, axis: int, step: int) -> _Planes:
         )
 
     def tangent(difference: np.ndarray) -> np.ndarray:
+        """A tangent from each pixel's chosen side, falling back to the one side at the borders."""
         result = np.empty((point[2].shape), dtype=np.float32)
         # Within `step` of either border only one neighbour exists.
         result[along(None, step)] = difference[along(None, step)]

@@ -1,3 +1,5 @@
+"""``RandomFog``: the output contract, the approach to airlight with depth, and the sky."""
+
 import numpy as np
 import pytest
 
@@ -10,17 +12,20 @@ class _LinearDepthEstimator(DepthEstimator):
     """Depth increases linearly from 0 (top row) to 1 (bottom row)."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth rising linearly from 0 at the top row to 1 at the bottom."""
         height, width = image.shape[:2]
         return np.tile(np.linspace(0.0, 1.0, height)[:, None], (1, width)).astype(np.float32)
 
 
 @pytest.fixture
 def provider() -> SharedDepthProvider:
+    """A depth provider over the linear depth, as a fixture."""
     return SharedDepthProvider(_LinearDepthEstimator())
 
 
 @pytest.fixture
 def scene() -> np.ndarray:
+    """A flat blue frame, as a fixture."""
     img = np.zeros((64, 48, 3), dtype=np.uint8)
     img[:, :] = (30, 60, 120)
     return img
@@ -132,6 +137,7 @@ def test_sky_keeps_its_gradient() -> None:
     depth a network gives it."""
 
     class _SkyOverGround(DepthEstimator):
+        """A sky at an arbitrary depth over ground receding from the camera."""
         def estimate(self, image: np.ndarray) -> np.ndarray:
             height, width = image.shape[:2]
             depth = np.full((height, width), 0.4, dtype=np.float32)

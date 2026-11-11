@@ -88,6 +88,7 @@ def _to_yuv(av: Any, rgb: np.ndarray, index: int) -> Any:
 
 
 def _to_rgb(av: Any, frame: Any) -> np.ndarray:
+    """A decoded frame as ``(H, W, 3)`` uint8 RGB, converted bicubically as the binary does."""
     bicubic = av.video.reformatter.Interpolation.BICUBIC
     rgb: np.ndarray = frame.reformat(format="rgb24", interpolation=bicubic).to_ndarray()
     return np.ascontiguousarray(rgb)
@@ -96,6 +97,11 @@ def _to_rgb(av: Any, frame: Any) -> np.ndarray:
 def _encode(
     av: Any, frames: np.ndarray, encoder: str, options: dict[str, str], keyframes: tuple[int, ...]
 ) -> list[Any]:
+    """Encode ``(N, H, W, 3)`` uint8 frames; the packets the encoder wrote.
+
+    On one thread, at the binary's frame rate, with the frames listed in
+    ``keyframes`` forced to be intra-coded.
+    """
     count, height, width = frames.shape[:3]
     context = av.CodecContext.create(encoder, "w")
     context.width, context.height, context.pix_fmt = width, height, "yuv420p"
@@ -117,6 +123,10 @@ def _encode(
 
 
 def _decode(av: Any, packets: list[Any], decoder: str, options: dict[str, str]) -> list[Any]:
+    """Decode packets on one thread; every frame the decoder put out.
+
+    A packet the decoder gives up on is skipped, as the binary skips it.
+    """
     context = av.CodecContext.create(decoder, "r")
     context.thread_count = 1
     if options:

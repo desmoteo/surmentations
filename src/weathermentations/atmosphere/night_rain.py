@@ -123,6 +123,9 @@ class NightRain(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``NightRain`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         rain_rate_range_mm_h: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -202,6 +205,7 @@ class NightRain(WeatherTransform):
         min_streak_width_px: float = 0.35,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.rain_rate_range_mm_h = rain_rate_range_mm_h
         self.drop_diameter_range_mm = drop_diameter_range_mm
@@ -222,6 +226,14 @@ class NightRain(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the drops in the illuminator's beam and how brightly each is lit.
+
+        The drop population follows from the rain rate and the lit column's
+        volume, as in ``RandomRain``. Returns the ``streaks`` with each one's
+        ``gain``, set by the inverse square of its own distance from the lamp
+        and rolled off smoothly at the lamp's reach, the ``beam`` across the
+        frame, and the ``backscatter`` of the drops too small to resolve.
+        """
         del data
         height, width = params["shape"][:2]
         rng = self.random_generator
@@ -328,6 +340,11 @@ class NightRain(WeatherTransform):
         backscatter: float,
         **params: Any,
     ) -> np.ndarray:
+        """Add the lit streaks and the beam's backscatter to the frame.
+
+        The streaks are emissive against a dark scene, so they add rather than
+        cover; the unresolved drops add a veil that is flat in depth.
+        """
         linear, scale, is_integer = to_linear_unit(img)
 
         occupancy = render_streak_layer(img.shape[0], img.shape[1], streaks)

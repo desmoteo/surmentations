@@ -55,6 +55,7 @@ NO_FILM = {"condensation_coverage_range": (0.0, 0.0)}
 def _lobe(
     x: float, y: float, radius: float, cap: float = 0.5, egg: float = 0.0, sag: float = 0.0
 ) -> tuple[float, ...]:
+    """One drop lobe as the water surface takes it: round, with the given cap, egg and sag."""
     return (x, y, radius, 1.0, cap, egg, sag)
 
 
@@ -80,12 +81,14 @@ def _smooth(size: int = 256) -> np.ndarray:
 
 
 def _textured(size: int = 256, seed: int = 0) -> np.ndarray:
+    """A frame of coarse random blocks, texture that refraction visibly moves."""
     rng = np.random.default_rng(seed)
     coarse = rng.integers(40, 215, size=(size // 8, size // 8, 3)).astype(np.uint8)
     return cv2.resize(coarse, (size, size), interpolation=cv2.INTER_NEAREST)
 
 
 def _run(image: np.ndarray, seed: int = 0, **kwargs: object) -> np.ndarray:
+    """``image`` through ``WaterDroplets`` with ``kwargs``, seeded."""
     transform = WaterDroplets(p=1.0, **kwargs)  # type: ignore[arg-type]
     transform.set_random_seed(seed)
     return np.asarray(transform(image=image)["image"])
@@ -169,6 +172,7 @@ def test_one_lobe_is_a_spherical_cap_of_its_own_radius() -> None:
 
 
 def _pieces(level: np.ndarray) -> int:
+    """How many separate patches of water a level field outlines."""
     count, _labels = cv2.connectedComponents((level > _OUTLINE_LEVEL).astype(np.uint8))
     return int(count) - 1
 
@@ -212,6 +216,7 @@ def test_a_lobe_ends_without_a_corner() -> None:
 
 
 def _runner(seed: int, radius: float = 16.0, tail: float = 90.0):
+    """A running drop's outline, drawn from one seed."""
     return _runner_body(
         np.random.default_rng(seed), 60.0, 130.0, radius, tail, cap=0.5, path=None
     )
@@ -358,6 +363,7 @@ def test_runner_tracks_meander_but_never_climb() -> None:
 
 
 def _single_drop_optics(cap: float = 0.5, focal_px: float = 600.0):
+    """The optics of one round drop in the middle of a 200-pixel pane."""
     level, height_sq = _water_surface(np.array([_lobe(100.0, 100.0, 40.0, cap=cap)]), 200, 200)
     optics = _drop_optics(level, height_sq, focal_px=focal_px, light_direction=(0.0, -0.5, 0.866))
     assert optics is not None

@@ -41,21 +41,32 @@ class _SignedDepth(DepthEstimator):
     """
 
     def __init__(self) -> None:
+        """Start with no calls and no frames seen."""
         self.calls = 0
         self.seen: list[np.ndarray] = []
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """A flat depth taken from the frame's first value, so that each scene's depth is its own.
+
+        Counts the call and keeps a copy of the frame it was given.
+        """
         self.calls += 1
         self.seen.append(image.copy())
         return np.full(image.shape[:2], float(image[0, 0, 0]) / 255.0, dtype=np.float32)
 
 
 class _GroundPlane(DepthEstimator):
+    """A level road under the lower half of the frame, counting its calls."""
     def __init__(self) -> None:
+        """Start with no calls and no frames seen."""
         self.calls = 0
         self.seen: list[np.ndarray] = []
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of a level road under the lower half of the frame, and a far wall above it.
+
+        Counts the call and keeps a copy of the frame it was given.
+        """
         self.calls += 1
         self.seen.append(image.copy())
         height, width = image.shape[:2]
@@ -65,6 +76,7 @@ class _GroundPlane(DepthEstimator):
 
 
 def _scene(seed: int = 0, size: tuple[int, int] = (96, 128)) -> np.ndarray:
+    """A sky over darker ground with a little noise; ``seed`` makes each scene distinct."""
     rng = np.random.default_rng(seed)
     image = np.zeros((*size, 3), dtype=np.uint8)
     image[: size[0] // 3] = (200, 210, 225)
@@ -276,6 +288,7 @@ def test_cached_depth_is_read_only() -> None:
 
 def test_an_estimator_returning_the_wrong_shape_is_reported() -> None:
     class Half(DepthEstimator):
+        """An estimator that returns depth at half the frame's size."""
         def estimate(self, image: np.ndarray) -> np.ndarray:
             return np.zeros((image.shape[0] // 2, image.shape[1] // 2), dtype=np.float32)
 
@@ -321,6 +334,7 @@ def test_max_scenes_must_be_positive() -> None:
 
 
 def _clip(frames: int = 3) -> np.ndarray:
+    """A clip of ``frames`` distinct scenes, stacked ``(N, H, W, 3)``."""
     return np.stack([_scene(seed) for seed in range(frames)])
 
 

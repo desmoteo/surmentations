@@ -121,6 +121,9 @@ class NightSnow(WeatherTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
+        """The arguments of ``NightSnow`` as Albumentations validates them: each
+        range ordered low to high and within the bounds given here.
+        """
         snowfall_rate_range_mm_h: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -226,6 +229,7 @@ class NightSnow(WeatherTransform):
         min_flake_width_px: float = 1.0,
         p: float = 0.5,
     ):
+        """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.snowfall_rate_range_mm_h = snowfall_rate_range_mm_h
         self.snow_density_range_g_cm3 = snow_density_range_g_cm3
@@ -249,6 +253,13 @@ class NightSnow(WeatherTransform):
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
     ) -> dict[str, Any]:
+        """Draw the flakes in the illuminator's beam and how brightly each is lit.
+
+        The same derived chain as ``RandomSnow`` decides how many flakes are
+        in the column and which resolve. Returns the ``flakes`` with each
+        one's ``brightness`` by its distance from the lamp, the veiling
+        ``glare``, the ``beam`` across the frame and the ``backscatter``.
+        """
         del data
         height, width = params["shape"][:2]
         rng = self.random_generator
@@ -351,6 +362,12 @@ class NightSnow(WeatherTransform):
         backscatter: float,
         **params: Any,
     ) -> np.ndarray:
+        """Render the lit flakes through a round stop and add them, with glare and backscatter.
+
+        A surveillance lens has a fixed circular stop, so a flake swept across
+        it is a capsule. The flakes add to the dark scene; the glare is a share
+        of what each returned before the sensor clipped it.
+        """
         height, width = img.shape[:2]
         frame_centre = (width / 2.0, height / 2.0)
 

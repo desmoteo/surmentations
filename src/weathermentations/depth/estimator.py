@@ -86,6 +86,13 @@ class DepthAnythingV2Estimator(DepthEstimator):
         # imports this package for the depth provider, so a module-level
         # import would make the lens and camera effects — which need no depth
         # model at all — require torch just to be imported.
+        """Load the model onto the GPU; see the class docstring for the arguments.
+
+        Raises ``RuntimeError`` where torch has no CUDA device: the network
+        is too slow on a CPU for an augmentation. torch and transformers are
+        imported here and not at module level, so that the effects that need
+        no depth do not need them either.
+        """
         import torch
 
         if not torch.cuda.is_available():
@@ -205,6 +212,13 @@ class DepthAnythingV2Estimator(DepthEstimator):
         return True
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Relative depth for one ``(H, W, 3)`` frame, ``(H, W)`` float32 in ``[0, 1]``.
+
+        A float frame is taken as ``[0, 1]`` and quantised to 8 bits first,
+        which is what the network's preprocessing assumes. The output is the
+        network's disparity resized to the frame, normalised, inverted as
+        1 / (disparity + disparity_offset) and rescaled to [0, 1].
+        """
         import torch
 
         height, width = image.shape[:2]

@@ -32,6 +32,7 @@ class _LinearDepthEstimator(DepthEstimator):
     """
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth rising linearly from 0 at the top row to 1 at the bottom."""
         height, width = image.shape[:2]
         return np.tile(np.linspace(0.0, 1.0, height)[:, None], (1, width)).astype(np.float32)
 
@@ -46,6 +47,11 @@ class _GroundPlaneDepthEstimator(DepthEstimator):
     """
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of level ground seen from 1.5 m up, horizon at mid-frame, 50 m above it.
+
+        Each row's distance follows from the camera height and the focal
+        length of a 60-degree field of view, as a real road's would.
+        """
         height, width = image.shape[:2]
         focal = width / (2.0 * np.tan(np.deg2rad(60.0) / 2.0))
         cy = height / 2.0
