@@ -1125,10 +1125,24 @@ pip install -e ".[codec]"                     # PyAV, then:
 pytest tests/unit/test_inprocess_codec.py -q  # the codecs in process against ffmpeg
 ```
 
-The table at the top came from a short driver around the transforms that
-`scripts/benchmark.py` builds: each on four of the example scenes at 512
-and 1024 pixels with two seeds, the best of three calls after a warm-up,
-with `cv2.setNumThreads(1)` and pinned with `taskset`. It was run from a
-worktree of the parent branch, from this branch, and from this branch with
-PyAV on the path, in that order, three times over, and each cell is the
-least of its three. The driver is not in the repository.
+The table at the top comes from
+[`scripts/benchmark_single_core.py`](../scripts/benchmark_single_core.py):
+each transform that `scripts/benchmark.py` builds, on four of the example
+scenes at 512 and 1024 pixels with two seeds, the faster of two calls after
+a warm-up, with OpenCV on one thread and pinned with `taskset`. It was run
+from a worktree of the parent branch, from this branch, and from this branch
+with PyAV on the path, in that order, three times over, and each cell is the
+least of its three:
+
+```bash
+git worktree add ../original 55afc1c
+for i in 1 2 3; do
+  taskset -c 2 python scripts/benchmark_single_core.py run --tree ../original --out before_$i.json
+  taskset -c 2 python scripts/benchmark_single_core.py run --out after_$i.json
+done
+python scripts/benchmark_single_core.py compare --before before_*.json --after after_*.json
+```
+
+`save-depth` and `--load-depth` run the same frames without torch or a GPU,
+from depth maps estimated once on a machine that has them; that is how the
+arm64 figures were made.
