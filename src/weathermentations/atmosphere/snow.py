@@ -854,7 +854,10 @@ class RandomSnow(WeatherTransform):
             luma = luminance(linear_scene)
             around = np.maximum(cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma), 1e-4)
             relief = wide_blur(np.abs(luma / around - 1.0), 2.0 * sigma)
-            rough = np.clip((relief - _CANOPY_RELIEF[0]) / np.ptp(_CANOPY_RELIEF), 0.0, 1.0)
+            # `np.ptp` gives an np.float64, which would widen this field and
+            # every one made from it down to the settled snow itself.
+            relief_span = mode.scalar(np.ptp(_CANOPY_RELIEF))
+            rough = np.clip((relief - _CANOPY_RELIEF[0]) / relief_span, 0.0, 1.0)
             # Green says vegetation by day. Under sodium lamps nothing is
             # green, and what is left to tell a tree by is that its "level
             # ground" comes and goes from one patch to the next, where a
