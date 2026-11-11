@@ -53,7 +53,11 @@ class _Recorder:
         self._pending: dict[str, Any] = {}
 
     def note(self, **values: Any) -> None:
-        self._pending.update(values)
+        for name, value in values.items():
+            # A statistic of a whole frame is passed as a function, so that
+            # it is computed here, when someone is recording, and not on
+            # every frame of every training run.
+            self._pending[name] = value() if callable(value) else value
 
     def commit(self, transform: Any, params: dict[str, Any]) -> None:
         record: dict[str, Any] = {"t": type(transform).__name__}
@@ -125,7 +129,11 @@ def record_draw(**values: Any) -> None:
     """Note physical quantities a transform sampled but does not return.
 
     A no-op unless recording is active, so transforms can call it
-    unconditionally.
+    unconditionally. A value that costs something to work out, the median of
+    a depth map say, is passed as a function of no arguments and is called
+    only when recording is active::
+
+        record_draw(beam_falloff=falloff, depth_p50_m=lambda: float(np.median(depth_m)))
     """
     if _ACTIVE is not None:
         _ACTIVE.note(**values)

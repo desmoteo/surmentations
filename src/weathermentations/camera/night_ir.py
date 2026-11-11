@@ -204,9 +204,9 @@ class NightIrMode(WeatherTransform):
         record_draw(
             illuminator_range_m=reference,
             beam_falloff=falloff,
-            depth_min_m=float(depth_m.min()),
-            depth_p50_m=float(np.median(depth_m)),
-            depth_max_m=float(depth_m.max()),
+            depth_min_m=lambda: float(depth_m.min()),
+            depth_p50_m=lambda: float(np.median(depth_m)),
+            depth_max_m=lambda: float(depth_m.max()),
         )
         return {
             "exposure": (irradiance * beam).astype(np.float32),

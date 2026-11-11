@@ -11,7 +11,9 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from weathermentations import mode
 from weathermentations.utils.channels import channel_max, channel_min
+from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.noise import value_noise
 
 # Vegetation: hue between yellow-green and blue-green, with enough
@@ -27,6 +29,10 @@ _LEVEL_GROUND_WEIGHT = 0.35
 # the ground beside it to be taken for more of the same ground.
 _EDGE_FILL_REACH = 0.012
 _EDGE_FILL_TOLERANCE = 0.08
+# The sigma, in pixels, the nearby-ground colour is blurred at on a reduced
+# copy in fast mode: coarser than the default, for an average that only has
+# to be right to the tolerance above. See `wide_blur`.
+_EDGE_FILL_WORK_SIGMA = 4.0
 
 # Noise tile that ground patterns are cut from, in pixels and in cells.
 _TILE_PX = 256
@@ -81,8 +87,8 @@ def fill_to_edges(ground: np.ndarray, linear_rgb: np.ndarray) -> np.ndarray:
     grown = cv2.dilate(ground, kernel)
     # The colour of the ground nearby: an average over ground pixels only.
     sigma = 0.6 * reach
-    weight = cv2.GaussianBlur(ground, (0, 0), sigmaX=sigma)
-    colour = cv2.GaussianBlur(linear_rgb * ground[..., None], (0, 0), sigmaX=sigma)
+    weight = wide_blur(ground, sigma, work_sigma=_EDGE_FILL_WORK_SIGMA)
+    colour = wide_blur(linear_rgb * ground[..., None], sigma, work_sigma=_EDGE_FILL_WORK_SIGMA)
     colour = colour / np.maximum(weight, 1e-4)[..., None]
     distance = channel_max(np.abs(linear_rgb - colour))
     alike = np.clip(2.0 - distance / _EDGE_FILL_TOLERANCE, 0.0, 1.0)
@@ -126,6 +132,13 @@ def ground_noise(
         # Reflected at the tile's edges, so the pattern repeats without a seam.
         pixels = metres * (_TILE_PX / (_TILE_CELLS * scale_m))
         period = 2.0 * (_TILE_PX - 1)
+        if mode.fast():
+            # The same fold by a floor: `np.mod` on a frame of floats was a
+            # tenth of a settled-snow frame, and this is a tenth of that. It
+            # lands within a few millionths of a pixel of it.
+            span = np.float32(period)
+            folded = pixels - span * np.floor(pixels * np.float32(1.0 / period))
+            return np.minimum(folded, span - folded).astype(np.float32)
         folded = np.mod(pixels, period)
         return np.where(folded > period / 2.0, period - folded, folded).astype(np.float32)
 

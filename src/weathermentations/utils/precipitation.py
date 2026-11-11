@@ -118,17 +118,27 @@ def sample_gamma_diameters(
     """
     if count <= 0:
         return np.zeros(0, dtype=np.float32)
-    if shape_mu <= 0.0:
-        return _truncated_exponential(rng, count, slope, low, high)
+    return _diameters_from_uniform(rng.random(count), slope, low, high, shape_mu, grid)
 
+
+def _diameters_from_uniform(
+    u: np.ndarray, slope: float, low: float, high: float, shape_mu: float, grid: int = 1024
+) -> np.ndarray:
+    """The diameters :func:`sample_gamma_diameters` makes of the uniforms ``u``.
+
+    Apart from the draw itself, so that a caller which can tell from a
+    uniform that its particle will be discarded need not compute the rest.
+    """
+    if shape_mu <= 0.0:
+        return _exponential_from_uniform(u, slope, low, high)
     edges = np.linspace(low, high, grid, dtype=np.float64)
     weights = _gamma_dsd_weights(edges, slope, shape_mu)
     cdf = np.cumsum(weights)
     total = cdf[-1]
     if total <= 0.0:  # pragma: no cover - degenerate slope/window
-        return _truncated_exponential(rng, count, slope, low, high)
+        return _exponential_from_uniform(u, slope, low, high)
     cdf /= total
-    picked = np.searchsorted(cdf, rng.random(count))
+    picked = np.searchsorted(cdf, u)
     return edges[np.clip(picked, 0, grid - 1)].astype(np.float32)
 
 
@@ -148,8 +158,12 @@ def _truncated_exponential(
     """
     if count <= 0:
         return np.zeros(0, dtype=np.float32)
+    return _exponential_from_uniform(rng.random(count), slope, low, high)
+
+
+def _exponential_from_uniform(u: np.ndarray, slope: float, low: float, high: float) -> np.ndarray:
+    """The inverse CDF of :func:`_truncated_exponential`, at the uniforms ``u``."""
     span = max(high - low, 1e-6)
-    u = rng.random(count)
     saturation = -np.expm1(-slope * span)
     values = low - np.log1p(-u * saturation) / slope
     return np.clip(values, low, high).astype(np.float32)
@@ -201,9 +215,13 @@ def volume_uniform_distances(
     """
     if count <= 0:
         return np.zeros(0, dtype=np.float32)
+    return _distances_from_uniform(rng.random(count), near_m, far_m)
+
+
+def _distances_from_uniform(u: np.ndarray, near_m: float, far_m: float) -> np.ndarray:
+    """The inverse CDF of :func:`volume_uniform_distances`, at the uniforms ``u``."""
     near = max(near_m, 1e-3)
     far = max(far_m, near * (1.0 + 1e-6))
-    u = rng.random(count)
     return np.cbrt(near**3 + u * (far**3 - near**3)).astype(np.float32)
 
 
@@ -507,6 +525,58 @@ def resolvable_fraction(
     return float(np.sum(weight * survival))
 
 
+def _least_uniform_to_resolve(
+    slope: float,
+    d_min: float,
+    d_max: float,
+    near_m: float,
+    far_m: float,
+    focal_px: float,
+    min_width_px: float,
+    size_scale: float,
+    shape_mu: float,
+    slices: int = 1024,
+    grid: int = 1024,
+) -> np.ndarray:
+    """For each slice of the distance uniform, a diameter uniform too small to resolve.
+
+    The distance sampler is increasing in its uniform, so the slice
+    ``[k / slices, (k + 1) / slices)`` holds no distance nearer than the one
+    at ``k / slices``. A particle that near has to be at least so wide in
+    millimetres to project to ``min_width_px``; the diameter sampler is
+    increasing in its uniform too, so there is a uniform at or below which
+    its diameter is under that. Entry ``k`` is that uniform, taken with a
+    margin of one part in ten thousand, a thousand times the float32 rounding
+    of the width test this stands in front of: a candidate whose diameter
+    uniform does not exceed its slice's entry cannot pass that test, and one
+    that does is put to it as before.
+    """
+    nearest = _distances_from_uniform(np.arange(slices) / slices, near_m, far_m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        needed_mm = min_width_px * nearest.astype(np.float64) / (focal_px * size_scale * 1e-3)
+    needed_mm = np.nan_to_num(needed_mm * (1.0 - 1e-4), nan=0.0, posinf=np.inf, neginf=0.0)
+
+    if shape_mu <= 0.0:
+        # The inverse of `_exponential_from_uniform`.
+        span = max(d_max - d_min, 1e-6)
+        saturation = -np.expm1(-slope * span)
+        inside = -np.expm1(-slope * (np.clip(needed_mm, d_min, d_max) - d_min)) / saturation
+        least = np.where(needed_mm >= d_max, 1.0, inside - 1e-9)
+    else:
+        # `_diameters_from_uniform` returns the first grid diameter whose CDF
+        # reaches the uniform, so a uniform up to the CDF of the last grid
+        # diameter under the need gives a diameter under it.
+        edges = np.linspace(d_min, d_max, grid, dtype=np.float64)
+        cdf = np.cumsum(_gamma_dsd_weights(edges, slope, shape_mu))
+        if cdf[-1] <= 0.0:  # pragma: no cover - degenerate slope/window
+            return np.full(slices, -1.0)
+        cdf /= cdf[-1]
+        last_under = np.searchsorted(edges, needed_mm, side="left") - 1
+        least = np.where(last_under >= 0, cdf[np.clip(last_under, 0, grid - 1)], -1.0)
+    # Nothing is ruled out where the smallest particle already resolves.
+    return np.where(needed_mm <= d_min, -1.0, least)
+
+
 def sample_resolvable_particles(
     rng: np.random.Generator,
     count: int,
@@ -528,6 +598,12 @@ def sample_resolvable_particles(
     physical population is *conditioned on being resolvable*, so the field
     keeps the right mix of near-large and far-small particles — it simply
     does not spend the budget drawing the ones that cannot be seen.
+
+    About one candidate in a hundred is kept, and most of the rest can be
+    told from their two uniforms alone (:func:`_least_uniform_to_resolve`).
+    The diameter and the distance are computed only for the candidates that
+    test lets through: the same uniforms are drawn in the same order and the
+    same pairs come back.
     """
     if count <= 0:
         return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=np.float32)
@@ -538,13 +614,23 @@ def sample_resolvable_particles(
     )
     acceptance = max(acceptance, 1e-4)
 
+    least = _least_uniform_to_resolve(
+        slope, d_min, d_max, near_m, far_m, focal_px, min_width_px, size_scale, shape_mu
+    )
+
     diameters: list[np.ndarray] = []
     distances: list[np.ndarray] = []
     found = 0
     for _ in range(8):
         batch = int(min(2_000_000, max(1024, (count - found) / acceptance * 1.4)))
-        candidate_d = sample_gamma_diameters(rng, batch, slope, d_min, d_max, shape_mu)
-        candidate_z = volume_uniform_distances(rng, batch, near_m, far_m)
+        # Diameters' uniforms first, then distances': the order the two
+        # samplers drew in when each candidate was computed in full.
+        uniform_d = rng.random(batch)
+        uniform_z = rng.random(batch)
+        slices = (uniform_z * len(least)).astype(np.intp)
+        possible = np.flatnonzero(uniform_d > least[slices])
+        candidate_d = _diameters_from_uniform(uniform_d[possible], slope, d_min, d_max, shape_mu)
+        candidate_z = _distances_from_uniform(uniform_z[possible], near_m, far_m)
         width = focal_px * (candidate_d * size_scale * 1e-3) / candidate_z
         keep = width > min_width_px
         if keep.any():

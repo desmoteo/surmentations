@@ -107,6 +107,7 @@ from weathermentations.utils.color import (
     illuminant_radiance_linear,
     veil_radiance_linear,
 )
+from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.ground import (
     fill_to_edges,
     ground_noise,
@@ -852,13 +853,13 @@ class RandomSnow(WeatherTransform):
             sigma = 0.01 * float(np.hypot(height, width))
             luma = luminance(linear_scene)
             around = np.maximum(cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma), 1e-4)
-            relief = cv2.GaussianBlur(np.abs(luma / around - 1.0), (0, 0), sigmaX=2.0 * sigma)
+            relief = wide_blur(np.abs(luma / around - 1.0), 2.0 * sigma)
             rough = np.clip((relief - _CANOPY_RELIEF[0]) / np.ptp(_CANOPY_RELIEF), 0.0, 1.0)
             # Green says vegetation by day. Under sodium lamps nothing is
             # green, and what is left to tell a tree by is that its "level
             # ground" comes and goes from one patch to the next, where a
             # road's is steady.
-            steady = cv2.GaussianBlur(as_read, (0, 0), sigmaX=2.0 * sigma)
+            steady = wide_blur(as_read, 2.0 * sigma)
             # Comes and goes: a wall or the sky never reads as level at
             # all, and counting those drew snow along every skyline.
             unsteady = np.clip((0.85 - steady) / 0.25, 0.0, 1.0) * np.clip(
@@ -1007,9 +1008,10 @@ class RandomSnow(WeatherTransform):
             # frame's own mean instead, as this did, renders an averagely-lit
             # patch at full white whatever the frame — so at night settled
             # snow came out as a daylit floor under a black sky.
-            illumination = cv2.GaussianBlur(
-                luminance(out), (0, 0), sigmaX=max(2.0, 0.02 * max(height, width))
-            ) / TYPICAL_SCENE_ALBEDO
+            illumination = (
+                wide_blur(luminance(out), max(2.0, 0.02 * max(height, width)))
+                / TYPICAL_SCENE_ALBEDO
+            )
             # A surface darker than typical understates the light on it:
             # new asphalt, at an albedo of 0.05, says a quarter of the
             # truth, and snow shaded by that is grey. The frame's own

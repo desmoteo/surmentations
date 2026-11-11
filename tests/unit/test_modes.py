@@ -20,12 +20,13 @@ import weathermentations
 from weathermentations import _native, mode
 from weathermentations.atmosphere import NightSnow
 from weathermentations.atmosphere.snow import render_flake_field
-from weathermentations.camera import SensorNoise
-from weathermentations.lens import SunFlare
+from weathermentations.camera import SensorNoise, TemporalDenoiseArtifacts
+from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare
 from weathermentations.lens.sun_flare import diffraction_starburst, polygon_distance
 from weathermentations.utils.channels import weighted_colour
+from weathermentations.utils.filters import wide_blur, wide_dilate
 from weathermentations.utils.grids import centered_grid
-from weathermentations.utils.sky import wide_blur, wide_dilate
+from weathermentations.utils.ground import ground_noise
 
 
 @pytest.fixture(autouse=True)
@@ -132,6 +133,31 @@ def test_the_cached_starburst_does_not_depend_on_the_mode() -> None:
 # --------------------------------------------------- what fast mode may change
 
 
+def test_a_coarser_working_sigma_reduces_sooner_and_differs_by_more() -> None:
+    image = _frame()
+    exact = cv2.GaussianBlur(image, (0, 0), sigmaX=10.0)
+    mode.set_fast(True)
+    # At the default, a sigma of 10 pixels is not worth reducing.
+    assert np.array_equal(wide_blur(image, 10.0), exact)
+    coarse = wide_blur(image, 10.0, work_sigma=4.0)
+    assert not np.array_equal(coarse, exact)
+    assert np.abs(coarse - exact).max() < 0.02 * exact.max()
+    mode.set_fast(False)
+    assert np.array_equal(wide_blur(image, 10.0, work_sigma=4.0), exact)
+
+
+def test_the_ground_pattern_is_folded_to_the_same_place_either_way() -> None:
+    """Fast mode folds the noise tile's coordinate with a floor where exact
+    mode takes a remainder. Millionths of a pixel apart."""
+    depth = np.repeat(np.linspace(40.0, 2.0, 200, dtype=np.float32)[:, None], 300, axis=1)
+    fields = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        fields[flag] = ground_noise(depth, 400.0, 20.0, 1.2, np.random.default_rng(5))
+    assert fields[False].std() > 0.05
+    assert np.abs(fields[True] - fields[False]).max() < 1e-3
+
+
 def test_fast_mode_keeps_aperture_fields_float32_and_within_rounding() -> None:
     dy, dx = centered_grid(129, scale=40.0)
     mode.set_fast(False)
@@ -188,6 +214,37 @@ def _scene() -> np.ndarray:
     image[:90] += 120
     image[40:46, 200:206] = 255
     return image
+
+
+def _large_scene() -> np.ndarray:
+    """Large enough for a blur a hundredth of the diagonal to be reduced."""
+    image = cv2.resize(_scene(), (1280, 960), interpolation=cv2.INTER_CUBIC)
+    noise = np.random.default_rng(1).integers(-6, 7, image.shape)
+    return np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [HousingOccluders(p=1.0), DirtSoil(p=1.0), TemporalDenoiseArtifacts(p=1.0)],
+    ids=["occluders", "dirt", "denoise"],
+)
+def test_a_reduced_blur_moves_a_frame_by_a_few_levels_at_most(transform) -> None:
+    """Defocused dirt and insects and smeared chroma: fields that are soft by
+    nature, blurred on a smaller copy in fast mode."""
+    image = _large_scene()
+    drew = 0
+    for seed in range(4):
+        frames = {}
+        for flag in (True, False):
+            mode.set_fast(flag)
+            transform.set_random_seed(seed)
+            frames[flag] = transform(image=image)["image"].astype(np.int16)
+        difference = np.abs(frames[True] - frames[False])
+        # An occluder field may legitimately come up empty for a seed.
+        drew += not np.array_equal(frames[False], image)
+        assert difference.max() <= 4
+        assert difference.mean() < 0.1
+    assert drew >= 2, "the fixture hardly ever drew anything"
 
 
 @pytest.mark.parametrize(

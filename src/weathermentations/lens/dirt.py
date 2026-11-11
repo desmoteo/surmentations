@@ -96,6 +96,7 @@ from pydantic import AfterValidator
 
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
+from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.noise import colored_blob_cluster
 from weathermentations.utils.photometry import (
     from_linear_unit,
@@ -145,6 +146,10 @@ _WIDE_ANGLE_SHARE = 0.4
 # A caked, opaque crust is the same substance seen in its own shadow rather
 # than lit through: darker than the deposit's albedo, but the same hue.
 _OPAQUE_BODY_FRACTION = 0.35
+
+# The sigma, in pixels, the grime's defocus blur is run at on a reduced copy
+# of the frame in fast mode. Coarser than the default of 8: see `wide_blur`.
+_GRIME_WORK_SIGMA = 4.0
 
 
 def scatter_psf(image: np.ndarray, radius_px: float, max_sigma_px: float = 12.0) -> np.ndarray:
@@ -455,7 +460,7 @@ class DirtSoil(WeatherTransform):
         arc_count = self.py_random.randint(*self.wipe_arc_count_range)
         if arc_count:
             arcs = _wipe_arcs(height, width, rng, arc_count, thickness_px=diagonal * 0.02)
-            arcs = cv2.GaussianBlur(arcs, (0, 0), sigmaX=diagonal * 0.012)
+            arcs = wide_blur(arcs, diagonal * 0.012)
             merge(arcs * 1.4, DEPOSIT_ALBEDOS[_WIPE_DEPOSIT])
 
         spot_count = self.py_random.randint(*self.water_spot_count_range)
@@ -476,9 +481,12 @@ class DirtSoil(WeatherTransform):
         # Grime is never sharp — it is far outside the depth of field. The
         # albedo field is softened with it, or deposits would meet along hard
         # seams that the blurred mask no longer has.
+        # In fast mode on a reduced copy once the sigma reaches 8 pixels: the
+        # field is a deposit far out of focus, and 0.7% of its peak is well
+        # inside what the next line's normalisation moves it by.
         blur_sigma = max(1.0, diagonal * 0.006)
-        mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=blur_sigma)
-        albedo = cv2.GaussianBlur(albedo, (0, 0), sigmaX=blur_sigma)
+        mask = wide_blur(mask, blur_sigma, work_sigma=_GRIME_WORK_SIGMA)
+        albedo = wide_blur(albedo, blur_sigma, work_sigma=_GRIME_WORK_SIGMA)
 
         # Normalise to the requested (sparse) coverage so the knobs stay
         # predictable regardless of how the blobs happened to land.
