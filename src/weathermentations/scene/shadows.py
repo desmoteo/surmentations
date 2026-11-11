@@ -51,6 +51,7 @@ from weathermentations.base import WeatherTransform, require_depth_provider, sce
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
+from weathermentations.utils.filters import wide_blur
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
 # Relative spectrum of skylight against direct sun, normalised on green. What
@@ -345,7 +346,10 @@ class CastShadows(WeatherTransform):
 
         penumbra = self.py_random.uniform(*self.penumbra_range) * diagonal
         if penumbra > 0.5:
-            shapes = cv2.GaussianBlur(shapes, (0, 0), sigmaX=penumbra)
+            # A soft shadow's edge holds nothing finer than its own blur, so
+            # in fast mode a wide one is made on a reduced copy: within 0.2%
+            # of the full-size blur's peak, see `wide_blur`.
+            shapes = wide_blur(shapes, penumbra)
 
         # A shadow lands on surfaces, not on the frame — and never on sky.
         surface = upward_facing(
@@ -385,9 +389,16 @@ class CastShadows(WeatherTransform):
         # skylight survives. Multiplying keeps albedo and texture intact,
         # which blending toward grey would destroy.
         blocked = occlusion[..., None] * direct_fraction
-        surviving = 1.0 - blocked + blocked * _SKYLIGHT_RATIO[None, None, :]
         # `surviving` carries the skylight's own colour, so what is left is
         # both dimmer and bluer, as a real daylight shadow is.
-        out = linear * (1.0 - blocked) * surviving
-
-        return from_linear_unit(np.clip(out, 0.0, 1.0), scale, is_integer, img.dtype)
+        #
+        # This is `linear * (1 - blocked) * (1 - blocked + blocked * ratio)`
+        # in that order, written into two arrays where the expression made
+        # six: the same floats in less time.
+        unblocked = 1.0 - blocked
+        surviving = blocked * _SKYLIGHT_RATIO[None, None, :]
+        surviving += unblocked
+        out = linear * unblocked
+        out *= surviving
+        np.clip(out, 0.0, 1.0, out=out)
+        return from_linear_unit(out, scale, is_integer, img.dtype)

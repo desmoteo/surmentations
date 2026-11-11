@@ -1525,6 +1525,204 @@ static void WM_FN(overcast_blend)(
     }
 }
 
+/* ------------------------------------------- masks grown by colour */
+
+/* The arithmetic of sky.sky_to_depth_edge and ground.fill_to_edges after
+ * their blurs, in their order:
+ *
+ *   plainly_not = clip(2 - |depth - level| / depth_tolerance, 0, 1)   (1 without depth)
+ *   nearby      = nearby_sum / max(weight, least_weight)
+ *   unlike      = max over channels of |linear - nearby|
+ *   alike       = clip(2 - unlike / colour_tolerance, 0, 1) * (weight > some_weight)
+ *   out         = max(mask * plainly_not, grown * alike * plainly_not)
+ *
+ * Without depth the multiplications by plainly_not are by 1.0 and change
+ * nothing, which is what fill_to_edges computes. The numpy code makes a
+ * frame-sized result of each step, ten of them, three with three channels. */
+static void WM_FN(grow_alike)(
+    float *out, const float *linear, const float *nearby_sum, const float *weight,
+    const float *mask, const float *grown, const float *depth, ptrdiff_t pixels,
+    float level, float depth_tolerance, float colour_tolerance, float least_weight,
+    float some_weight) {
+    const float *restrict rgb = linear, *restrict around = nearby_sum;
+    for (ptrdiff_t i = 0; i < pixels; i++, rgb += 3, around += 3) {
+        const float plainly_not =
+            depth ? clamp01(2.0f - fabsf(depth[i] - level) / depth_tolerance) : 1.0f;
+        const float w = weight[i];
+        const float share = w > least_weight ? w : least_weight;
+        const float d0 = fabsf(rgb[0] - around[0] / share);
+        const float d1 = fabsf(rgb[1] - around[1] / share);
+        const float d2 = fabsf(rgb[2] - around[2] / share);
+        float unlike = d0 > d1 ? d0 : d1;
+        unlike = unlike > d2 ? unlike : d2;
+        const float alike =
+            clamp01(2.0f - unlike / colour_tolerance) * (w > some_weight ? 1.0f : 0.0f);
+        const float kept = mask[i] * plainly_not;
+        const float added = grown[i] * alike * plainly_not;
+        out[i] = kept > added ? kept : added;
+    }
+}
+
+/* ------------------------------------------------------- water droplets */
+
+/* Greedy placement: the numpy loop this replaces checked each candidate
+ * against every drop kept so far with five array operations, a Python
+ * iteration and an `any` per candidate. The arithmetic is the same, in
+ * double and in the same order, so the drops kept are the same. */
+static ptrdiff_t WM_FN(place_apart)(
+    const double *x, const double *y, const double *footprint, const int64_t *order,
+    ptrdiff_t candidates, ptrdiff_t count, double gap, int64_t *kept) {
+    const double widen = 1.0 + gap;
+    ptrdiff_t n = 0;
+    for (ptrdiff_t k = 0; k < candidates && n < count; k++) {
+        const int64_t i = order[k];
+        const double fx = x[i], fy = y[i], fr = footprint[i];
+        int clear = 1;
+        for (ptrdiff_t j = 0; j < n; j++) {
+            const int64_t other = kept[j];
+            const double reach = (footprint[other] + fr) * widen;
+            const double dx = x[other] - fx, dy = y[other] - fy;
+            if (dx * dx + dy * dy < reach * reach) {
+                clear = 0;
+                break;
+            }
+        }
+        if (clear) {
+            kept[n++] = i;
+        }
+    }
+    return n;
+}
+
+#define WM_MAX_HARMONICS 8
+
+/* A lobe's contribution from its normalised squared distance q:
+ * 1 - (1 - cut) q inside its rim, a parabola landing at zero outside. */
+static inline float lobe_value(float q, float falloff, float reach, float skirt_scale) {
+    if (q <= 1.0f) {
+        return 1.0f - falloff * q;
+    }
+    const float limit = reach * reach;
+    const float distance = sqrtf(q < limit ? q : limit);
+    const float gap = reach - distance;
+    return skirt_scale * (gap * gap);
+}
+
+static void WM_FN(water_lobes)(
+    float *level, float *weighted, ptrdiff_t height, ptrdiff_t width, const double *lobes,
+    const double *harmonics, ptrdiff_t count, int n_harmonics, const int32_t *orders,
+    double wobble_radius, double outline_level) {
+    const float falloff = (float)(1.0 - outline_level);
+    const double reach_d = 1.0 + outline_level / (1.0 - outline_level);
+    const float reach = (float)reach_d;
+    const float skirt_scale = (float)((1.0 - outline_level) * (1.0 - outline_level) / outline_level);
+    if (n_harmonics > WM_MAX_HARMONICS) {
+        n_harmonics = WM_MAX_HARMONICS;
+    }
+    for (ptrdiff_t d = 0; d < count; d++) {
+        const double *lobe = lobes + 7 * d;
+        const double cx = lobe[0], cy = lobe[1], radius = lobe[2], elongation = lobe[3];
+        const double cap = lobe[4], egg = lobe[5], sag = lobe[6];
+        const double *outline = NULL;
+        if (harmonics && radius >= wobble_radius) {
+            outline = harmonics + (ptrdiff_t)2 * n_harmonics * d;
+        }
+        double stretch = 1.0 + egg;
+        float amp[WM_MAX_HARMONICS], cos_phase[WM_MAX_HARMONICS], sin_phase[WM_MAX_HARMONICS];
+        if (outline) {
+            double total = 0.0;
+            for (int k = 0; k < n_harmonics; k++) {
+                total += outline[2 * k];
+                amp[k] = (float)outline[2 * k];
+                cos_phase[k] = (float)cos(outline[2 * k + 1]);
+                sin_phase[k] = (float)sin(outline[2 * k + 1]);
+            }
+            stretch += total;
+        }
+        const double reach_x = radius * stretch * reach_d;
+        const double reach_y = reach_x * elongation;
+        ptrdiff_t x0 = (ptrdiff_t)(cx - reach_x), x1 = (ptrdiff_t)(cx + reach_x) + 2;
+        ptrdiff_t y0 = (ptrdiff_t)(cy - reach_y), y1 = (ptrdiff_t)(cy + reach_y) + 2;
+        x0 = x0 > 0 ? x0 : 0, y0 = y0 > 0 ? y0 : 0;
+        x1 = x1 < width ? x1 : width, y1 = y1 < height ? y1 : height;
+        if (x1 <= x0 || y1 <= y0) {
+            continue;
+        }
+        const float fcx = (float)cx, fcy = (float)cy, fel = (float)elongation;
+        const float thickness = (float)((cap * radius) * (cap * radius));
+        const float fradius = (float)radius, inv_r2 = 1.0f / (float)(radius * radius);
+        const float fegg = (float)egg, fsag = (float)sag;
+        for (ptrdiff_t y = y0; y < y1; y++) {
+            const float dy = ((float)y - fcy) / fel;
+            float *restrict lrow = level + y * width;
+            float *restrict wrow = weighted + y * width;
+            for (ptrdiff_t x = x0; x < x1; x++) {
+                const float dx = (float)x - fcx;
+                const float dsq = dx * dx + dy * dy;
+                if (!outline) {
+                    const float v = lobe_value(dsq * inv_r2, falloff, reach, skirt_scale);
+                    lrow[x] += v;
+                    wrow[x] += v * thickness;
+                    continue;
+                }
+                /* The angle's cosine and sine from the offset; at the centre
+                 * atan2 gives 0, so cosine 1 and sine 0. */
+                const float r = sqrtf(dsq);
+                const float c1 = r > 0.0f ? dx / r : 1.0f, s1 = r > 0.0f ? dy / r : 0.0f;
+                float local = 1.0f + fegg * s1;
+                float ck = c1, sk = s1;
+                int order = 1;
+                for (int k = 0; k < n_harmonics; k++) {
+                    while (order < orders[k]) {
+                        const float next_c = ck * c1 - sk * s1;
+                        sk = sk * c1 + ck * s1;
+                        ck = next_c;
+                        order++;
+                    }
+                    local += amp[k] * (sk * cos_phase[k] + ck * sin_phase[k]);
+                }
+                local = fradius * local;
+                const float v = lobe_value(dsq / (local * local), falloff, reach, skirt_scale);
+                const float edge = r / local;
+                const float pooled = 1.0f + fsag * s1 * (edge < 1.0f ? edge : 1.0f);
+                lrow[x] += v;
+                wrow[x] += v * thickness * pooled * pooled;
+            }
+        }
+    }
+}
+
+/* out + (scattered - out) * fraction, then out * (1 - coverage) + colour:
+ * the condensation film and the drops over it. numpy makes five frame-sized
+ * results of these two lines, and reads the drops' colour and coverage as
+ * strided slices of one four-channel array. */
+static void WM_FN(droplet_composite)(
+    float *out, const float *base, const float *scattered, const float *fraction,
+    const float *layers, ptrdiff_t pixels) {
+    const float *restrict b = base;
+    const float *restrict s = scattered;
+    const float *restrict layer = layers;
+    float *restrict o = out;
+    for (ptrdiff_t i = 0; i < pixels; i++, b += 3, o += 3) {
+        float v0 = b[0], v1 = b[1], v2 = b[2];
+        if (s) {
+            const float f = fraction[i];
+            v0 = v0 + (s[0] - v0) * f;
+            v1 = v1 + (s[1] - v1) * f;
+            v2 = v2 + (s[2] - v2) * f;
+            s += 3;
+        }
+        if (layer) {
+            const float clear = 1.0f - layer[3];
+            v0 = v0 * clear + layer[0];
+            v1 = v1 * clear + layer[1];
+            v2 = v2 * clear + layer[2];
+            layer += 4;
+        }
+        o[0] = v0, o[1] = v1, o[2] = v2;
+    }
+}
+
 #ifdef WM_NATIVE
 /* The native tier is compiled with -march=native, for whatever the build
  * machine had. Run on a CPU without one of those instruction sets it would
@@ -1584,4 +1782,8 @@ const wm_kernel_table WM_FN(wm_table) = {
     WM_FN(dirt_composite),
     WM_FN(veil_blend),
     WM_FN(overcast_blend),
+    WM_FN(grow_alike),
+    WM_FN(place_apart),
+    WM_FN(water_lobes),
+    WM_FN(droplet_composite),
 };

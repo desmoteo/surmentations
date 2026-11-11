@@ -44,10 +44,12 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import mode
 from weathermentations.base import WeatherTransform, require_depth_provider, scene_of
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
-from weathermentations.utils.grids import pixel_grid
+from weathermentations.utils.channels import percentile
+from weathermentations.utils.grids import on_coarse_grid, pixel_grid
 from weathermentations.utils.photometry import from_linear_unit, to_linear_unit
 
 # Broad, red-weighted stand-in for silicon's response with the IR-cut filter
@@ -196,10 +198,22 @@ class NightIrMode(WeatherTransform):
         # LED beam profile: brightest on the optical axis, falling as cos^k of
         # the field angle. Approximated from normalised image radius, which is
         # monotonic in field angle.
-        yy, xx = pixel_grid(height, width)
         cx, cy = width / 2.0, height / 2.0
-        radius = np.sqrt(((xx - cx) / max(cx, 1)) ** 2 + ((yy - cy) / max(cy, 1)) ** 2)
-        beam = np.clip(np.cos(np.clip(radius, 0.0, 1.0) * (np.pi / 3.0)), 0.0, 1.0) ** falloff
+
+        def beam_at(yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
+            radius = np.sqrt(((xx - cx) / max(cx, 1)) ** 2 + ((yy - cy) / max(cy, 1)) ** 2)
+            profile: np.ndarray = (
+                np.clip(np.cos(np.clip(radius, 0.0, 1.0) * (np.pi / 3.0)), 0.0, 1.0) ** falloff
+            )
+            return profile
+
+        # The beam changes over a third of the frame. In fast mode its cosine
+        # and power are taken on a grid four times coarser and enlarged.
+        beam = (
+            on_coarse_grid(height, width, beam_at)
+            if mode.fast()
+            else beam_at(*pixel_grid(height, width))
+        )
 
         record_draw(
             illuminator_range_m=reference,
@@ -239,7 +253,7 @@ class NightIrMode(WeatherTransform):
         # absolute level is set by the AE loop rather than by the illuminator's
         # nominal range — while the near/far *ratio* the inverse-square law
         # produced is untouched, which is the part that reads as night footage.
-        reference_level = float(np.percentile(signal, 80.0))
+        reference_level = percentile(signal, 80.0)
         if reference_level > 1e-6:
             signal = signal * (target_level / reference_level)
 
@@ -264,4 +278,5 @@ class NightIrMode(WeatherTransform):
         # rather than a mathematically perfect grey.
         tint = np.array([1.0 + self.residual_tint, 1.0, 1.0 - self.residual_tint * 0.5])
         out = signal[..., None] * tint.astype(np.float32)[None, None, :]
-        return from_linear_unit(np.clip(out, 0.0, 1.0), scale, is_integer, img.dtype)
+        np.clip(out, 0.0, 1.0, out=out)
+        return from_linear_unit(out, scale, is_integer, img.dtype)

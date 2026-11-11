@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same twelve lines. It needs only a
+ * architecture, the program must print the same fourteen lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -234,5 +234,54 @@ int main(void) {
     WM_TABLE.overcast_blend(road, linear, luma, cover, NULL, sky, W * H, 0.3f, 0.6f, 0.41f);
     printf("%-9s overcast %016llx\n", WM_TABLE.name,
            (unsigned long long)(relit ^ fnv(road, N * sizeof(float))));
+
+    /* A mask grown by colour, with the depth test and without. */
+    float *edge = malloc(W * H * sizeof(float));
+    WM_TABLE.grow_alike(edge, linear, dry, cover, luma, wet, about_foot, W * H, 0.4f, 0.16f, 0.06f,
+                        1e-4f, 0.02f);
+    uint64_t edges = fnv(edge, W * H * sizeof(float));
+    WM_TABLE.grow_alike(edge, linear, dry, cover, luma, wet, NULL, W * H, 0.0f, 1.0f, 0.06f, 1e-4f,
+                        0.02f);
+    printf("%-9s grow     %016llx\n", WM_TABLE.name,
+           (unsigned long long)(edges ^ fnv(edge, W * H * sizeof(float))));
+
+    /* Drops: placed apart, their water surface, and the composite. */
+    enum { CANDIDATES = 4000, DROPS = 300, ORDERS = 4 };
+    double *px = malloc(CANDIDATES * sizeof(double)), *py = malloc(CANDIDATES * sizeof(double));
+    double *pr = malloc(CANDIDATES * sizeof(double));
+    int64_t *order = malloc(CANDIDATES * sizeof(int64_t)), *kept = malloc(DROPS * sizeof(int64_t));
+    for (int i = 0; i < CANDIDATES; i++) {
+        px[i] = uniform() * W, py[i] = uniform() * H, pr[i] = 0.5 + 12.0 * uniform() * uniform();
+        order[i] = CANDIDATES - 1 - i;
+    }
+    const ptrdiff_t placed = WM_TABLE.place_apart(px, py, pr, order, CANDIDATES, DROPS, 0.15, kept);
+    double lobes[DROPS * 7], shapes[DROPS * ORDERS * 2];
+    const int32_t orders[ORDERS] = {2, 3, 4, 5};
+    for (ptrdiff_t d = 0; d < placed; d++) {
+        const int64_t i = kept[d];
+        const double row[7] = {px[i], py[i], pr[i], 1.0 + 0.4 * uniform(), 0.3 + 0.4 * uniform(),
+                               0.1 * uniform(), 0.2 * uniform()};
+        for (int k = 0; k < 7; k++) {
+            lobes[7 * d + k] = row[k];
+        }
+        for (int k = 0; k < ORDERS; k++) {
+            shapes[(d * ORDERS + k) * 2] = 0.05 * uniform();
+            shapes[(d * ORDERS + k) * 2 + 1] = 6.28 * uniform();
+        }
+    }
+    float *level = calloc(W * H, sizeof(float)), *weighted = calloc(W * H, sizeof(float));
+    WM_TABLE.water_lobes(level, weighted, H, W, lobes, shapes, placed, ORDERS, orders, 4.0, 0.25);
+    float *layers = malloc(W * H * 4 * sizeof(float));
+    for (int i = 0; i < W * H; i++) {
+        const float alpha = clamp_unit(level[i]);
+        layers[4 * i] = alpha * 0.3f, layers[4 * i + 1] = alpha * 0.4f;
+        layers[4 * i + 2] = alpha * 0.5f, layers[4 * i + 3] = alpha;
+    }
+    WM_TABLE.droplet_composite(road, linear, dry, cover, layers, W * H);
+    printf("%-9s drops    %016llx\n", WM_TABLE.name,
+           (unsigned long long)(fnv(kept, (size_t)placed * sizeof(int64_t))
+                                ^ fnv(level, W * H * sizeof(float))
+                                ^ fnv(weighted, W * H * sizeof(float))
+                                ^ fnv(road, N * sizeof(float))));
     return 0;
 }

@@ -40,12 +40,17 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
+from weathermentations import mode
 from weathermentations.base import WeatherTransform
 from weathermentations.utils.photometry import from_linear_unit, luminance, to_linear_unit
 
 # Radius above which the base layer is computed on a downsampled copy. The
 # bilateral filter is O(radius^2) per pixel, so this caps the work per frame.
 _BASE_FILTER_MAX_RADIUS_PX = 12.0
+# The same cap in fast mode (:mod:`weathermentations.mode`). A third smaller
+# radius on a copy a third smaller again is a fifth of the work: 131 ms to 35
+# on a 1024-pixel frame. See `_base_filter_scale` for what it changes.
+_FAST_BASE_FILTER_MAX_RADIUS_PX = 8.0
 
 
 def _base_filter_scale(radius_px: float) -> tuple[int, float]:
@@ -57,8 +62,16 @@ def _base_filter_scale(radius_px: float) -> tuple[int, float]:
     at full resolution: measured at 512 px, a 24 px radius cost 2.0 s where
     the same frame takes 0.12 s downsampled by two. Half of all draws at that
     size landed in the gap.
+
+    In fast mode the cap is :data:`_FAST_BASE_FILTER_MAX_RADIUS_PX`, 8 pixels
+    for 12. The base layer is then a third coarser, and where it meets a
+    strong edge the halo's profile moves by a pixel or two: a frame is 1.3
+    levels from exact mode on average, and up to 40 along the edges of a
+    crossing's stripes, in a line one or two pixels wide. Side by side the
+    two are not told apart. Exact mode keeps the cap of 12.
     """
-    factor = max(1, math.ceil(radius_px / _BASE_FILTER_MAX_RADIUS_PX))
+    cap = _FAST_BASE_FILTER_MAX_RADIUS_PX if mode.fast() else _BASE_FILTER_MAX_RADIUS_PX
+    factor = max(1, math.ceil(radius_px / cap))
     return factor, max(1.0, radius_px / factor)
 
 

@@ -68,3 +68,43 @@ def weighted_colour(rgb: np.ndarray, weight: np.ndarray) -> np.ndarray:
     if not mode.fast():
         return np.asarray((rgb * weight[..., None]).sum(axis=(0, 1)))
     return np.asarray(weight.reshape(-1) @ rgb.reshape(-1, rgb.shape[-1]))
+
+
+# Bins of the histogram :func:`percentile` reads a percentile from in fast mode.
+_PERCENTILE_BINS = 16384
+
+
+def percentile(values: np.ndarray, q: float) -> float:
+    """``np.percentile(values, q)`` of a float32 field, by counting in fast mode.
+
+    numpy finds a percentile with a partial sort, 6 ms for a million values.
+    Fast mode counts them into 16384 bins over their range, finds the bin
+    the percentile falls in, and interpolates within it by rank: one pass,
+    and the value to within a 16384th of the field's range, which for the
+    exposure scales it is used for is a few parts in a hundred thousand.
+    Exact mode, and any other dtype, is ``np.percentile``.
+    """
+    if not mode.fast() or values.dtype != np.float32 or values.size < 2:
+        return float(np.percentile(values, q))
+    field = (
+        np.ascontiguousarray(values).reshape(values.shape[0], -1)
+        if values.ndim > 1
+        else (np.ascontiguousarray(values).reshape(1, -1))
+    )
+    low, high, _, _ = cv2.minMaxLoc(field)
+    if not high > low:
+        return float(low)
+    # The upper end is past the largest value, which would otherwise fall
+    # outside the last bin and not be counted.
+    width = (high - low) * (1.0 + 1e-6) / _PERCENTILE_BINS
+    counts = cv2.calcHist(
+        [field], [0], None, [_PERCENTILE_BINS], [low, low + width * _PERCENTILE_BINS]
+    ).ravel()
+    # numpy's rank of the percentile, counted from 0, and the bin it is in.
+    rank = q / 100.0 * (field.size - 1)
+    reached = np.cumsum(counts)
+    found = int(np.searchsorted(reached, rank, side="right"))
+    found = min(found, _PERCENTILE_BINS - 1)
+    before = float(reached[found] - counts[found])
+    within = (rank - before + 0.5) / max(float(counts[found]), 1.0)
+    return float(low + (found + min(max(within, 0.0), 1.0)) * width)

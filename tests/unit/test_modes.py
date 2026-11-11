@@ -21,7 +21,12 @@ from weathermentations import _native, mode
 from weathermentations.atmosphere import NightSnow, rain
 from weathermentations.atmosphere.night_rain import _beam_profile
 from weathermentations.atmosphere.snow import render_flake_field
-from weathermentations.camera import SensorNoise, TemporalDenoiseArtifacts
+from weathermentations.camera import (
+    NightIrMode,
+    SensorNoise,
+    TemporalDenoiseArtifacts,
+    WdrToneMapping,
+)
 from weathermentations.depth.normals import upward_facing
 from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare
 from weathermentations.lens import dirt as dirt_module
@@ -29,9 +34,9 @@ from weathermentations.lens import sun_flare as flare_module
 from weathermentations.lens.sun_flare import diffraction_starburst, polygon_distance
 from weathermentations.utils import color, overcast
 from weathermentations.utils import sky as sky_module
-from weathermentations.utils.channels import channel_max, frame_mean, weighted_colour
+from weathermentations.utils.channels import channel_max, frame_mean, percentile, weighted_colour
 from weathermentations.utils.filters import wide_blur, wide_dilate
-from weathermentations.utils.grids import centered_grid
+from weathermentations.utils.grids import centered_grid, on_coarse_grid, pixel_grid
 from weathermentations.utils.ground import ground_noise
 
 
@@ -636,3 +641,117 @@ def test_the_sky_s_edge_redrawn_on_its_own_rows_is_the_same_mask(
         sky_module.sky_to_depth_edge(everywhere, even),
         _sky_edge_over_the_whole_frame(everywhere, even),
     )
+
+
+# ------------------------------------------- the seventh round's fast forms
+
+
+def _photo_like(height: int = 360, width: int = 480, seed: int = 0) -> np.ndarray:
+    """Strong edges, a gradient and texture: what a tone mapper's halos and a
+    shadow's penumbra show up on."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:height, 0:width]
+    blocks = ((xx // 37) * 71 + (yy // 29) * 113) % 230
+    image = 12 + blocks[..., None] * 0.9 + rng.integers(0, 20, (height, width, 3))
+    image[: height // 3] = np.clip(image[: height // 3] + 60, 0, 255)
+    return np.clip(image, 0, 255).astype(np.uint8)
+
+
+def _both_modes(transform, image: np.ndarray, seeds: int = 3) -> list[np.ndarray]:
+    differences = []
+    for seed in range(seeds):
+        frames = {}
+        for flag in (True, False):
+            mode.set_fast(flag)
+            transform.set_random_seed(seed)
+            frames[flag] = transform(image=image)["image"].astype(np.int16)
+        assert not np.array_equal(frames[False], image), "the transform did nothing"
+        differences.append(np.abs(frames[True] - frames[False]))
+    return differences
+
+
+def test_tone_mapping_s_coarser_base_moves_edges_only() -> None:
+    """Fast mode filters the base layer at a radius of 8 for 12 on a smaller
+    copy. Where the base meets a strong edge the halo moves by a pixel or
+    two; elsewhere the frame is the same to a level or so."""
+    for difference in _both_modes(WdrToneMapping(p=1.0), _photo_like()):
+        assert difference.mean() < 2.5
+        assert np.percentile(difference, 99.0) <= 25
+        # The large differences are lines along edges, not areas.
+        assert (difference > 10).mean() < 0.02
+
+
+def test_a_shadow_s_penumbra_blurred_small_is_within_a_level_or_two() -> None:
+    """CastShadows blurs its shadows on a reduced copy in fast mode once the
+    penumbra is wide. With no depth to give a surface, the shadows here are
+    applied through a ground plane, as the depth-sharing tests do."""
+    from weathermentations.depth import SharedDepthProvider
+    from weathermentations.depth.estimator import DepthEstimator
+    from weathermentations.scene import CastShadows
+
+    class GroundPlane(DepthEstimator):
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            height, width = image.shape[:2]
+            rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+            depth = np.clip(450.0 / np.maximum(rows - height / 2.0, 1e-3), 0.0, 50.0)
+            return np.broadcast_to(depth / 50.0, (height, width)).astype(np.float32)
+
+    transform = CastShadows(
+        depth_provider=SharedDepthProvider(GroundPlane()), p=1.0, penumbra_range=(0.012, 0.02)
+    )
+    for difference in _both_modes(transform, _photo_like(480, 640)):
+        assert difference.max() <= 4
+        assert difference.mean() < 0.1
+
+
+def test_the_night_illuminator_by_the_short_way_is_within_a_few_levels() -> None:
+    """Fast mode takes the beam on a coarse grid and the exposure level from
+    a histogram."""
+    from weathermentations.depth import SharedDepthProvider
+    from weathermentations.depth.estimator import DepthEstimator
+
+    class Receding(DepthEstimator):
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            height, width = image.shape[:2]
+            return np.broadcast_to(
+                np.linspace(0.05, 1.0, height, dtype=np.float32)[:, None], (height, width)
+            ).copy()
+
+    transform = NightIrMode(depth_provider=SharedDepthProvider(Receding()), p=1.0)
+    for difference in _both_modes(transform, _photo_like()):
+        assert difference.max() <= 4
+        assert difference.mean() < 0.1
+
+
+@pytest.mark.parametrize("q", [5.0, 50.0, 80.0, 99.5])
+def test_a_percentile_by_counting_is_the_sorted_one_to_a_bin(q: float) -> None:
+    rng = np.random.default_rng(int(q))
+    for values in (
+        rng.gamma(2.0, 0.1, (300, 400)).astype(np.float32),
+        rng.uniform(-3.0, 5.0, (256, 256)).astype(np.float32),
+        np.where(rng.random((200, 200)) < 0.7, 0.0, rng.random((200, 200))).astype(np.float32),
+    ):
+        mode.set_fast(False)
+        exact = percentile(values, q)
+        assert exact == float(np.percentile(values, q))
+        mode.set_fast(True)
+        bin_width = float(values.max() - values.min()) / 16384
+        assert abs(percentile(values, q) - exact) <= 2.0 * bin_width
+    mode.set_fast(True)
+    assert percentile(np.full((10, 10), 0.25, np.float32), 80.0) == 0.25
+
+
+def test_a_smooth_field_from_a_coarse_grid_is_the_field_to_a_fraction_of_a_level() -> None:
+    def beam(yy: np.ndarray, xx: np.ndarray) -> np.ndarray:
+        radius = np.sqrt(((xx - 320.0) / 320.0) ** 2 + ((yy - 240.0) / 240.0) ** 2)
+        return np.clip(np.cos(np.clip(radius, 0.0, 1.0) * (np.pi / 3.0)), 0.0, 1.0) ** 2.5
+
+    for height, width in ((480, 640), (481, 641), (37, 53)):
+        full = beam(*pixel_grid(height, width)).astype(np.float32)
+        coarse = on_coarse_grid(height, width, beam)
+        assert coarse.shape == (height, width) and coarse.dtype == np.float32
+        # A third of a percent of the peak, at the kink where the profile is
+        # clipped near the corners; a twentieth of that on average.
+        assert np.abs(coarse - full).max() < 4e-3
+        assert np.abs(coarse - full).mean() < 2e-4
+    assert np.array_equal(on_coarse_grid(20, 30, beam, reduction=1), beam(*pixel_grid(20, 30)))

@@ -53,7 +53,6 @@ estimator's interface.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -112,10 +111,6 @@ def _scene_image(scene: str, size: int) -> np.ndarray:
     return np.ascontiguousarray(cv2.resize(image, (size, size), interpolation=cv2.INTER_CUBIC))
 
 
-def _key(image: np.ndarray) -> str:
-    return hashlib.sha1(np.ascontiguousarray(image).tobytes()).hexdigest()
-
-
 def _fast_mode() -> bool:
     """Whether the checkout imported runs in fast mode; False if it has no modes."""
     try:
@@ -126,7 +121,13 @@ def _fast_mode() -> bool:
 
 
 def _stored_estimator(path: Path, precision: str) -> Any:
-    """A depth estimator that hands back maps saved by ``--save-depth``."""
+    """A depth estimator that hands back maps saved by ``save-depth``.
+
+    The map is the one stored for the scene and size named in its
+    ``current`` attribute, which the caller sets before each scene. Not the
+    frame's bytes: another machine's OpenCV resizes a photograph to slightly
+    different ones, and the depth of the scene is what is wanted.
+    """
     from weathermentations.depth.estimator import DepthEstimator
 
     stored = np.load(path)
@@ -135,11 +136,15 @@ def _stored_estimator(path: Path, precision: str) -> Any:
     }
 
     class StoredDepth(DepthEstimator):
+        current = ""
+
         def estimate(self, image: np.ndarray) -> np.ndarray:
-            key = _key(image)
-            if key not in maps:
-                raise KeyError("no stored depth for this frame: was it saved at this size?")
-            return maps[key].copy()
+            if self.current not in maps:
+                raise KeyError(f"no stored depth for {self.current!r}: saved at this size?")
+            depth = maps[self.current]
+            if depth.shape != image.shape[:2]:
+                raise ValueError(f"stored depth for {self.current!r} is {depth.shape}")
+            return depth.copy()
 
     return StoredDepth()
 
@@ -156,7 +161,8 @@ def save_depth(path: Path, sizes: list[int]) -> None:
             image = _scene_image(scene, size)
             for precision, fast in (("half", True), ("full", False)):
                 mode.set_fast(fast)
-                maps[f"{precision}/{_key(image)}"] = estimator.estimate(image).astype(np.float32)
+                depth = estimator.estimate(image).astype(np.float32)
+                maps[f"{precision}/{scene}/{size}"] = depth
     np.savez_compressed(path, **maps)
     print(f"saved {len(maps)} depth maps to {path}")
 
@@ -201,6 +207,7 @@ def run(args: argparse.Namespace) -> None:
             transforms = {name: t for name, t in transforms.items() if name in args.only}
         for scene in SCENES:
             image = _scene_image(scene, size)
+            estimator.current = f"{scene}/{size}"
             if not args.load_depth:
                 times.setdefault(f"depth_estimate/{size}", []).append(
                     _least(lambda image=image: _estimate_synchronised(estimator, image), 5)

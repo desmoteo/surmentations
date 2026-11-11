@@ -27,7 +27,9 @@ from weathermentations.atmosphere import rain as rain_module
 from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import TemporalDenoiseArtifacts
 from weathermentations.camera import denoise as denoise_module
-from weathermentations.lens import DirtSoil
+from weathermentations.lens import DirtSoil, WaterDroplets
+from weathermentations.lens import water_droplets as droplets_module
+from weathermentations.utils import ground as ground_module
 from weathermentations.utils import overcast, photometry
 
 # Built and switched on: with WEATHERMENTATIONS_NATIVE=0 the library is there
@@ -110,16 +112,22 @@ def test_a_view_that_is_not_contiguous_is_converted_whole() -> None:
     assert np.array_equal(native, _textbook_encode_u8(view))
 
 
-@pytest.mark.filterwarnings("ignore:invalid value encountered in cast")
 def test_nan_is_refused_the_same_way_with_and_without_the_kernels() -> None:
-    """A NaN in a frame is a renderer's bug. The table lookup has always
-    raised on one, and the kernels must not turn it into a black pixel."""
+    """A NaN in a frame is a renderer's bug, and must not come out as a black
+    pixel. It was refused by accident on x86-64, where converting it to a
+    table index gave one out of range, and went through as black on arm64,
+    where it gave 0. It is now looked for, on every machine, either way."""
     linear = _linear((96, 96, 3))
     linear[40, 40, 1] = np.nan
-    with pytest.raises(IndexError):
+    with pytest.raises(ValueError, match="NaN"):
         photometry.from_linear_unit(linear, 255.0, True, np.uint8)
-    with _native.disabled(), pytest.raises(IndexError):
+    with _native.disabled(), pytest.raises(ValueError, match="NaN"):
         photometry.from_linear_unit(linear, 255.0, True, np.uint8)
+    float_table = photometry._LINEAR_TO_SRGB_LUT
+    with pytest.raises(ValueError, match="NaN"):
+        photometry.through_table(linear, float_table)
+    with _native.disabled(), pytest.raises(ValueError, match="NaN"):
+        photometry.through_table(linear, float_table)
 
 
 # ----------------------------------------------------------------- flakes
@@ -678,6 +686,172 @@ def test_the_overcast_kernel_is_the_numpy_it_stands_in_for(tier: str, with_sky: 
         assert np.array_equal(native, reference)
 
 
+# ------------------------------------------------ masks grown by colour
+
+
+def _grow_inputs(seed: int, shape: tuple[int, int] = (83, 117)) -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    f32 = np.float32
+    weight = rng.uniform(0.0, 1.0, shape).astype(f32)
+    weight[rng.random(shape) < 0.2] = 0.0  # no mask nearby at all
+    return {
+        "linear": rng.uniform(0.0, 1.0, (*shape, 3)).astype(f32),
+        "nearby_sum": (rng.uniform(0.0, 1.0, (*shape, 3)) * weight[..., None]).astype(f32),
+        "weight": weight,
+        "mask": rng.uniform(-0.1, 1.1, shape).astype(f32).clip(0.0, 1.0),
+        "grown": rng.uniform(0.0, 1.0, shape).astype(f32),
+        "depth": rng.uniform(0.0, 1.0, shape).astype(f32),
+    }
+
+
+def _grow_in_numpy(v: dict[str, np.ndarray], with_depth: bool) -> np.ndarray:
+    """What `sky_to_depth_edge` and `fill_to_edges` compute, as they write it."""
+    nearby = v["nearby_sum"] / np.maximum(v["weight"], 1e-4)[..., None]
+    distance = np.abs(v["linear"] - nearby)
+    unlike = np.maximum(np.maximum(distance[..., 0], distance[..., 1]), distance[..., 2])
+    alike = np.clip(2.0 - unlike / 0.06, 0.0, 1.0) * (v["weight"] > 0.02)
+    if not with_depth:
+        return np.maximum(v["mask"], v["grown"] * alike).astype(np.float32)
+    plainly_not = np.clip(2.0 - np.abs(v["depth"] - 0.45) / 0.16, 0.0, 1.0)
+    return np.maximum(v["mask"] * plainly_not, v["grown"] * alike * plainly_not)
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("with_depth", [True, False], ids=["sky", "ground"])
+def test_a_mask_grown_by_colour_is_the_numpy_one_to_the_bit(tier: str, with_depth: bool) -> None:
+    _native.set_tier(tier)
+    for seed in range(3):
+        v = _grow_inputs(seed)
+        ours = _native.grow_alike(
+            v["linear"], v["nearby_sum"], v["weight"], v["mask"], v["grown"],
+            v["depth"] if with_depth else None, 0.45, 0.16 if with_depth else 1.0,
+            0.06, 1e-4, 0.02,
+        )
+        assert np.array_equal(ours, _grow_in_numpy(v, with_depth))
+
+
+@requires_native
+@pytest.mark.parametrize("fast", [True, False], ids=["fast", "exact"])
+def test_the_ground_filled_to_its_edges_does_not_depend_on_the_kernels(fast: bool) -> None:
+    rng = np.random.default_rng(4)
+    linear = rng.uniform(0.0, 1.0, (180, 240, 3)).astype(np.float32)
+    ground = np.zeros((180, 240), dtype=np.float32)
+    ground[100:, 30:200] = rng.uniform(0.5, 1.0, (80, 170)).astype(np.float32)
+    linear[100:, 30:200] = 0.3
+    mode.set_fast(fast)
+    native = ground_module.fill_to_edges(ground, linear)
+    with _native.disabled():
+        reference = ground_module.fill_to_edges(ground, linear)
+    assert native.max() > 0.5 and np.array_equal(native, reference)
+
+
+@requires_native
+def test_a_mask_grown_by_colour_declines_what_it_was_not_written_for() -> None:
+    v = _grow_inputs(0, (16, 16))
+    args = (0.45, 0.16, 0.06, 1e-4, 0.02)
+    planes = (v["weight"], v["mask"], v["grown"], v["depth"])
+    wide = v["linear"].astype(np.float64)
+    assert _native.grow_alike(wide, v["nearby_sum"], *planes, *args) is None
+    assert _native.grow_alike(v["linear"], v["nearby_sum"][:8], *planes, *args) is None
+    cut = v["weight"][:8]
+    assert _native.grow_alike(v["linear"], v["nearby_sum"], cut, *planes[1:], *args) is None
+
+
+# -------------------------------------------------------- water droplets
+
+
+def _placement(seed: int) -> list[tuple[float, float, float, float]]:
+    rng = np.random.default_rng(seed)
+    return droplets_module._sample_positions(
+        rng, 400, 320, 240, (0.8, 14.0), 2.2, 9.0, (1.5, 4.0), 0.15
+    )
+
+
+@requires_native
+def test_drops_are_placed_where_the_numpy_loop_places_them() -> None:
+    for seed in range(4):
+        native = _placement(seed)
+        with _native.disabled():
+            reference = _placement(seed)
+        assert len(native) > 100
+        assert native == reference
+
+
+def _lobes(seed: int, count: int = 80) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    lobes = np.column_stack(
+        [
+            rng.uniform(-20, 340, count), rng.uniform(-20, 260, count),
+            rng.uniform(1.0, 25.0, count), rng.uniform(1.0, 1.6, count),
+            rng.uniform(0.2, 0.7, count), rng.uniform(0.0, 0.15, count),
+            rng.uniform(0.0, 0.3, count),
+        ]
+    )
+    harmonics = np.stack(
+        [rng.uniform(0.0, 0.06, (count, 4)), rng.uniform(0.0, 2 * np.pi, (count, 4))], axis=-1
+    )
+    return lobes, harmonics
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+def test_the_water_surface_in_c_is_numpy_s_to_float_rounding(tier: str) -> None:
+    """Fast mode's water surface takes the outline's harmonics from a
+    recurrence on the angle's sine and cosine, not from `arctan2` and `sin`:
+    the same surface to a few units in the last place of a float."""
+    _native.set_tier(tier)
+    for seed in range(3):
+        lobes, harmonics = _lobes(seed)
+        mode.set_fast(True)
+        level, height_sq = droplets_module._water_surface(lobes, 240, 320, harmonics)
+        mode.set_fast(False)
+        exact_level, exact_height = droplets_module._water_surface(lobes, 240, 320, harmonics)
+        assert exact_level.max() > 1.0, "the fixture's drops do not overlap"
+        assert np.abs(level - exact_level).max() < 5e-5
+        assert np.abs(height_sq - exact_height).max() < 5e-5 * max(1.0, float(exact_height.max()))
+
+
+@requires_native
+@pytest.mark.parametrize("fast", [True, False], ids=["fast", "exact"])
+def test_water_droplets_depend_on_the_kernels_only_in_fast_mode_and_by_a_level(fast: bool) -> None:
+    transform = WaterDroplets(p=1.0)
+    image = _noisy_blocks(240, 320, seed=13)
+    mode.set_fast(fast)
+    for seed in range(3):
+        transform.set_random_seed(seed)
+        native = transform(image=image)["image"]
+        transform.set_random_seed(seed)
+        with _native.disabled():
+            reference = transform(image=image)["image"]
+        difference = np.abs(native.astype(np.int16) - reference.astype(np.int16))
+        if fast:
+            assert difference.max() <= 1 and (difference > 0).mean() < 1e-3
+        else:
+            assert not difference.any()
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("film", [True, False])
+@pytest.mark.parametrize("drops", [True, False])
+def test_the_droplet_composite_is_the_numpy_arithmetic(tier: str, film: bool, drops: bool) -> None:
+    _native.set_tier(tier)
+    v = _dirt_inputs(2)
+    base, light = v["linear"], v["spread"]
+    fraction = v["mask"].clip(0.0, 1.0)[..., None]
+    layers = np.concatenate([v["albedo"] * 0.5, v["luma"].clip(0.0, 1.0)[..., None]], axis=-1)
+    expected = base
+    if film:
+        expected = expected + (light - expected) * fraction
+    if drops:
+        expected = expected * (1.0 - layers[..., 3:]) + layers[..., :3]
+    ours = _native.droplet_composite(
+        base, light if film else None, fraction if film else None, layers if drops else None
+    )
+    assert np.array_equal(ours, expected)
+
+
 # ------------------------------------------------------------------ tiers
 
 
@@ -715,11 +889,28 @@ def test_every_tier_gives_the_same_bytes() -> None:
                     dirt["linear"], dirt["spread"], dirt["mask"], dirt["albedo"], dirt["around"],
                     0.6, 0.6, 0.08, 0.35,
                 ),
+                _native.grow_alike(*_grow_inputs(6).values(), 0.45, 0.16, 0.06, 1e-4, 0.02),
+                np.asarray(_placement(7)),
+                _water_surface_fast(8),
+                _native.droplet_composite(
+                    dirt["linear"], dirt["spread"], dirt["mask"],
+                    np.concatenate([dirt["albedo"], dirt["luma"][..., None]], axis=-1),
+                ),
             )
         )
     for other in results[1:]:
         for first, second in zip(results[0], other, strict=True):
             assert np.array_equal(first, second)
+
+
+def _water_surface_fast(seed: int) -> np.ndarray:
+    lobes, harmonics = _lobes(seed)
+    level = np.zeros((240, 320), dtype=np.float32)
+    weighted = np.zeros((240, 320), dtype=np.float32)
+    assert _native.water_lobes(
+        level, weighted, lobes, harmonics, (2, 3, 4, 5), 4.0, droplets_module._OUTLINE_LEVEL
+    )
+    return np.stack([level, weighted])
 
 
 @requires_native

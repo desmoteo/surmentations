@@ -98,6 +98,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import _native, mode
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.color import sky_radiance_linear
@@ -290,6 +291,14 @@ def _sample_positions(
     # placing them early keeps them from being crowded out by small ones.
     order = np.argsort(-footprints)
 
+    # The acceptance loop is compiled where it can be, with the same
+    # arithmetic in double: the same drops, without a Python iteration and
+    # five array operations for each of a few thousand candidates.
+    kept = _native.place_apart(xs, ys, footprints, order, count, min_gap_ratio)
+    if kept is not None:
+        return [
+            (float(xs[i]), float(ys[i]), float(radii[i]), float(stretches[i])) for i in kept
+        ]
     accepted_x = np.empty(count, dtype=np.float64)
     accepted_y = np.empty(count, dtype=np.float64)
     accepted_r = np.empty(count, dtype=np.float64)
@@ -603,9 +612,24 @@ def _water_surface(
     weighted = np.zeros((height, width), dtype=np.float32)
     falloff = 1.0 - _OUTLINE_LEVEL
 
+    # In fast mode the lobes are one compiled pass, which takes each outline
+    # harmonic from the angle's sine and cosine by a recurrence instead of
+    # from `arctan2` and `sin`: the same surface to float rounding, without
+    # a dozen array operations for each of a few hundred drops.
+    drawn = mode.fast() and _native.water_lobes(
+        level,
+        weighted,
+        lobes,
+        harmonics,
+        _OUTLINE_HARMONICS,
+        _MIN_RADIUS_FOR_WOBBLE_PX,
+        _OUTLINE_LEVEL,
+    )
     # As Python floats: unpacking numpy scalars row by row costs more than the
     # arithmetic on a lobe a few pixels across.
-    for index, (cx, cy, radius, elongation, cap, egg, sag) in enumerate(lobes.tolist()):
+    for index, (cx, cy, radius, elongation, cap, egg, sag) in enumerate(
+        [] if drawn else lobes.tolist()
+    ):
         outline = None
         if harmonics is not None and radius >= _MIN_RADIUS_FOR_WOBBLE_PX:
             outline = harmonics[index]
@@ -1418,6 +1442,9 @@ class WaterDroplets(WeatherTransform):
         **params: Any,
     ) -> np.ndarray:
         has_film = condensation is not None and float(condensation.max()) > 1e-3
+        # The film's light and how much of it each pixel takes, and the drops
+        # as a premultiplied layer: laid over the scene at the end, together.
+        film_light = scattered_fraction = layers = None
         if optics is None and not has_film:
             return img
 
@@ -1470,10 +1497,7 @@ class WaterDroplets(WeatherTransform):
                 scattered += (glow * _IR_FILM_RETURN) * ring[..., None]
             if reduce > 1:
                 scattered = cv2.resize(scattered, (cols, rows), interpolation=cv2.INTER_LINEAR)
-            # out + f * (scattered - out), without the temporaries.
-            scattered -= out
-            scattered *= scattered_fraction
-            out = out + scattered
+            film_light = scattered
 
         if optics is not None:
             # The picture inside a drop is squeezed several-fold, so it is
@@ -1500,6 +1524,20 @@ class WaterDroplets(WeatherTransform):
             layers[optics.wet, :3] = inside * optics.alpha
             layers[optics.wet, 3] = optics.alpha[:, 0]
             layers = _aperture_blur(layers.reshape(rows, cols, 4), aperture_px)
-            out = out * (1.0 - layers[..., 3:]) + layers[..., :3]
+
+        # `out + (film_light - out) * fraction`, then `out * (1 - alpha) +
+        # colour` with the drops: one compiled pass where there is one, with
+        # this arithmetic in this order, and the same floats without it.
+        composited = _native.droplet_composite(out, film_light, scattered_fraction, layers)
+        if composited is not None:
+            return from_linear_unit(composited, scale, is_integer, img.dtype)
+        if film_light is not None:
+            film_light -= out
+            film_light *= scattered_fraction
+            out = out + film_light
+        if layers is not None:
+            covered = out * (1.0 - layers[..., 3:])
+            covered += layers[..., :3]
+            out = covered
 
         return from_linear_unit(out, scale, is_integer, img.dtype)

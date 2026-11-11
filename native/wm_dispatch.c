@@ -181,3 +181,34 @@ WM_EXPORT void wm_overcast_blend(
     active->overcast_blend(
         out, linear, gain, grey, sky, cloud, pixels, desaturate, cover_scale, mean_grey);
 }
+
+WM_EXPORT void wm_grow_alike(
+    float *out, const float *linear, const float *nearby_sum, const float *weight,
+    const float *mask, const float *grown, const float *depth, ptrdiff_t pixels,
+    float level, float depth_tolerance, float colour_tolerance, float least_weight,
+    float some_weight) {
+    active->grow_alike(
+        out, linear, nearby_sum, weight, mask, grown, depth, pixels, level, depth_tolerance,
+        colour_tolerance, least_weight, some_weight);
+}
+
+WM_EXPORT ptrdiff_t wm_place_apart(
+    const double *x, const double *y, const double *footprint, const int64_t *order,
+    ptrdiff_t candidates, ptrdiff_t count, double gap, int64_t *kept) {
+    return active->place_apart(x, y, footprint, order, candidates, count, gap, kept);
+}
+
+WM_EXPORT void wm_water_lobes(
+    float *level, float *weighted, ptrdiff_t height, ptrdiff_t width, const double *lobes,
+    const double *harmonics, ptrdiff_t count, int n_harmonics, const int32_t *orders,
+    double wobble_radius, double outline_level) {
+    active->water_lobes(
+        level, weighted, height, width, lobes, harmonics, count, n_harmonics, orders,
+        wobble_radius, outline_level);
+}
+
+WM_EXPORT void wm_droplet_composite(
+    float *out, const float *base, const float *scattered, const float *fraction,
+    const float *layers, ptrdiff_t pixels) {
+    active->droplet_composite(out, base, scattered, fraction, layers, pixels);
+}

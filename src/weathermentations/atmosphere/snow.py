@@ -365,6 +365,11 @@ _VEHICLE_WIDTH = 0.09
 # Share of a tree's lit foliage that carries snow when the ground is covered.
 _CANOPY_COVER = 0.7
 
+# The working sigma of the local-mean blur that canopy texture is measured
+# against, in fast mode; see `wide_blur`. Coarser than its default of 8 so
+# that the blur, at a hundredth of the diagonal, is reduced at all.
+_LOCAL_MEAN_WORK_SIGMA = 4.0
+
 # Least light settled snow is taken to be under, as a share of the frame's
 # own estimate of its illuminant: at night, and by day.
 _SHADING_FLOOR = (0.35, 0.9)
@@ -852,7 +857,11 @@ class RandomSnow(WeatherTransform):
             # canopy is light and shadow at every scale, a lawn is flat.
             sigma = 0.01 * float(np.hypot(height, width))
             luma = luminance(linear_scene)
-            around = np.maximum(cv2.GaussianBlur(luma, (0, 0), sigmaX=sigma), 1e-4)
+            # The mean brightness around each pixel, which texture is measured
+            # against. A blur of a hundredth of the diagonal, 14 pixels on a
+            # 1024-pixel frame: in fast mode on a copy reduced to a working
+            # sigma of 4, as lens grime is (`wide_blur`), 24 ms to 3.
+            around = np.maximum(wide_blur(luma, sigma, work_sigma=_LOCAL_MEAN_WORK_SIGMA), 1e-4)
             relief = wide_blur(np.abs(luma / around - 1.0), 2.0 * sigma)
             # `np.ptp` gives an np.float64, which would widen this field and
             # every one made from it down to the settled snow itself.
