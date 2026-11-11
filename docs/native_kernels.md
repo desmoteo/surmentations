@@ -17,11 +17,12 @@ before any of it was changed.
 **Its method, yes, all of it. Its kernels, no.** Pillow-AllSIMD's design
 notes prescribe an order: find where the time goes, fix the algorithm, help
 the compiler, and only then write SIMD by hand. Followed here, the first
-three steps took the depth-conditioned weather transforms from 3 to 7.5
-times faster on one core and left nothing for the fourth to do.
+three steps made fog, rain and snow 5 to 8 times faster on one core at
+1024 pixels, and the 22 transforms 2.8 times faster as a geometric mean
+(2.1 at 512 pixels), and left nothing for the fourth to do.
 
-**C, yes, in three places.** Colour conversion, snowflake sprites and rain
-streaks are now plain C, compiled per instruction-set tier and loaded
+**C, yes, in a few places.** Colour conversion, snowflake sprites, rain
+streaks and the wet road's reflection are now plain C, compiled per instruction-set tier and loaded
 through `ctypes`, with the numpy code kept as the definition and the
 fallback. The loops they replace were slow because of the interpreter, not
 the arithmetic: one Python call per snowflake, a dozen numpy and OpenCV
@@ -44,10 +45,75 @@ but nothing here could time it.
 
 ## What it bought
 
-Milliseconds per frame on one pinned performance core with OpenCV held to
-one thread, which is what a `DataLoader` worker has. "Before" is the parent
-branch, "numpy only" is this branch without the compiled library, "kernels"
-is with it. Each figure is the best of six interleaved rounds.
+Milliseconds per call on one pinned performance core with OpenCV held to
+one thread, which is what a `DataLoader` worker has. "Original" is the
+branch this one started from, plain numpy and OpenCV; "now" is this branch
+as built, in fast mode with the kernels. Each figure is the mean over four
+of the example scenes and two seeds, depth already estimated, and the best
+of three interleaved rounds.
+
+| Transform | 512: original | now | | 1024: original | now | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `NightFog` | 97.6 | 26.5 | 3.7x | 827.7 | 102.0 | 8.1x |
+| `AcFlicker` | 6.8 | 1.0 | 6.5x | 33.2 | 4.1 | 8.0x |
+| `RandomFog` | 88.7 | 23.8 | 3.7x | 802.0 | 108.5 | 7.4x |
+| `RandomRain`, wet road drawn | 272.7 | 89.2 | 3.1x | 1684.9 | 254.1 | 6.6x |
+| `HousingOccluders` | 14.8 | 6.1 | 2.4x | 103.4 | 16.2 | 6.4x |
+| `RandomRain`, dry road | 159.4 | 42.0 | 3.8x | 1036.3 | 163.4 | 6.3x |
+| `NightSnow` | 45.8 | 8.6 | 5.3x | 255.5 | 46.6 | 5.5x |
+| `NightRain` | 117.4 | 27.2 | 4.3x | 341.0 | 66.4 | 5.1x |
+| `RandomSnow` | 180.1 | 73.0 | 2.5x | 1294.8 | 274.0 | 4.7x |
+| `ExposureTransient` | 7.7 | 2.1 | 3.6x | 35.2 | 8.6 | 4.1x |
+| `SensorNoise` | 13.4 | 6.0 | 2.2x | 66.9 | 27.7 | 2.4x |
+| `SourceGlare` | 49.0 | 22.0 | 2.2x | 215.9 | 92.9 | 2.3x |
+| the depth estimate, once per new frame | 31.5 | 12.1 | 2.6x | 36.2 | 15.9 | 2.3x |
+| `CastShadows` | 26.9 | 21.0 | 1.3x | 140.9 | 76.0 | 1.9x |
+| `NightIrMode` | 19.1 | 12.6 | 1.5x | 87.5 | 53.1 | 1.6x |
+| `DirtSoil` | 49.0 | 42.7 | 1.1x | 256.0 | 156.4 | 1.6x |
+| `SunFlare` | 28.0 | 17.9 | 1.6x | 125.2 | 77.1 | 1.6x |
+| `WdrToneMapping` | 121.9 | 116.3 | 1.0x | 163.5 | 127.9 | 1.3x |
+| `WaterDroplets` | 53.1 | 46.5 | 1.1x | 139.6 | 110.1 | 1.3x |
+| `TemporalDenoiseArtifacts` | 67.2 | 63.0 | 1.1x | 325.7 | 260.5 | 1.3x |
+| `TransmissionFaults` | 173.1 | 173.6 | 1.0x | 282.2 | 280.7 | 1.0x |
+| `VideoCodecArtifacts` | 145.8 | 145.5 | 1.0x | 182.8 | 182.4 | 1.0x |
+| `RollingShutter` | 1.9 | 1.9 | 1.0x | 7.5 | 7.7 | 1.0x |
+| **Geometric mean of the 22 transforms** | | | **2.10x** | | | **2.79x** |
+| **All 22 once each** | 1740 | 968 | **1.80x** | 8408 | 2497 | **3.37x** |
+
+- **The geometric mean** is over the 22 rows above it, each counted once
+  whatever it costs: 2.1 times at 512 pixels and 2.8 at 1024. Three of them
+  did not change. Over the 19 that did it is 2.4 and 3.3.
+- **"All 22 once each"** adds the times up instead, so the heavy transforms
+  weigh more: 1.8 and 3.4 times. Neither figure is a pipeline's: that
+  depends on which transforms it holds and how often each fires.
+- **`RandomRain` is two rows** because its default changed. The original
+  drew the wet road in 70% of frames and this branch draws it in 40%, which
+  is a choice about pictures and not a speed-up; the rows show the same
+  work in both. Weighted by each branch's own default, a rain frame at
+  1024 pixels went from about 1490 ms to about 200.
+- **The depth estimate** is paid once for each new frame, by the first
+  depth-conditioned transform that fires, and is not in the means.
+- **Part of the first four rows is a regression being undone.** The sky-edge
+  redraw that the round before this branch shared between fog, rain, snow
+  and night fog ran two Gaussian blurs with a sigma of 58 pixels and a
+  59-pixel disc dilation at full resolution. With OpenCV's sixteen threads
+  that was about a fifth of a second at 1024 pixels. On one thread it was
+  most of a second. The README's timing table was measured before that
+  change and with all threads, so it never showed it.
+- **The machine was not idle.** Other jobs were running on it throughout and
+  the hardware counters were not readable (`perf_event_paranoid` is 4). The
+  same pinned loop measured 87 ms in one hour and 144 ms in another. Ratios
+  within a row hold; absolute figures are good to perhaps 40%, and differ
+  between the tables on this page, which were made on different days.
+- **The README's table is all-threads and stale.** It has not been
+  re-measured on this branch.
+
+### After the first round
+
+How much of that came from numpy alone and how much from the compiled
+kernels, measured after the first round of work on the benchmark's
+synthetic scene: "before" is the original, "numpy only" the branch without
+the compiled library, "kernels" with it. Best of six interleaved rounds.
 
 | Transform | 512: before | numpy only | kernels | 1024: before | numpy only | kernels | 1024 speed-up |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -74,21 +140,7 @@ is with it. Each figure is the best of six interleaved rounds.
 | `TransmissionFaults` | 95.3 | 95.8 | 95.6 | 133.0 | 132.7 | 133.6 | 1.0x |
 
 The table is fast mode, measured before the mode existed, when its sky-edge
-filters were the only ones. Three things to know before reading it.
-
-- **Part of the first four rows is a regression being undone.** The sky-edge
-  redraw that the previous round shared between fog, rain, snow and night
-  fog ran two Gaussian blurs with a sigma of 58 pixels and a 59-pixel disc
-  dilation at full resolution. With OpenCV's sixteen threads that was about
-  a fifth of a second at 1024 pixels. On one thread it was most of a
-  second. The README's timing table was measured before that change and
-  with all threads, so it never showed it.
-- **The machine was not idle.** Other jobs were running on it throughout and
-  the hardware counters were not readable (`perf_event_paranoid` is 4). The
-  same pinned loop measured 87 ms in one hour and 144 ms in another. Ratios
-  within a row hold; absolute figures are good to perhaps 40%.
-- **The README's table is all-threads and now stale.** It has not been
-  re-measured on this branch.
+filters were the only ones. 
 
 ## Where the time was
 
@@ -141,6 +193,8 @@ Python.
 | `render_streaks`, one pixel wide | 15,000 streaks | 211 ms | 11 ms | exact |
 | `render_streaks`, wide and blurred | 15,000 streaks | 251 ms | 24 ms | exact unblurred, 6e-8 blurred |
 | `wet_composite` (fast mode) | the wet road's compositing, 600 rows | 24 ms | 1.8 ms | exact |
+| `mirror_rows` | what each wet pixel mirrors | 41 ms | 9.5 ms with its two OpenCV filters | exact |
+| `wet_reflection` (fast mode) | the wet road's mirror image | two warps and three blends | one pass | exact against the numpy it shares its arithmetic with |
 
 Getting those figures took three corrections to how the C was written or
 built, none of them intrinsics. They are the substance of the answer to the
@@ -276,7 +330,7 @@ all three. What remains is listed under [Not done](#not-done).
 - **Across machines**: [`native/check/run.sh`](../native/check/run.sh) prints
   a hash per kernel, and one more for the fast-mode sprites. The SSE2, AVX2
   and native builds (glibc, GCC 13.3) and an arm64 build under QEMU (musl,
-  GCC 13.2) print the same six.
+  GCC 13.2) print the same seven.
 - **Memory**: the kernel tests pass with the library built with
   `-fsanitize=address,undefined`.
 - **Refused input**: a NaN in a frame still raises, as the table lookup
@@ -332,7 +386,7 @@ those moves with them. Against exact mode, on the same 152 frames:
 
 | | Pixels that differ | Mean difference (levels) | Largest |
 | --- | ---: | ---: | ---: |
-| `RandomRain`, wet road drawn | 21% | 0.36 | 32 |
+| `RandomRain`, wet road drawn | 30% | 0.74 | 42 |
 | `RandomSnow` | 14% | 0.45 | 94 |
 | `CastShadows` | 8% | 0.15 | 62 |
 | `NightIrMode` | 3% | 0.03 | 2 |
@@ -451,16 +505,91 @@ What was done:
   about 270: 0.7 of 642 and 0.3 of 172 before, 0.4 of 407 and 0.6 of 173
   now. The example images of the pipelines were made before this.
 
-**Would more C help here? Little.** The compositing kernel is the one loop
-in the wet road that C could fuse. It is thirteen times the numpy it
-replaces, 24 ms to 1.8 ms, and that is 22 ms of a 400 ms frame.
-What is left is some twenty steps of 5 to 30 ms each: two image warps, the
-search up each column for whatever stands on the road, the sky's edge, the
-ground's edge, three small blurs, the overcast relight. None is a loop that
-is slow for being in Python; each is one OpenCV or numpy call doing its job
-once. Making the frame cheaper from here means drawing less of it, which is
-what the lower probability does.
+### The wet road, simplified
 
+That left a wet frame at 400 ms, 231 ms of it the wet road, in some twenty
+steps of 5 to 30 ms. It was revised once more, into three stages:
+
+1. **Read the ground once, at the depth map's size.** Where the road is, how
+   far it reaches up to each object, where it is paved and where puddles
+   lie were five passes over the full frame, all of them reading a depth map
+   interpolated up from 518 pixels. In fast mode they run on a copy that
+   size and the map of wet ground is enlarged: 125 ms to 36.
+2. **Build the mirror image in one pass.** What each pixel mirrors was found
+   with six frame-sized arrays, and the image itself with two warps of the
+   frame and three blends. A mirror about a horizontal line moves whole
+   rows, so the frame read at a fractional row is two rows weighted. One
+   sweep down the frame finds what each pixel mirrors (`mirror_rows`, 41 ms
+   to 9.5, exact) and one pass makes the image (`wet_reflection`).
+3. **Composite**, with the kernel already there.
+
+The blur of the puddles' reflection is also skipped when no water stands on
+the road, which changes nothing. Against the commit before:
+
+| | 512: before | after | | 1024: before | after | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `RandomRain`, wet road drawn | 105.4 | 95.0 | 1.1x | 389.8 | 272.0 | 1.4x |
+| `RandomRain`, dry road | 44.3 | 44.1 | 1.0x | 167.4 | 170.6 | 1.0x |
+
+The wet road itself went from 231 ms to 97 ms at 1024 pixels, and the pass
+that renders it from 103 ms to 49. Since the start of this round a wet frame
+has gone from 642 ms to 272.
+
+Two things to know about the mirror image:
+
+- **In fast mode its arithmetic is the library's own**, the same in numpy and
+  in C, so a frame does not depend on the kernels. Exact mode keeps OpenCV's
+  warp. The two could not be made one: OpenCV rounds the interpolation
+  weight to a 32nd of a pixel in version 4 and does not in version 5, so
+  "what OpenCV gives" is not one thing to reproduce.
+- **Fast mode now differs from exact by more on a wet road** than on anything
+  else: 30% of pixels, 0.7 levels on average, 42 at most, where the ground
+  read at 518 pixels meets what stands on it. The worst frames show the same
+  road with the same reflections; the difference is under and beside the
+  vehicles.
+
+**Is there more for C here?** Not much. What is left of a wet frame's 100 ms
+is two small blurs, a median filter, the ground reading at 518 pixels and
+the arithmetic around the kernels, none above 13 ms.
+
+## The remaining heavy effects, assessed
+
+Four transforms were looked at for what else could be done, a new
+dependency included. Nothing in this section is built; the figures are from
+prototypes and probes, on one thread at 1024 pixels unless said.
+
+| Transform | Where the time is | What was tried | Result |
+| --- | --- | --- | --- |
+| `TemporalDenoiseArtifacts` (267 ms) | OpenCV's `edgePreservingFilter`, 175 ms a pass, one to three passes | the same filter as one C function | 62 ms, the same bytes as OpenCV; 35 ms with a table for its power function, one level off in a handful of pixels |
+| `VideoCodecArtifacts` (150 to 190 ms) | starting two ffmpeg processes; the encoding is a tenth of it | encoding and decoding in-process with PyAV | H.264: 151 ms to 10 at 512 px, 189 to 31 at 1024. H.265: 209 to 105 at 512, no gain at 1024 |
+| `TransmissionFaults` (134 ms) | the same two processes, 85 to 125 ms each | not prototyped | by the figures above, about 20 ms |
+| `DirtSoil` (165 ms) | building the deposit field at full size, 100 ms; compositing it, 20 ms | profiled only | the field is blurred as soon as it is made, so it could be built at half size; perhaps 165 ms to 95 |
+| `SunFlare` (107 ms) | spread thin: 20 ms in one float64 expression, 14 and 12 ms in two overlays, 9 ms in a re-encode | profiled only | perhaps 15 to 20%, from keeping that expression float32 and drawing the smooth radial fields small |
+
+- **The denoise filter is the one to do.** OpenCV's implementation takes a
+  power per pixel six times a call and walks the frame through checked
+  element accessors. A straight port, `powf` and all, gave byte-identical
+  output on every frame and setting tried, three times faster; the power
+  only ever takes 766 values, and tabled it is five times faster. It needs
+  no dependency. Equality with OpenCV rests on the two using the same
+  `powf` and neither fusing a multiply-add, which holds on x86-64 with
+  glibc and would have to be checked when the estimator is built, as the
+  depth preprocessing is, before being relied on in exact mode elsewhere.
+- **An in-process codec pays for H.264 and costs a dependency.** PyAV is the
+  realistic one: its wheels carry their own FFmpeg with libx264 and
+  libx265. Installed it is 127 MB, and those builds are GPL, which matters
+  to anyone redistributing an environment. It would be an optional extra,
+  used when present. Its frames are not the ffmpeg binary's: they differed
+  by 2.4 to 4.7 levels on average, where the codec itself changes the frame
+  by 3.7 to 8.2, so the colour conversion at least would have to be matched
+  and the output re-examined before it replaced anything. H.265 gains
+  little because there the encoder is the cost, and the binary uses every
+  core where the probe used one.
+- **`DirtSoil` and `SunFlare` want the same treatment as the wet road**:
+  build what is soft at the size its softness allows, and fuse the last
+  compositing step. Neither has a single hot loop.
+
+## Three suggestions, measured
 ## Three suggestions, measured
 
 Three general prescriptions were tried against this code. Each was worth
