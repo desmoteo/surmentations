@@ -11,6 +11,7 @@ import pytest
 
 from weathermentations.camera.sensor_noise import (
     SensorNoise,
+    _one_colour,
     bayer_sites,
     demosaic,
     photon_transfer_noise,
@@ -104,3 +105,16 @@ def test_shadows_are_the_noisy_part_of_a_picture() -> None:
     transform.set_random_seed(1)
     out = transform(image=image)["image"].astype(np.float32)
     assert out[:, 8:120].std() > 1.5 * out[:, 136:248].std()
+
+
+def test_the_mosaic_is_what_indexing_by_site_gives() -> None:
+    """The Bayer mosaic and its colour planes are made by strided copies and
+    not by looking each pixel's site up. Same arrays."""
+    rng = np.random.default_rng(3)
+    mosaic = rng.standard_normal((63, 70)).astype(np.float32)  # odd height too
+    sites = bayer_sites(*mosaic.shape)
+    assert sites.dtype == np.uint8
+    for channel in range(3):
+        by_site = np.where(sites == channel, mosaic, 0.0).astype(np.float32)
+        assert np.array_equal(_one_colour(mosaic, channel), by_site)
+    assert np.array_equal(demosaic(mosaic, sites), demosaic(mosaic))

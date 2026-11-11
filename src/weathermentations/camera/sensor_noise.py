@@ -69,17 +69,38 @@ _GREEN_KERNEL = np.array([[0, 1, 0], [1, 4, 1], [0, 1, 0]], dtype=np.float32) / 
 
 def bayer_sites(height: int, width: int) -> np.ndarray:
     """Which channel each pixel of an RGGB mosaic samples: ``(H, W)`` of 0, 1, 2."""
-    sites = np.ones((height, width), dtype=np.intp)
+    sites = np.ones((height, width), dtype=np.uint8)
     sites[0::2, 0::2] = 0
     sites[1::2, 1::2] = 2
     return sites
 
 
-def demosaic(mosaic: np.ndarray, sites: np.ndarray) -> np.ndarray:
-    """Bilinear interpolation of a single-plane RGGB mosaic to ``(H, W, 3)``."""
+def _one_colour(mosaic: np.ndarray, channel: int) -> np.ndarray:
+    """An RGGB ``mosaic`` at the sites of ``channel``, zero elsewhere.
+
+    Copies along the mosaic's own stride. Selecting through a frame-sized
+    map of site labels gave the same plane three times slower.
+    """
+    if channel == 1:
+        plane = mosaic.astype(np.float32, copy=True)
+        plane[0::2, 0::2] = 0.0
+        plane[1::2, 1::2] = 0.0
+        return plane
+    start = 0 if channel == 0 else 1
+    plane = np.zeros(mosaic.shape, dtype=np.float32)
+    plane[start::2, start::2] = mosaic[start::2, start::2]
+    return plane
+
+
+def demosaic(mosaic: np.ndarray, sites: np.ndarray | None = None) -> np.ndarray:
+    """Bilinear interpolation of a single-plane RGGB mosaic to ``(H, W, 3)``.
+
+    ``sites`` is accepted for callers that pass :func:`bayer_sites` and is
+    not read: the layout is RGGB, which is what the kernels assume too.
+    """
     planes = []
     for channel, kernel in ((0, _SPARSE_KERNEL), (1, _GREEN_KERNEL), (2, _SPARSE_KERNEL)):
-        sampled = np.where(sites == channel, mosaic, 0.0).astype(np.float32)
+        sampled = _one_colour(mosaic, channel)
         planes.append(cv2.filter2D(sampled, -1, kernel, borderType=cv2.BORDER_REFLECT_101))
     return np.stack(planes, axis=2)
 
@@ -97,16 +118,17 @@ def photon_transfer_noise(
     demosaiced. See the module docstring.
     """
     height, width = linear_rgb.shape[:2]
-    sites = bayer_sites(height, width)
-    rows = np.arange(height).reshape(-1, 1)
-    cols = np.arange(width).reshape(1, -1)
-    sampled = linear_rgb[rows, cols, sites]
+    # The mosaic: `linear_rgb[rows, cols, bayer_sites]`, as three strided
+    # copies. Green everywhere, then red and blue on their own sites.
+    sampled = linear_rgb[..., 1].copy()
+    sampled[0::2, 0::2] = linear_rgb[0::2, 0::2, 0]
+    sampled[1::2, 1::2] = linear_rgb[1::2, 1::2, 2]
 
     electrons_per_unit = full_well_e / gain
     electrons = np.maximum(sampled, 0.0) * electrons_per_unit
     sigma = np.sqrt(electrons + read_noise_e * read_noise_e) / electrons_per_unit
     mosaic = rng.standard_normal((height, width)).astype(np.float32) * sigma.astype(np.float32)
-    return demosaic(mosaic, sites)
+    return demosaic(mosaic)
 
 
 class SensorNoise(WeatherTransform):
