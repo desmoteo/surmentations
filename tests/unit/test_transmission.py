@@ -246,8 +246,11 @@ def test_the_link_s_state_is_recorded() -> None:
 def test_it_refuses_to_be_built_without_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
     """It could fall back to drawing blocks. It must not: that would put a
     different artefact in a training set under this transform's name."""
+    from weathermentations.camera import _inprocess
     from weathermentations.camera import codec as codec_module
 
     monkeypatch.setattr(codec_module, "ffmpeg_path", lambda: None)
+    # Nor PyAV, which would do in the binary's place.
+    monkeypatch.setattr(_inprocess, "has_encoder", lambda encoder: False)
     with pytest.raises(RuntimeError, match="ffmpeg"):
         TransmissionFaults()

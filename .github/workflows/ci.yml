@@ -66,3 +66,13 @@ jobs:
       - name: pytest in exact mode
         # Fast mode is the default and what the runs above used.
         run: WEATHERMENTATIONS_FAST=0 pytest tests -q
+
+      - name: The codec transforms through PyAV
+        # The optional extra: H.264 and H.265 encoded in the process. Its
+        # tests skip without it, so they are run once with it, in both
+        # modes. PyAV's wheels need Python 3.12 at the version current here.
+        if: matrix.python-version == '3.12'
+        run: |
+          pip install -e ".[codec]"
+          pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py tests/unit/test_camera.py -q
+          WEATHERMENTATIONS_FAST=0 pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py -q
