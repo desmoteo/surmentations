@@ -54,6 +54,8 @@ times faster. It is optional and changes no picture: without it the same
 transforms run their numpy code. `python -c "from weathermentations import
 _native; print(_native.tier())"` prints the instruction set in use, or
 `None` if it was not built; `python hatch_build.py` builds it in a checkout.
+`WEATHERMENTATIONS_BUILD_MARCH=native` adds a tier compiled with
+`-march=native -mtune=native`, for the machine doing the build only.
 See [`docs/native_kernels.md`](docs/native_kernels.md).
 
 **Fast and exact mode.** By default a few operations use a faster form that

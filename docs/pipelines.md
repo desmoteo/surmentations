@@ -450,8 +450,11 @@ The picture varies a good deal more as a result. There is still no shutter
 speed at which daylight rain becomes dramatic.
 
 What actually says "rain" in a daylit frame is the **wet road** and water on
-the glass, which is why this pipeline raises `wetness_probability` to 0.85
-inside the rain branch rather than leaving it at the transform's default.
+the glass, which is why this pipeline raises `wetness_probability` to 0.5
+inside the rain branch rather than leaving it at the transform's default of
+0.4. It was 0.85. A wet road is also two to three times the cost of a rain
+frame, so if frames matter more than milliseconds, pass
+`ground_severity` and get one in every rain frame.
 
 How wet the road is, and how much snow has settled, are **not** tied to
 `weather_severity`. They follow how long the weather has lasted, so by
