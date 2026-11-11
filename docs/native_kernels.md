@@ -29,6 +29,12 @@ calls per rain streak, five passes over the frame to turn linear light into
 code values. A wholesale translation would gain little more, because most of
 what is left is inside OpenCV filters.
 
+**Fast and exact, both.** As in Pillow-AllSIMD, the forms that are faster
+but not quite the same operation are a mode, on by default, and
+`WEATHERMENTATIONS_FAST=0` or `weathermentations.set_fast(False)` turns them
+off. Exact mode reproduces the parent branch byte for byte on every frame
+compared. See [Fast and exact mode](#fast-and-exact-mode).
+
 **Explicit SIMD, no, not now.** Three loops of the kernels were written a
 second time with AVX2 and NEON intrinsics and timed against the plain C. On
 x86-64 the intrinsics were between 0.74 and 1.14 times the compiler's speed.
@@ -67,7 +73,8 @@ is with it. Each figure is the best of six interleaved rounds.
 | `VideoCodecArtifacts` | 86.7 | 86.4 | 86.2 | 106.1 | 105.9 | 105.6 | 1.0x |
 | `TransmissionFaults` | 95.3 | 95.8 | 95.6 | 133.0 | 132.7 | 133.6 | 1.0x |
 
-Three things to know before reading it.
+The table is fast mode, measured before the mode existed, when its sky-edge
+filters were the only ones. Three things to know before reading it.
 
 - **Part of the first four rows is a regression being undone.** The sky-edge
   redraw that the previous round shared between fog, rain, snow and night
@@ -107,10 +114,14 @@ Python.
 - **Wide blurs and dilations on a reduced copy**
   ([`utils/sky.py`](../src/weathermentations/utils/sky.py), `wide_blur` and
   `wide_dilate`). The sky-edge redraw went from 875 ms to 38 ms on one
-  thread, timed back to back. **This is the one change on the branch that
-  alters pictures**; see [What changed in the pictures](#what-changed-in-the-pictures).
+  thread, timed back to back. It alters pictures along the skyline, so it
+  is fast mode only.
 - **Channel reductions as two ufunc calls**
   ([`utils/channels.py`](../src/weathermentations/utils/channels.py)). Exact.
+- **The Bayer mosaic by strided copies.** `SensorNoise` looked each pixel's
+  colour up in a frame-sized map of site labels, four times a frame. Copying
+  along the mosaic's own stride gives the same arrays in 2.5 ms where the
+  lookups took 8.1 ms at 1024 pixels. Exact.
 
 ### 2. numpy
 
@@ -210,7 +221,7 @@ all three. What remains is listed under [Not done](#not-done).
 | A deterministic gate in CI for silent slow-downs | The vectorisation test |
 | Check the tails for over-reads | Address and undefined-behaviour sanitizer run |
 | Hand-written intrinsics per architecture | Not adopted: measured at 0.74x to 1.13x |
-| Fast mode, with bounded differences from exact | Not adopted: the kernels match numpy, and the one approximation is in Python |
+| Fast mode on by default, exact mode on request, the bounds tested | Adopted: `weathermentations.mode` |
 | Integer fixed-point tricks, AVX-VNNI | Not applicable: this code is float32 |
 
 ## How it is built and loaded
@@ -240,6 +251,7 @@ all three. What remains is listed under [Not done](#not-done).
 | `WEATHERMENTATIONS_NATIVE=0` | run the numpy code even when the library is there |
 | `WEATHERMENTATIONS_NATIVE=require` | a missing library is an `ImportError` |
 | `WEATHERMENTATIONS_ISA=sse2` | use that tier, to compare tiers on one machine |
+| `WEATHERMENTATIONS_FAST=0` | exact mode |
 | `WEATHERMENTATIONS_BUILD_NATIVE=0` / `require` | skip the build, or fail if it fails |
 
 `weathermentations._native` has the same switches at run time
@@ -254,42 +266,148 @@ all three. What remains is listed under [Not done](#not-done).
   OpenCV's line, polygon-fill and circle rasterisers and is compared with
   `cv2.polylines` over 36,000 streaks at every heading and width.
 - **On real scenes**: every transform on four of the example scenes with two
-  seeds, 152 frames. With the kernels on and off, 151 are byte-identical and
-  one snow frame differs in one value of 1,152,000, by one level. The SSE2
-  and AVX2 tiers are identical on all 152.
+  seeds, 152 frames. With the kernels on and off all 152 are byte-identical,
+  in exact mode and in fast mode, and exact mode without the kernels is
+  byte-identical to the parent branch. The SSE2 and AVX2 tiers are identical
+  on all 152.
 - **Across machines**: [`native/check/run.sh`](../native/check/run.sh) prints
-  a hash per kernel. The SSE2 and AVX2 builds (glibc, GCC 13.3) and an arm64
-  build under QEMU (musl, GCC 13.2) print the same four hashes.
+  a hash per kernel, and one more for the fast-mode sprites. The SSE2 and
+  AVX2 builds (glibc, GCC 13.3) and an arm64 build under QEMU (musl,
+  GCC 13.2) print the same five.
 - **Memory**: the kernel tests pass with the library built with
   `-fsanitize=address,undefined`.
 - **Refused input**: a NaN in a frame still raises, as the table lookup
   always has, instead of becoming a black pixel in C.
-- **The full suite** passes with the kernels on and with
-  `WEATHERMENTATIONS_NATIVE=0`.
+- **The full suite** passes in fast mode with the kernels, in exact mode
+  with them, and in exact mode without them.
 
-## What changed in the pictures
+## Fast and exact mode
 
-Only the reduced-size blur and dilation in the sky-edge redraw, and only in
-`RandomFog`, `RandomRain`, `RandomSnow` and `NightFog`. Against the parent
-branch on the 152 frames:
+Some operations have a faster form that is not quite the same operation.
+Those forms are **fast mode**, which is the default. **Exact mode** computes
+what the reference numpy and OpenCV code computes.
 
-| Transform | Pixels changed | Mean difference (levels) | Largest (levels) |
-| --- | ---: | ---: | ---: |
-| fog | 0.9% | 0.010 | 7 |
-| rain | 1.4% | 0.017 | 9 |
-| snow | 1.2% | 0.014 | 22 |
-| night fog | 0.8% | 0.013 | 8 |
+```python
+import weathermentations
 
-The differences lie along the skyline, where the redraw decides how far the
-sky mask may grow, and are largest in the night street scene. The blur
-accounts for almost none of it (two levels at most, in 0.1% of pixels); the
-dilation accounts for the rest. Side by side the frames are not
-distinguishable, and the golden images pass unregenerated, but the skyline
-is where the previous round's artefacts were, so this change is in a commit
-of its own. If the skyline is to stay exactly as it was, `wide_dilate` can
-be swapped back for `cv2.dilate` alone, at about 80 ms per frame at 1024
-pixels on one thread; reverting the whole commit brings back the blurs as
-well, which cost several times that.
+weathermentations.set_fast(False)      # exact from here on
+with weathermentations.exact():        # or for one block
+    frame = transform(image=image)["image"]
+```
+
+`WEATHERMENTATIONS_FAST=0` selects exact mode at import. Use that with a
+`DataLoader` whose workers are spawned, since a spawned worker does not see a
+`set_fast` call made in its parent. The mode is independent of the compiled
+kernels: either mode runs with or without them.
+
+What fast mode changes, and by how much, on 152 frames (every transform on
+four example scenes, two seeds):
+
+| Fast form | Where | Speed | Difference from exact |
+| --- | --- | --- | --- |
+| Blur and dilation on a reduced copy of the frame | the sky's edge, in `RandomFog`, `RandomRain`, `RandomSnow`, `NightFog` | 5 to 7 times the whole transform at 1024 px | 0.8 to 1.4% of pixels, 0.01 to 0.02 levels on average, 22 at most, along the skyline |
+| A weighted mean colour as a matrix-vector product | the same four | 12 ms to under 1 ms at 1024 px | float32 rounding of a sum |
+| float32 where the reference is float64 by accident | aperture and scratch geometry in `SunFlare`, `SourceGlare`; polygonal flakes without the kernels | `SunFlare` 1.16 times | one level, in 0.02% of values |
+| Multiplying by a reciprocal for a division | polygonal sprites in the flake kernel | the kernel 1.2 times (AVX2) to 1.4 times (SSE2) | 2e-6 of a sprite's peak |
+
+The other thirteen transforms give the same bytes in both modes.
+
+**Exact mode is the parent branch.** With the kernels off, all 152 frames
+are byte-identical to the frames the parent branch makes. With the kernels
+on they are byte-identical again, in exact mode and in fast mode.
+
+**The skyline is the difference that can matter.** The reduced dilation
+decides how far the sky mask may grow, and it is largest in the night street
+scene. Side by side the frames are not distinguishable, and the golden images
+pass in either mode, but the skyline is where the previous round's artefacts
+were. If one comes back, exact mode is the first thing to try.
+
+Each bound above is asserted in
+[`tests/unit/test_modes.py`](../tests/unit/test_modes.py), except the
+skyline figures, which need the depth model and were measured as described.
+
+## Three suggestions, measured
+
+Three general prescriptions were tried against this code. Each was worth
+something in one place and nothing in the others.
+
+**Floats in place of doubles.**
+- *The kernels* already use float32 in every per-pixel loop. Doubles are left
+  only in the set-up of a particle, which is under 6% of the flake kernel.
+- *The numpy code* was audited by running every transform with a hook that
+  reports frame-sized float64 arrays. It found four fields in `SunFlare` and
+  one in the snow code, all float64 for the same accidental reason: `np.cos`
+  returns an `np.float64`, and numpy widens a float32 array that meets one.
+  Fast mode keeps them float32: 1.16 times on `SunFlare`.
+- *Random draws* stay float64. Drawing float32 directly changes the stream,
+  so a seed would give a different picture, not a rounded one, for 10% of
+  one call.
+
+**Multiplications in place of divisions.**
+- *Polygonal sprites* divided by a per-edge constant for every pixel and
+  every blade. Folding the reciprocal into the edge normal once per sprite
+  is the 1.2 to 1.4 times in the table above.
+- *Round sprites* have two divisions by constants per pixel. Replacing them
+  gains 3%.
+- *numpy over a frame*: `frame / c` is 1.71 ms and `frame * (1 / c)` 1.56 ms
+  at 1024 pixels. Not worth a changed result; left alone.
+- *An integer division per pixel* in the streak kernel is gone, with no
+  change in time that could be measured.
+
+**Narrower integers.**
+- *The Bayer site map* was int64. As uint8 it is an eighth the memory and
+  indexes no faster (numpy widens an index array again). What paid was not
+  having the map: the strided copies above.
+- *The streak kernel's pixel list* is now two int16 coordinates in place of
+  one int32 index. Same size, same speed.
+- *Table indices* as uint16 convert three times faster than int32 in the
+  numpy encode (0.7 ms against 2.1 ms), but a NaN then becomes index 0
+  instead of an error. Left as int32; the kernel does not use that path.
+
+## A memory pool for the kernels
+
+Asked: would keeping the kernels' scratch buffers between calls, in place of
+allocating them each time, be faster?
+
+**Inside the kernels, no.** A variant that keeps its scratch in thread-local
+storage was timed against the one that allocates:
+
+| 3,000 flakes | allocating | pooled |
+| --- | ---: | ---: |
+| sprites up to 60 px | 16.68 ms | 16.58 ms |
+| up to 15 px | 1.90 ms | 1.90 ms |
+| a few pixels | 0.97 ms | 0.97 ms |
+
+The kernels allocate a handful of times per call, not per particle, and
+60 calls made 199 allocator system calls in all. A pool would add state
+shared between calls to save 0.6%.
+
+**The kernels' output arrays, barely.** Writing into a reused buffer in
+place of a fresh array is 1.37 ms against 1.40 ms for the encode at 1024
+pixels.
+
+**The numpy code around them, yes, and without a pool.** Every numpy
+expression over a frame allocates a frame and frees it. glibc returns blocks
+of that size to the operating system and maps them again, and the pages are
+zeroed each time. Telling it to keep them
+(`weathermentations.keep_freed_memory()`, which sets `M_MMAP_THRESHOLD` and
+`M_TRIM_THRESHOLD`) measured:
+
+| Transform | default | kept |
+| --- | ---: | ---: |
+| `SensorNoise`, 512 px | 12.7 ms | 5.9 ms |
+| `SensorNoise`, 1024 px | 39 ms | 28 ms |
+| `SunFlare`, 1024 px | 111 ms | 100 ms |
+| `DirtSoil`, 1024 px | 255 ms | 240 ms |
+| `WaterDroplets`, 1024 px | 125 ms | 116 ms |
+| `AcFlicker`, 1024 px | 4.5 ms | 4.5 ms |
+
+It is a setting of the whole process, so the library does not make it on
+import; call it in a `DataLoader`'s `worker_init_fn`. Both settings are
+needed: either alone measured slower than neither. Peak memory did not move
+in these runs, but the process no longer shrinks back after a peak. Each
+figure is one transform called in a loop; a pipeline's mix of sizes was not
+measured.
 
 ## Found on the way
 

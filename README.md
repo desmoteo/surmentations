@@ -56,6 +56,20 @@ _native; print(_native.tier())"` prints the instruction set in use, or
 `None` if it was not built; `python hatch_build.py` builds it in a checkout.
 See [`docs/native_kernels.md`](docs/native_kernels.md).
 
+**Fast and exact mode.** By default a few operations use a faster form that
+differs slightly from the reference arithmetic: most visibly, the sky's edge
+in fog, rain and snow is found on a reduced copy of the frame, which is 5 to
+7 times faster at 1024 px and moves about 1% of pixels along the skyline.
+`weathermentations.set_fast(False)`, `with weathermentations.exact():` or
+`WEATHERMENTATIONS_FAST=0` selects exact mode. The bounds are in
+[`docs/native_kernels.md`](docs/native_kernels.md#fast-and-exact-mode).
+
+**In a `DataLoader` worker**, `weathermentations.keep_freed_memory()` tells
+glibc's allocator to reuse freed frames instead of returning them to the
+system. It made `SensorNoise` twice as fast at 512 px and several other
+transforms 6 to 10% faster, at the cost of the worker not shrinking after a
+peak. It is a process-wide setting, so it is yours to call.
+
 ---
 
 ## Quickstart
@@ -608,6 +622,7 @@ ruff check src tests docs scripts hatch_build.py
 mypy src/weathermentations
 pytest tests -q
 WEATHERMENTATIONS_NATIVE=0 pytest tests -q   # the numpy path alone
+WEATHERMENTATIONS_FAST=0 pytest tests -q     # exact mode
 python hatch_build.py                        # rebuild after editing native/*.c
 ```
 
