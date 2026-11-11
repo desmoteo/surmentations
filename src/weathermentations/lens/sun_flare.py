@@ -259,6 +259,35 @@ def _add_starburst(
     rot_y = np.broadcast_to(rot_y, shape)
 
     centre = pattern.shape[0] / 2.0
+    if mode.fast():
+        # The same sampling as below, which is a rotation, a scale and a
+        # shift: an affine warp, which OpenCV does without being handed two
+        # frame-sized maps of where each pixel comes from. It places a sample
+        # to 1/32 of a pattern pixel where the maps place it exactly.
+        cos_r, sin_r = float(np.cos(rotation)), float(np.sin(rotation))
+        from_x, from_y = x0 - source[0], y0 - source[1]
+        planes = []
+        for channel in range(3):
+            scale = float(RGB_WAVELENGTHS_NM[channel] / RGB_WAVELENGTHS_NM[1])
+            per = centre / (half * scale)
+            to_pattern = np.array(
+                [
+                    [per * cos_r, -per * sin_r, per * (from_x * cos_r - from_y * sin_r) + centre],
+                    [per * sin_r, per * cos_r, per * (from_x * sin_r + from_y * cos_r) + centre],
+                ]
+            )
+            sampled = cv2.warpAffine(
+                pattern,
+                to_pattern,
+                (x1 - x0, y1 - y0),
+                flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0.0,
+            )
+            planes.append(sampled * np.float32(color[channel]))
+        region = canvas[y0:y1, x0:x1]
+        region += cv2.merge(planes)
+        return
     for channel in range(3):
         # Diffraction scales the pattern linearly with wavelength.
         scale = float(RGB_WAVELENGTHS_NM[channel] / RGB_WAVELENGTHS_NM[1])
@@ -387,6 +416,37 @@ def add_sensor_smear(
     canvas += profile[None, :, None] * colour * strength
 
 
+def _near_line(
+    height: int,
+    width: int,
+    through: tuple[float, float],
+    sin_a: float,
+    cos_a: float,
+    reach: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rows and columns of every pixel that could be within ``reach`` of a line.
+
+    The line passes ``through`` a point along ``(cos_a, sin_a)``. It crosses
+    each row once, or each column if it is nearer level than upright, and the
+    pixels within reach of it are the few on either side of the crossing: a
+    few thousand candidates on a frame of a million pixels. A superset of the
+    band, for the caller to test exactly.
+    """
+    upright = abs(sin_a) >= abs(cos_a)
+    # Along the axis the line crosses once per step, and across it.
+    steps, span = (height, width) if upright else (width, height)
+    origin_along, origin_across = (through[1], through[0]) if upright else (through[0], through[1])
+    slope, steepness = (cos_a / sin_a, abs(sin_a)) if upright else (sin_a / cos_a, abs(cos_a))
+    along = np.arange(steps)
+    crossing = np.rint(origin_across + (along - origin_along) * slope).astype(np.int64)
+    aside = int(np.ceil(reach / steepness)) + 1
+    across = crossing[:, None] + np.arange(-aside, aside + 1)[None, :]
+    along = np.broadcast_to(along[:, None], across.shape)
+    inside = (across >= 0) & (across < span)
+    along, across = along[inside], across[inside]
+    return (along, across) if upright else (across, along)
+
+
 def add_scratch_streaks(
     canvas: np.ndarray,
     colour: np.ndarray,
@@ -413,6 +473,23 @@ def add_scratch_streaks(
     if not scratches:
         return
     height, width = canvas.shape[:2]
+    if mode.fast():
+        for angle, length, strength in scratches:
+            if strength <= 1e-4 or length <= 1.0:
+                continue
+            sin_a, cos_a = float(np.sin(angle)), float(np.cos(angle))
+            rows, cols = _near_line(height, width, source, sin_a, cos_a, _SCRATCH_CUTOFF_PX)
+            # The arithmetic of the loop below, on those pixels alone.
+            dx = cols.astype(np.float32) - source[0]
+            dy = rows.astype(np.float32) - source[1]
+            across = -dx * sin_a + dy * cos_a
+            band = np.abs(across) <= _SCRATCH_CUTOFF_PX
+            rows, cols, across = rows[band], cols[band], across[band]
+            along = dx[band] * cos_a + dy[band] * sin_a
+            core = np.exp(-0.5 * (across / _SCRATCH_WIDTH_PX) ** 2)
+            falloff = np.exp(-np.abs(along) / max(length, 1.0))
+            canvas[rows, cols] += (core * falloff)[:, None] * colour * strength
+        return
     yy, xx = pixel_grid(height, width)
     dx = xx - source[0]
     dy = yy - source[1]
@@ -436,6 +513,83 @@ def add_scratch_streaks(
         core = np.exp(-0.5 * (across[band] / _SCRATCH_WIDTH_PX) ** 2)
         falloff = np.exp(-np.abs(along[band]) / max(length, 1.0))
         canvas[band] += (core * falloff)[:, None] * colour * strength
+
+
+# The flare's broad light is drawn on a grid this many times coarser than the
+# frame at most in fast mode, and never so coarse that the glare's core is
+# under ten of its pixels: see `_broad_light`.
+_BROAD_REDUCTION = 4
+_BROAD_CORE_PX = 10.0
+# Samples the coarse grid extends past the frame on every side, so that the
+# enlargement interpolates at the frame's edge as it does inside it.
+_BROAD_MARGIN = 2
+
+
+def _broad_light(
+    height: int,
+    width: int,
+    source: tuple[float, float],
+    half_diag: float,
+    halo_radius: float,
+    veiling_colour: np.ndarray,
+    halo_colour: np.ndarray,
+    ir_colour: np.ndarray | None,
+) -> np.ndarray:
+    """Veiling glare, halo and infrared glow, ``(H, W, 3)`` float32, drawn small.
+
+    All three are functions of the distance from the source that change over
+    tens of pixels: the glare's core is 12% of the half-diagonal, 87 pixels on
+    a 1024-pixel frame, the halo is no narrower than 5% of it. They are
+    evaluated at the centres of blocks of four by four pixels and enlarged:
+    a sixteenth of the transcendental functions, and within a quarter of a
+    level of evaluating them at every pixel, that much only at the glare's
+    very peak. The colours carry each term's weight.
+    """
+    core = 0.12 * half_diag
+    reduction = int(min(_BROAD_REDUCTION, max(1.0, core / _BROAD_CORE_PX)))
+    margin = _BROAD_MARGIN if reduction > 1 else 0
+    work_h, work_w = -(-height // reduction) + 2 * margin, -(-width // reduction) + 2 * margin
+    # Where on the frame each coarse sample sits, by the convention the
+    # enlargement below reads them back with.
+    ys = ((np.arange(work_h, dtype=np.float32) - margin + 0.5) * reduction - 0.5).reshape(-1, 1)
+    xs = ((np.arange(work_w, dtype=np.float32) - margin + 0.5) * reduction - 0.5).reshape(1, -1)
+    square = (xs - source[0]) ** 2 + (ys - source[1]) ** 2
+    glare = 1.0 / (1.0 + square / (core * core))
+    halo_width = max(0.05, halo_radius * 0.45)
+    halo = np.exp(-((np.sqrt(square) / half_diag - halo_radius) ** 2) / (2 * halo_width**2))
+    small = glare[..., None] * veiling_colour.astype(np.float32)
+    small += halo[..., None] * halo_colour.astype(np.float32)
+    if ir_colour is not None:
+        ir_glow = 1.0 / (1.0 + square / ((core * 2.2) ** 2))
+        small += ir_glow[..., None] * ir_colour.astype(np.float32)
+    if reduction == 1:
+        return small
+    large = cv2.resize(
+        small, (work_w * reduction, work_h * reduction), interpolation=cv2.INTER_LINEAR
+    )
+    edge = margin * reduction
+    return np.ascontiguousarray(large[edge : edge + height, edge : edge + width])
+
+
+def _add_compact_glow(
+    canvas: np.ndarray, colour: np.ndarray, centre: tuple[float, float], width_px: float
+) -> None:
+    """Add ``exp(-(d / width_px) ** 2)`` about ``centre``, where it is not nothing.
+
+    At three and a half widths the glow is five millionths of its peak, so
+    it is evaluated in the square that far around its centre and not over
+    the frame: a fourteenth of it for the window ghost on a 1024-pixel frame.
+    """
+    height, width = canvas.shape[:2]
+    reach = 3.5 * width_px
+    x0, x1 = max(0, int(centre[0] - reach)), min(width, int(centre[0] + reach) + 2)
+    y0, y1 = max(0, int(centre[1] - reach)), min(height, int(centre[1] + reach) + 2)
+    if x1 <= x0 or y1 <= y0:
+        return
+    dy = (np.arange(y0, y1, dtype=np.float32) - centre[1]).reshape(-1, 1)
+    dx = (np.arange(x0, x1, dtype=np.float32) - centre[0]).reshape(1, -1)
+    glow = np.exp((dx * dx + dy * dy) * (-1.0 / (width_px * width_px)))
+    canvas[y0:y1, x0:x1] += glow[..., None] * colour.astype(np.float32)
 
 
 def _paste_additive(
@@ -836,7 +990,12 @@ class SunFlare(WeatherTransform):
         **params: Any,
     ) -> np.ndarray:
         height, width = img.shape[:2]
-        warm_white = np.array([255.0, 244.0, 214.0])
+        # Fast mode keeps the flare's colours float32, and with them every
+        # field they multiply; a float64 colour widens each one.
+        fast = mode.fast()
+        warm_white: np.ndarray = np.array(
+            [255.0, 244.0, 214.0], dtype=np.float32 if fast else np.float64
+        )
         half_diag = float(np.hypot(width, height)) / 2.0
 
         # 1 & 2. Veiling glare (broad haze around the source) and the halo ring
@@ -844,7 +1003,9 @@ class SunFlare(WeatherTransform):
         #    the source, so the distance field is built once and both live in
         #    one greyscale field — a flare has one colour, so there is no
         #    reason to carry three channels through the accumulation.
-        dist = radial_distance(height, width, *source)
+        # The distance field is wanted at every pixel by exact mode, and in
+        # fast mode by the dispersion ring alone, which asks for it then.
+        dist = None if fast else radial_distance(height, width, *source)
         # Veiling glare is scattering off imperfections, dust and coating
         # roughness inside the barrel, so its point-spread function is the
         # same heavy-tailed Lorentzian family used for lens grime in
@@ -853,7 +1014,6 @@ class SunFlare(WeatherTransform):
         # hit exactly zero at the far corner, putting a visible edge on the
         # glare where physically there is only a slow falloff.
         core = 0.12 * half_diag
-        glare = 1.0 / (1.0 + (dist / core) ** 2)
         # The halo is light reflected from a *curved* element, so it is
         # imaged well out of focus and arrives as a broad, soft annulus. At
         # the previous width (2% of the half-diagonal) it rendered as a
@@ -861,7 +1021,6 @@ class SunFlare(WeatherTransform):
         # flare — and at 0.6 it outshone the source itself, which no
         # single-surface reflection ever does.
         halo_width = max(0.05, halo_radius * 0.45)
-        halo = np.exp(-((dist / half_diag - halo_radius) ** 2) / (2 * halo_width**2))
 
         # Veiling glare is light scattered off every coated surface in the
         # barrel, so it carries the coatings' residual reflectance just as the
@@ -873,8 +1032,25 @@ class SunFlare(WeatherTransform):
         glare_tint = ghost_tint(glare_coating_nm, glare_coating_nm, 0.0, bounces=2)
         veiling_colour = warm_white * (0.45 + 0.55 * glare_tint)
 
-        canvas = (glare * 0.55)[..., None] * veiling_colour + (halo * 0.12)[..., None] * warm_white
-        canvas = canvas.astype(np.float32)
+        if dist is None:
+            # Everything broad and radial about the source in one small
+            # field, the infrared glow of step 5b with it.
+            canvas = _broad_light(
+                height,
+                width,
+                source,
+                half_diag,
+                halo_radius,
+                veiling_colour * 0.55,
+                warm_white * 0.12,
+                _IR_LEAK_COLOUR * ir_leak if ir_leak > 1e-3 else None,
+            )
+        else:
+            glare = 1.0 / (1.0 + (dist / core) ** 2)
+            halo = np.exp(-((dist / half_diag - halo_radius) ** 2) / (2 * halo_width**2))
+            canvas = (glare * 0.55)[..., None] * veiling_colour
+            canvas = canvas + (halo * 0.12)[..., None] * warm_white
+            canvas = canvas.astype(np.float32)
 
         # 2b. Dispersion ring. The broad halo above is a reflection off a
         #     curved element and is essentially achromatic. The narrow,
@@ -892,6 +1068,8 @@ class SunFlare(WeatherTransform):
         #     resolve when the ring is thinner than the spread between them.
         if ring_intensity > 1e-3:
             profile = dispersion_ring_profile(ring_radius, ring_width)
+            if dist is None:
+                dist = radial_distance(height, width, *source)
             normalised = dist / half_diag
             index = np.clip(
                 normalised * (_RING_LUT_SIZE / _RING_LUT_MAX_RADIUS), 0, _RING_LUT_SIZE - 1
@@ -984,7 +1162,8 @@ class SunFlare(WeatherTransform):
         #     surveillance stills. Rendered as its own broad glow rather than
         #     as a tint, because it has a different *extent* from the visible
         #     glare: IR scatters further.
-        if ir_leak > 1e-3:
+        if ir_leak > 1e-3 and not fast:
+            assert dist is not None
             ir_glow = 1.0 / (1.0 + (dist / (core * 2.2)) ** 2)
             canvas += ir_glow[..., None] * _IR_LEAK_COLOUR * ir_leak
 
@@ -997,16 +1176,28 @@ class SunFlare(WeatherTransform):
         if window_ghost_offset is not None:
             ghost_x = source[0] + window_ghost_offset[0]
             ghost_y = source[1] + window_ghost_offset[1]
-            secondary = radial_distance(height, width, ghost_x, ghost_y)
-            canvas += (
-                np.exp(-((secondary / (core * 0.45)) ** 2))[..., None] * warm_white * 0.22
-            )
+            if fast:
+                _add_compact_glow(canvas, warm_white * 0.22, (ghost_x, ghost_y), core * 0.45)
+            else:
+                secondary = radial_distance(height, width, ghost_x, ghost_y)
+                canvas += (
+                    np.exp(-((secondary / (core * 0.45)) ** 2))[..., None] * warm_white * 0.22
+                )
 
         # 5d. CCD vertical smear, applied last so it is not softened by
         #     anything else — the real artefact has hard edges because it is a
         #     charge-transfer effect, not an optical one.
         add_sensor_smear(canvas, warm_white * 0.85, source, smear_strength, smear_width)
 
+        if fast:
+            # The intensity and the scale to [0, 1] in one pass, clipped in
+            # place: the same number to a rounding, and two frames fewer.
+            canvas *= intensity / 255.0
+            np.clip(canvas, 0.0, 1.0, out=canvas)
+            linear, scale, is_integer = to_linear_unit(img)
+            flare_linear = srgb_to_linear(canvas)
+            flare_linear += linear
+            return from_linear_unit(flare_linear, scale, is_integer, img.dtype)
         canvas *= intensity
 
         # Flare is *added radiance*, and radiance only adds linearly. Summing

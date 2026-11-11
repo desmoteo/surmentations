@@ -147,3 +147,23 @@ WM_EXPORT void wm_wet_reflection(
     active->wet_reflection(
         out, source, height, width, rows, about_horizon, off_frame, about_foot, under, sky);
 }
+
+WM_EXPORT int wm_edge_preserving(
+    const uint8_t *src, uint8_t *dst, ptrdiff_t height, ptrdiff_t width,
+    float sigma_s, float sigma_r, int tabled) {
+    return active->edge_preserving(src, dst, height, width, sigma_s, sigma_r, tabled);
+}
+
+WM_EXPORT void wm_dirt_emphasise(
+    float *out, const float *linear, const float *luma, ptrdiff_t pixels, float boost) {
+    active->dirt_emphasise(out, linear, luma, pixels, boost);
+}
+
+WM_EXPORT void wm_dirt_composite(
+    float *out, const float *linear, const float *spread, const float *mask,
+    const float *albedo, const float *surroundings, ptrdiff_t pixels,
+    float forward, float veil_strength, float absorption, float body) {
+    active->dirt_composite(
+        out, linear, spread, mask, albedo, surroundings, pixels, forward, veil_strength,
+        absorption, body);
+}

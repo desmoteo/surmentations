@@ -23,6 +23,8 @@ from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import SensorNoise, TemporalDenoiseArtifacts
 from weathermentations.depth.normals import upward_facing
 from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare
+from weathermentations.lens import dirt as dirt_module
+from weathermentations.lens import sun_flare as flare_module
 from weathermentations.lens.sun_flare import diffraction_starburst, polygon_distance
 from weathermentations.utils.channels import weighted_colour
 from weathermentations.utils.filters import wide_blur, wide_dilate
@@ -306,12 +308,12 @@ def _large_scene() -> np.ndarray:
 
 @pytest.mark.parametrize(
     "transform",
-    [HousingOccluders(p=1.0), DirtSoil(p=1.0), TemporalDenoiseArtifacts(p=1.0)],
-    ids=["occluders", "dirt", "denoise"],
+    [HousingOccluders(p=1.0), TemporalDenoiseArtifacts(p=1.0)],
+    ids=["occluders", "denoise"],
 )
 def test_a_reduced_blur_moves_a_frame_by_a_few_levels_at_most(transform) -> None:
-    """Defocused dirt and insects and smeared chroma: fields that are soft by
-    nature, blurred on a smaller copy in fast mode."""
+    """Defocused insects and smeared chroma: fields that are soft by nature,
+    blurred on a smaller copy in fast mode."""
     image = _large_scene()
     drew = 0
     for seed in range(4):
@@ -347,3 +349,135 @@ def test_a_frame_differs_between_the_modes_by_one_level_at_most(transform) -> No
         difference = np.abs(frames[True] - frames[False])
         assert difference.max() <= 1
         assert (difference > 0).mean() < 0.01
+
+
+# ------------------------------------------------------------- lens dirt
+
+
+def test_the_deposit_field_is_built_a_quarter_of_the_size_where_its_blur_allows() -> None:
+    mode.set_fast(True)
+    assert dirt_module._deposit_reduction(1024, 1024) == 4
+    assert dirt_module._deposit_reduction(480, 480) == 4
+    assert dirt_module._deposit_reduction(256, 256) == 2
+    assert dirt_module._deposit_reduction(96, 96) == 1
+    mode.set_fast(False)
+    assert dirt_module._deposit_reduction(1024, 1024) == 1
+
+
+def test_dirt_built_small_is_the_same_deposit_in_the_same_place() -> None:
+    """Fast mode builds the deposit field a quarter of the size and enlarges
+    it. The draws are the same, so it is the same grime: as much of it, in
+    the same places to within the two pixels a patch's corner is rounded by,
+    and a frame a tenth of a level away on average."""
+    image = _large_scene()
+    transform = DirtSoil(p=1.0)
+    for seed in range(4):
+        fields, frames = {}, {}
+        for flag in (True, False):
+            mode.set_fast(flag)
+            transform.set_random_seed(seed)
+            params = transform.get_params_dependent_on_data({"shape": image.shape}, {})
+            fields[flag] = params["dirt_mask"], params["deposit_albedo"]
+            frames[flag] = transform.apply(image, **params).astype(np.int16)
+        for small, full in zip(fields[True], fields[False], strict=True):
+            assert small.shape == full.shape and small.dtype == np.float32
+        mask_small, mask_full = fields[True][0], fields[False][0]
+        assert mask_full.mean() > 0.05, "the fixture drew next to nothing"
+        assert abs(mask_small.mean() - mask_full.mean()) < 0.01 * mask_full.mean()
+        assert np.corrcoef(mask_small.ravel(), mask_full.ravel())[0, 1] > 0.995
+        assert np.abs(mask_small - mask_full).mean() < 0.01
+        difference = np.abs(frames[True] - frames[False])
+        assert difference.mean() < 0.3
+        assert difference.max() <= 12
+
+
+def test_a_frame_too_small_to_reduce_gets_the_full_size_field_in_fast_mode() -> None:
+    image = _scene()[:90, :90]
+    transform = DirtSoil(p=1.0)
+    frames = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        transform.set_random_seed(2)
+        frames[flag] = transform(image=image)["image"].astype(np.int16)
+    assert np.abs(frames[True] - frames[False]).max() <= 2
+
+
+# ------------------------------------------------------------- sun flare
+
+
+@pytest.mark.parametrize("angle", [0.0, 0.3, np.pi / 4, 1.2, np.pi / 2, 2.0, 3.0, -0.7])
+@pytest.mark.parametrize("through", [(150.3, 99.6), (-40.0, 20.0), (500.0, 400.0)])
+def test_every_pixel_near_a_line_is_among_those_tried(angle: float, through) -> None:
+    """Scratch streaks are evaluated on the pixels around their line and not
+    over the frame, so the list of those must miss none that the test over
+    the whole frame finds."""
+    height, width, reach = 180, 260, 6.4
+    sin_a, cos_a = float(np.sin(angle)), float(np.cos(angle))
+    rows, cols = flare_module._near_line(height, width, through, sin_a, cos_a, reach)
+    assert rows.min(initial=0) >= 0 and rows.max(initial=0) < height
+    assert cols.min(initial=0) >= 0 and cols.max(initial=0) < width
+    tried = np.zeros((height, width), dtype=bool)
+    tried[rows, cols] = True
+    assert tried.sum() == len(rows), "a pixel is listed twice, and would be added to twice"
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    across = -(xx - through[0]) * sin_a + (yy - through[1]) * cos_a
+    assert not (np.abs(across) <= reach)[~tried].any()
+    assert tried.sum() < 0.25 * height * width
+
+
+def test_scratch_streaks_are_the_same_light_either_way() -> None:
+    colour = np.array([90.0, 85.0, 75.0])
+    scratches = [(0.2, 120.0, 0.8), (1.9, 60.0, 0.5), (np.pi / 2, 200.0, 1.0), (0.0, 40.0, 0.3)]
+    canvases = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        canvases[flag] = np.zeros((200, 300, 3), dtype=np.float32)
+        tint = colour.astype(np.float32) if flag else colour
+        flare_module.add_scratch_streaks(canvases[flag], tint, (140.5, 90.25), scratches)
+    assert canvases[False].max() > 50.0
+    assert np.abs(canvases[True] - canvases[False]).max() < 1e-3
+
+
+def test_the_broad_light_drawn_small_is_within_a_quarter_of_a_level() -> None:
+    """Veiling glare, halo and infrared glow, evaluated on a grid four times
+    coarser and enlarged, against the same three at every pixel. The most
+    it is out by is at the glare's peak, where the frame is white anyway."""
+    veil = np.array([140.0, 130.0, 110.0], dtype=np.float32)
+    halo = np.array([30.0, 29.0, 26.0], dtype=np.float32)
+    infrared = np.array([60.0, 20.0, 35.0], dtype=np.float32)
+    for (height, width), source in (((768, 1024), (700.5, 200.25)), ((600, 600), (-30.0, 650.0))):
+        half_diag = float(np.hypot(width, height)) / 2.0
+        core = 0.12 * half_diag
+        assert core / flare_module._BROAD_CORE_PX >= flare_module._BROAD_REDUCTION
+        small = flare_module._broad_light(
+            height, width, source, half_diag, 0.3, veil, halo, infrared
+        )
+        yy, xx = np.mgrid[0:height, 0:width].astype(np.float64)
+        dist = np.hypot(xx - source[0], yy - source[1])
+        full = (1.0 / (1.0 + (dist / core) ** 2))[..., None] * veil
+        full += np.exp(-((dist / half_diag - 0.3) ** 2) / (2 * 0.135**2))[..., None] * halo
+        full += (1.0 / (1.0 + (dist / (core * 2.2)) ** 2))[..., None] * infrared
+        assert small.shape == full.shape and small.dtype == np.float32
+        assert np.abs(small - full).max() < 0.25
+        assert np.abs(small - full).mean() < 0.01
+
+
+def test_a_small_frame_s_broad_light_is_drawn_at_full_size() -> None:
+    veil = np.array([140.0, 130.0, 110.0], dtype=np.float32)
+    small = flare_module._broad_light(60, 80, (20.0, 30.0), 50.0, 0.3, veil, veil * 0.2, None)
+    yy, xx = np.mgrid[0:60, 0:80].astype(np.float64)
+    dist = np.hypot(xx - 20.0, yy - 30.0)
+    full = (1.0 / (1.0 + (dist / 6.0) ** 2))[..., None] * veil
+    full += np.exp(-((dist / 50.0 - 0.3) ** 2) / (2 * 0.135**2))[..., None] * (veil * 0.2)
+    assert np.abs(small - full).max() < 1e-3
+
+
+def test_a_glow_drawn_in_its_own_square_is_the_glow_over_the_frame() -> None:
+    colour = np.array([56.0, 54.0, 47.0], dtype=np.float32)
+    for centre in ((120.3, 80.7), (-10.0, 5.0), (299.0, 199.0), (900.0, 900.0)):
+        canvas = np.zeros((200, 300, 3), dtype=np.float32)
+        flare_module._add_compact_glow(canvas, colour, centre, 14.0)
+        yy, xx = np.mgrid[0:200, 0:300].astype(np.float64)
+        square = (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2
+        full = np.exp(-square / 14.0**2)[..., None] * colour
+        assert np.abs(canvas - full).max() < 1e-3

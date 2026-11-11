@@ -94,6 +94,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
+from weathermentations import _native, mode
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.filters import wide_blur
@@ -188,6 +189,40 @@ def scatter_psf(image: np.ndarray, radius_px: float, max_sigma_px: float = 12.0)
     if factor > 1:
         return cv2.resize(accumulated, (width, height), interpolation=cv2.INTER_LINEAR)
     return accumulated
+
+
+# The deposit field is built this many times smaller in fast mode, and
+# enlarged. Everything on the glass is far out of focus: the field's last
+# step is a blur of 0.6% of the diagonal, 8.7 pixels on a 1024-pixel frame,
+# so a quarter of the size still holds all of it.
+_DEPOSIT_REDUCTION = 4
+
+
+def _deposit_reduction(height: int, width: int) -> int:
+    """How many times smaller than the frame the deposit field is built.
+
+    One in exact mode. In fast mode :data:`_DEPOSIT_REDUCTION`, which is 4,
+    wherever the field's defocus blur is still a pixel wide at that size:
+    any frame with a diagonal of 670 pixels or more, 480 by 480 for one.
+    A smaller frame is reduced by less, and one under 240 pixels not at all.
+    """
+    if not mode.fast():
+        return 1
+    blur_sigma = max(1.0, math.hypot(width, height) * 0.006)
+    return int(min(_DEPOSIT_REDUCTION, max(1.0, blur_sigma)))
+
+
+def _reduced(layer: np.ndarray, height: int, width: int) -> np.ndarray:
+    """A layer drawn at the frame's size, averaged down to the field's.
+
+    Wipe marks and water spots are thin shapes, a pixel or two wide in
+    places, and drawing them is cheap: they are drawn at full size and each
+    pixel of the field takes the share of it they cover, which drawing them
+    small could only round.
+    """
+    if layer.shape[:2] == (height, width):
+        return layer
+    return cv2.resize(layer, (width, height), interpolation=cv2.INTER_AREA)
 
 
 def _wipe_arcs(
@@ -421,14 +456,21 @@ class DirtSoil(WeatherTransform):
         smudge_albedos = np.array(
             [DEPOSIT_ALBEDOS[name] for name in chosen] or [(1.0, 1.0, 1.0)], dtype=np.float32
         )
+        # In fast mode the field is built a quarter of the size and enlarged
+        # at the end: `_deposit_reduction`. The draws are the same ones
+        # either way, so a seed puts the same deposits in the same places.
+        reduction = _deposit_reduction(height, width)
+        work_h, work_w = max(1, round(height / reduction)), max(1, round(width / reduction))
+        # Lengths on the field as a share of those on the frame.
+        scale = 1.0 if reduction == 1 else float(np.hypot(work_w, work_h)) / diagonal
         mask, albedo = colored_blob_cluster(
-            height,
-            width,
+            work_h,
+            work_w,
             rng=rng,
             colors=smudge_albedos,
             size_range=(
-                self.smudge_size_range[0] * diagonal,
-                self.smudge_size_range[1] * diagonal,
+                self.smudge_size_range[0] * diagonal * scale,
+                self.smudge_size_range[1] * diagonal * scale,
             ),
         )
 
@@ -460,7 +502,7 @@ class DirtSoil(WeatherTransform):
         arc_count = self.py_random.randint(*self.wipe_arc_count_range)
         if arc_count:
             arcs = _wipe_arcs(height, width, rng, arc_count, thickness_px=diagonal * 0.02)
-            arcs = wide_blur(arcs, diagonal * 0.012)
+            arcs = wide_blur(_reduced(arcs, work_h, work_w), diagonal * 0.012 * scale)
             merge(arcs * 1.4, DEPOSIT_ALBEDOS[_WIPE_DEPOSIT])
 
         spot_count = self.py_random.randint(*self.water_spot_count_range)
@@ -475,7 +517,9 @@ class DirtSoil(WeatherTransform):
                     self.water_spot_radius_range[1] * diagonal,
                 ),
             )
-            spots = cv2.GaussianBlur(spots, (0, 0), sigmaX=max(1.0, diagonal * 0.003))
+            spots = cv2.GaussianBlur(
+                _reduced(spots, work_h, work_w), (0, 0), sigmaX=max(1.0, diagonal * 0.003) * scale
+            )
             merge(spots, DEPOSIT_ALBEDOS[_WATER_SPOT_DEPOSIT])
 
         # Grime is never sharp — it is far outside the depth of field. The
@@ -484,7 +528,7 @@ class DirtSoil(WeatherTransform):
         # In fast mode on a reduced copy once the sigma reaches 8 pixels: the
         # field is a deposit far out of focus, and 0.7% of its peak is well
         # inside what the next line's normalisation moves it by.
-        blur_sigma = max(1.0, diagonal * 0.006)
+        blur_sigma = max(1.0, diagonal * 0.006) * scale
         mask = wide_blur(mask, blur_sigma, work_sigma=_GRIME_WORK_SIGMA)
         albedo = wide_blur(albedo, blur_sigma, work_sigma=_GRIME_WORK_SIGMA)
 
@@ -505,6 +549,15 @@ class DirtSoil(WeatherTransform):
             albedo = albedo * (1.0 - weight) + film_albedo * weight
             mask = 1.0 - (1.0 - mask) * (1.0 - film)
         record_draw(coverage=target_coverage, dust_film=film)
+
+        if reduction != 1:
+            # Bilinear: the field was blurred a pixel or more wide at this
+            # size, so there is nothing between its samples for a longer
+            # filter to recover, and bicubic measured no closer to the
+            # full-size field.
+            size = (width, height)
+            mask = cv2.resize(mask, size, interpolation=cv2.INTER_LINEAR)
+            albedo = cv2.resize(albedo, size, interpolation=cv2.INTER_LINEAR)
 
         return {
             "dirt_mask": mask.astype(np.float32),
@@ -543,8 +596,13 @@ class DirtSoil(WeatherTransform):
         # what makes a dirty lens invisible in flat light and awful when a
         # bright source is in or near frame.
         luma = luminance(linear)
-        highlight = np.clip((luma - 0.35) / 0.65, 0.0, 1.0)[..., None]
-        emphasised = linear * (1.0 + highlight_boost * highlight)
+        # Each of the two expressions over the frame is one pass through a
+        # compiled kernel where there is one, with this arithmetic in this
+        # order: the same floats, without a frame-sized result per step.
+        emphasised = _native.dirt_emphasise(linear, luma, highlight_boost)
+        if emphasised is None:
+            highlight = np.clip((luma - 0.35) / 0.65, 0.0, 1.0)[..., None]
+            emphasised = linear * (1.0 + highlight_boost * highlight)
 
         # The deposit's single-scattering albedo multiplies the scattered
         # term. Light that scatters off a tan dust grain comes back tan, and
@@ -560,7 +618,21 @@ class DirtSoil(WeatherTransform):
         # module docstring. With `ambient_light` at 1 and a flat frame the
         # two are the same light, and the grime shows nothing.
         surroundings = np.asarray(cv2.mean(linear)[:3], dtype=np.float32) * ambient_light
-        arriving = scatter_psf(emphasised, scatter_radius) * (1.0 - _WIDE_ANGLE_SHARE)
+        spread = scatter_psf(emphasised, scatter_radius)
+        composited = _native.dirt_composite(
+            linear,
+            spread,
+            dirt_mask,
+            deposit_albedo,
+            surroundings * _WIDE_ANGLE_SHARE,
+            1.0 - _WIDE_ANGLE_SHARE,
+            veil_strength,
+            absorption,
+            _OPAQUE_BODY_FRACTION,
+        )
+        if composited is not None:
+            return from_linear_unit(composited, scale, is_integer, img.dtype)
+        arriving = spread * (1.0 - _WIDE_ANGLE_SHARE)
         arriving += surroundings * _WIDE_ANGLE_SHARE
         scattered = arriving * deposit_albedo
 

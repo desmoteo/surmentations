@@ -155,34 +155,40 @@ static void blur_patch(
     ptrdiff_t width, ptrdiff_t height, const float *kernel, int ksize) {
     const int half = ksize >> 1;
     const float centre = kernel[half];
-    for (ptrdiff_t r = 0; r < height; r++) {
-        const float *restrict src = patch + r * width;
-        float *restrict dst = tmp + r * width;
-        memcpy(line + half, src, (size_t)width * sizeof(float));
+    const float *const taps = kernel + half;
+    /* The row with its borders, and where in it a row's own values start
+     * and end: the same for every row, so found once. */
+    float *const inner = line + half;
+    float *const last = inner + width - 1;
+    const size_t row_bytes = (size_t)width * sizeof(float);
+    const float *restrict src = patch;
+    float *restrict dst = tmp;
+    for (ptrdiff_t r = 0; r < height; r++, src += width, dst += width) {
+        memcpy(inner, src, row_bytes);
         for (ptrdiff_t c = 1; c <= half; c++) {
-            line[half - c] = src[reflect101(-c, width)];
-            line[half + width - 1 + c] = src[reflect101(width - 1 + c, width)];
+            inner[-c] = src[reflect101(-c, width)];
+            last[c] = src[reflect101(width - 1 + c, width)];
         }
         for (ptrdiff_t c = 0; c < width; c++) {
-            dst[c] = centre * line[c + half];
+            dst[c] = centre * inner[c];
         }
         for (int k = 1; k <= half; k++) {
-            const float weight = kernel[half + k];
-            const float *restrict left = line + half - k;
-            const float *restrict right = line + half + k;
+            const float weight = taps[k];
+            const float *restrict left = inner - k;
+            const float *restrict right = inner + k;
             for (ptrdiff_t c = 0; c < width; c++) {
                 dst[c] += weight * (left[c] + right[c]);
             }
         }
     }
-    for (ptrdiff_t r = 0; r < height; r++) {
-        float *restrict dst = patch + r * width;
-        const float *restrict mid = tmp + r * width;
+    dst = patch;
+    const float *restrict mid = tmp;
+    for (ptrdiff_t r = 0; r < height; r++, dst += width, mid += width) {
         for (ptrdiff_t c = 0; c < width; c++) {
             dst[c] = centre * mid[c];
         }
         for (int k = 1; k <= half; k++) {
-            const float weight = kernel[half + k];
+            const float weight = taps[k];
             const float *restrict above = tmp + reflect101(r - k, height) * width;
             const float *restrict below = tmp + reflect101(r + k, height) * width;
             for (ptrdiff_t c = 0; c < width; c++) {
@@ -420,15 +426,16 @@ static int WM_FN(render_flakes)(
             scaled_y[b] = (float)(normal_y[b] / reach_b);
         }
 
-        for (ptrdiff_t r = 0; r < size; r++) {
-            float *row = sprite + r * size;
+        const int polygon = blades >= 3;
+        float *row = sprite;
+        for (ptrdiff_t r = 0; r < size; r++, row += size) {
             const float dy = axis[r];
-            if (blades >= 3 && fast) {
+            if (polygon && fast) {
                 first_plane_row_fast(row, axis, size, dy, scaled_x[0], scaled_y[0]);
                 for (int b = 1; b < blades; b++) {
                     next_plane_row_fast(row, axis, size, dy, scaled_x[b], scaled_y[b]);
                 }
-            } else if (blades >= 3) {
+            } else if (polygon) {
                 first_plane_row(row, axis, size, dy, normal_x[0], normal_y[0], support[0]);
                 for (int b = 1; b < blades; b++) {
                     next_plane_row(row, axis, size, dy, normal_x[b], normal_y[b], support[b]);
@@ -454,11 +461,13 @@ static int WM_FN(render_flakes)(
             blur_patch(sprite, tmp, line, size, size, kernel, ksize);
         }
 
-        for (ptrdiff_t r = dst_y0; r < dst_y1; r++) {
-            max_row(
-                canvas + r * width + dst_x0,
-                sprite + (r - top) * size + (dst_x0 - left),
-                dst_x1 - dst_x0);
+        /* The part of the sprite that is in the frame: where it starts in
+         * each, and how wide it is, are the same for all its rows. */
+        float *restrict into = canvas + dst_y0 * width + dst_x0;
+        const float *restrict from = sprite + (dst_y0 - top) * size + (dst_x0 - left);
+        const ptrdiff_t visible = dst_x1 - dst_x0;
+        for (ptrdiff_t r = dst_y0; r < dst_y1; r++, into += width, from += size) {
+            max_row(into, from, visible);
         }
     }
     free(sprite), free(tmp), free(axis), free(line);
@@ -510,12 +519,26 @@ static inline void plot(wm_patch *patch, int64_t px, int64_t py) {
     }
 }
 
+/* A run of pixels along one row. What the row shares, its address and
+ * whether it is in the patch at all, is settled once and not per pixel. */
 static inline void span(wm_patch *patch, int64_t py, int64_t left, int64_t right) {
+    if (py < 0 || py >= patch->patch_h) {
+        return;
+    }
     left = left < 0 ? 0 : left;
     right = right >= patch->patch_w ? patch->patch_w - 1 : right;
+    uint8_t *restrict seen = patch->seen + (int32_t)py * patch->patch_w;
+    wm_pixel *restrict next = patch->pixels + patch->n_pixels;
+    const int16_t row = (int16_t)py;
     for (int64_t px = left; px <= right; px++) {
-        plot(patch, px, py);
+        if (!seen[px]) {
+            seen[px] = 1;
+            next->x = (int16_t)px;
+            next->y = row;
+            next++;
+        }
     }
+    patch->n_pixels = next - patch->pixels;
 }
 
 /* Line: OpenCV's LineIterator, 8-connected, left to right. Both ends must
@@ -812,8 +835,13 @@ static int WM_FN(render_streaks)(
         if (soften) {
             memset(soft, 0, (size_t)pw * (size_t)ph * sizeof(float));
         }
-        for (ptrdiff_t k = 0; k < patch.n_pixels; k++) {
-            const int32_t px = patch.pixels[k].x, py = patch.pixels[k].y;
+        /* Where the patch's corner is in the frame, taken once: a pixel's
+         * address is then its own two coordinates away. */
+        float *const corner = layer + (ptrdiff_t)top * width + left;
+        const wm_pixel *restrict listed = patch.pixels;
+        const ptrdiff_t n_listed = patch.n_pixels;
+        for (ptrdiff_t k = 0; k < n_listed; k++) {
+            const int32_t px = listed[k].x, py = listed[k].y;
             const int32_t at = py * pw + px;
             patch.seen[at] = 0;
             const int32_t fx = left + px, fy = top + py;
@@ -837,7 +865,7 @@ static int WM_FN(render_streaks)(
             if (soften) {
                 soft[at] = value;
             } else {
-                layer[(ptrdiff_t)fy * width + fx] += value;
+                corner[(ptrdiff_t)py * width + px] += value;
             }
         }
         if (soften) {
@@ -849,10 +877,11 @@ static int WM_FN(render_streaks)(
             const int32_t c0 = left < 0 ? -left : 0, r0 = top < 0 ? -top : 0;
             const int32_t c1 = left + pw > width ? width - left : pw;
             const int32_t r1 = top + ph > height ? height - top : ph;
-            for (int32_t r = r0; r < r1; r++) {
-                float *restrict dst = layer + (ptrdiff_t)(top + r) * width + left;
-                const float *restrict src = soft + (ptrdiff_t)r * pw;
-                for (int32_t c = c0; c < c1; c++) {
+            float *restrict dst = corner + (ptrdiff_t)r0 * width + c0;
+            const float *restrict src = soft + (ptrdiff_t)r0 * pw + c0;
+            const int32_t visible = c1 - c0;
+            for (int32_t r = r0; r < r1; r++, dst += width, src += pw) {
+                for (int32_t c = 0; c < visible; c++) {
                     dst[c] += src[c];
                 }
             }
@@ -901,22 +930,22 @@ static int WM_FN(wet_composite)(
         return 1;
     }
     float *restrict water = scratch, *restrict mirror = scratch + n, *restrict wet = scratch + 2 * n;
-    for (ptrdiff_t r = 0; r < rows; r++) {
+    const float *pool = puddles, *soaked = wetness;
+    for (ptrdiff_t r = 0; r < rows; r++, soaked += width, out += n, dry += n, sharp += n, rough += n) {
         const float flat = fresnel[r], tilted = film_fresnel[r];
-        const float *restrict pool = puddles ? puddles + r * width : NULL;
-        const float *restrict soaked = wetness + r * width;
-        for (ptrdiff_t x = 0; x < width; x++) {
+        float *restrict to_water = water, *restrict to_mirror = mirror, *restrict to_wet = wet;
+        for (ptrdiff_t x = 0; x < width; x++, to_water += 3, to_mirror += 3, to_wet += 3) {
             const float standing = pool ? pool[x] * film : 0.0f;
             const float weight = flat * standing + tilted * (1.0f - standing) * film * gloss;
-            for (int c = 0; c < 3; c++) {
-                water[3 * x + c] = standing;
-                mirror[3 * x + c] = weight;
-                wet[3 * x + c] = soaked[x];
-            }
+            const float share = soaked[x];
+            to_water[0] = to_water[1] = to_water[2] = standing;
+            to_mirror[0] = to_mirror[1] = to_mirror[2] = weight;
+            to_wet[0] = to_wet[1] = to_wet[2] = share;
         }
-        wet_row(
-            out + r * n, dry + r * n, sharp + r * n, rough + r * n, water, mirror, wet, n,
-            ratio, spare);
+        if (pool) {
+            pool += width;
+        }
+        wet_row(out, dry, sharp, rough, water, mirror, wet, n, ratio, spare);
     }
     free(scratch);
     return 0;
@@ -941,23 +970,29 @@ static int WM_FN(mirror_rows)(
     for (ptrdiff_t x = 0; x < 3 * width; x++) {
         state[x] = -1;
     }
-    for (ptrdiff_t y = 0; y < height; y++) {
-        const uint8_t *restrict row = solid + y * width;
-        float *restrict mirrored = about_foot + y * width;
-        float *restrict reach = in_reach + y * width;
+    /* A run is compact if it is shorter than `limit` rows: the smallest
+     * whole number of rows that is not, for comparing whole numbers with. */
+    const int32_t tallest = (int32_t)ceil(limit);
+    const uint8_t *restrict row = solid;
+    float *restrict mirrored = about_foot;
+    float *restrict reach = in_reach;
+    for (ptrdiff_t y = 0; y < height; y++, row += width, mirrored += width, reach += width) {
+        const int32_t here = (int32_t)y;
         for (ptrdiff_t x = 0; x < width; x++) {
             if (row[x]) {
                 if (!was_solid[x]) {
-                    run[x] = (int32_t)y; /* a run of solid rows starts here */
+                    run[x] = here; /* a run of solid rows starts here */
                 }
-                foot[x] = (int32_t)y;
+                foot[x] = here;
                 top[x] = run[x];
             }
             was_solid[x] = row[x];
-            const double about = 2.0 * (foot[x] + 0.5) - (double)y;
-            const int compact = foot[x] >= 0 && top[x] > 0 && (double)(foot[x] - top[x]) < limit;
+            /* 2 (foot + 1/2) - y is a whole number, so it is kept as one:
+             * no double in the loop, and the same value. */
+            const int32_t about = 2 * foot[x] + 1 - here;
+            const int compact = foot[x] >= 0 && top[x] > 0 && foot[x] - top[x] < tallest;
             mirrored[x] = (float)about;
-            reach[x] = compact && (double)(float)about >= (double)top[x] ? 1.0f : 0.0f;
+            reach[x] = compact && about >= top[x] ? 1.0f : 0.0f;
         }
     }
     free(state), free(was_solid);
@@ -999,19 +1034,23 @@ static void WM_FN(wet_reflection)(
     const float *about_horizon, const float *off_frame, const float *about_foot,
     const float *under, const float *sky) {
     const ptrdiff_t stride = 3 * width;
-    for (ptrdiff_t r = 0; r < rows; r++) {
+    float *restrict row = out;
+    const float *weight = under, *foot = about_foot;
+    for (ptrdiff_t r = 0; r < rows; r++, row += stride, weight += width, foot += width) {
         const wm_row_pair far = row_pair(source, height, stride, about_horizon[r]);
+        const float *restrict upper = far.upper, *restrict lower = far.lower;
+        const float w_upper = far.w_upper, w_lower = far.w_lower;
+        /* The sky's share of this row, one value a channel, taken once. */
         const float off = off_frame[r], on = 1.0f - off;
-        float *restrict row = out + r * stride;
-        for (ptrdiff_t i = 0; i < stride; i++) {
-            const float mirrored = far.upper[i] * far.w_upper + far.lower[i] * far.w_lower;
-            row[i] = mirrored * on + sky[i % 3] * off;
+        const float sky_r = sky[0] * off, sky_g = sky[1] * off, sky_b = sky[2] * off;
+        for (ptrdiff_t i = 0; i < stride; i += 3) {
+            row[i] = (upper[i] * w_upper + lower[i] * w_lower) * on + sky_r;
+            row[i + 1] = (upper[i + 1] * w_upper + lower[i + 1] * w_lower) * on + sky_g;
+            row[i + 2] = (upper[i + 2] * w_upper + lower[i + 2] * w_lower) * on + sky_b;
         }
         if (!under) {
             continue;
         }
-        const float *restrict weight = under + r * width;
-        const float *restrict foot = about_foot + r * width;
         for (ptrdiff_t x = 0; x < width; x++) {
             const float w = weight[x];
             if (w == 0.0f) {
@@ -1024,6 +1063,349 @@ static void WM_FN(wet_reflection)(
                 row[i] = row[i] * (1.0f - w) + mirrored * w;
             }
         }
+    }
+}
+
+/* ------------------------------------------------- edge-preserving filter */
+
+/* OpenCV's edgePreservingFilter with RECURS_FILTER (Gastal and Oliveira's
+ * domain transform, recursive form), which TemporalDenoiseArtifacts runs one
+ * to three times a frame. The arithmetic and its order are OpenCV's
+ * (modules/photo/src/npr.hpp), so that with `tabled` off the output is
+ * OpenCV's to the byte wherever the two share a powf and neither fuses a
+ * multiply-add; the caller checks that before relying on it.
+ *
+ * OpenCV takes a power for every pixel, twice, in each of three iterations,
+ * and that is most of its time. The exponent is one plus a multiple of the
+ * summed byte differences between a pixel and its neighbour, which is one of
+ * 766 values. With `tabled` the power is taken once for each of those and
+ * looked up: a rounding away from the per-pixel exponent, and a level away
+ * in the output for a handful of pixels in a million. */
+
+/* Rows smoothed there and back along themselves, WM_TOGETHER at a time.
+ * `weight[x]` joins pixel x to pixel x - 1.
+ *
+ * Each step of the recurrence waits for the one before it, twelve cycles of
+ * subtract, multiply and add, while the core could have done several times
+ * as much. So the rows are taken a few at a time, their steps interleaved:
+ * the chains are independent and run side by side. The running pixels are
+ * held in local variables, so the chains run through registers and not
+ * through memory. Four rows together took the tabled filter from 30 ms to
+ * 21 on a 1024-pixel frame; two gave nothing, and eight no more than four. */
+#ifndef WM_TOGETHER
+#define WM_TOGETHER 4
+#endif
+
+static inline void smooth_along(
+    float *restrict image, const float *restrict weights, ptrdiff_t width, ptrdiff_t n,
+    ptrdiff_t rows) {
+    float last[WM_TOGETHER][3];
+    float *q[WM_TOGETHER];
+    const float *w[WM_TOGETHER];
+    for (ptrdiff_t y = 0; y < rows; y += WM_TOGETHER) {
+        /* A short last group works its final row more than once, which
+         * is harmless only if done on a copy: so it is done one at a time. */
+        const int together = rows - y >= WM_TOGETHER ? WM_TOGETHER : 1;
+        for (int k = 0; k < together; k++) {
+            q[k] = image + (y + k) * n;
+            w[k] = weights + (y + k) * width;
+            last[k][0] = q[k][0], last[k][1] = q[k][1], last[k][2] = q[k][2];
+        }
+        for (ptrdiff_t x = 1; x < width; x++) {
+            const ptrdiff_t i = 3 * x;
+            for (int k = 0; k < together; k++) {
+                const float a = w[k][x];
+                float *restrict pixel = q[k] + i;
+                last[k][0] = pixel[0] + (last[k][0] - pixel[0]) * a;
+                last[k][1] = pixel[1] + (last[k][1] - pixel[1]) * a;
+                last[k][2] = pixel[2] + (last[k][2] - pixel[2]) * a;
+                pixel[0] = last[k][0], pixel[1] = last[k][1], pixel[2] = last[k][2];
+            }
+        }
+        for (ptrdiff_t x = width - 2; x >= 0; x--) {
+            const ptrdiff_t i = 3 * x;
+            for (int k = 0; k < together; k++) {
+                const float a = w[k][x + 1];
+                float *restrict pixel = q[k] + i;
+                last[k][0] = pixel[0] + (last[k][0] - pixel[0]) * a;
+                last[k][1] = pixel[1] + (last[k][1] - pixel[1]) * a;
+                last[k][2] = pixel[2] + (last[k][2] - pixel[2]) * a;
+                pixel[0] = last[k][0], pixel[1] = last[k][1], pixel[2] = last[k][2];
+            }
+        }
+        if (together == 1) {
+            y -= WM_TOGETHER - 1; /* and the next row is the one after this */
+        }
+    }
+}
+
+/* One row drawn towards the row before it in the sweep. `weight3` is the
+ * pixel's weight written out for each of its three values, so this is one
+ * loop over a row's values with nothing shared between them. */
+static inline void smooth_towards(
+    float *restrict row, const float *restrict other, const float *restrict weight3, ptrdiff_t n) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        row[i] = row[i] + (other[i] - row[i]) * weight3[i];
+    }
+}
+
+static inline void thrice(float *restrict out, const float *restrict in, ptrdiff_t width) {
+    for (ptrdiff_t x = 0; x < width; x++, out += 3) {
+        out[0] = out[1] = out[2] = in[x];
+    }
+}
+
+/* A row of weights, each written out for its pixel's three values: from
+ * the table by the row's byte sums, or as they were worked out before. */
+static inline void thrice_tabled(
+    float *restrict out, const uint16_t *restrict sums, const float *restrict table,
+    ptrdiff_t width) {
+    for (ptrdiff_t x = 0; x < width; x++, out += 3) {
+        out[0] = out[1] = out[2] = table[sums[x]];
+    }
+}
+
+static inline void lookup_row(
+    float *restrict out, const uint16_t *restrict sums, const float *restrict table,
+    ptrdiff_t width) {
+    for (ptrdiff_t x = 0; x < width; x++) {
+        out[x] = table[sums[x]];
+    }
+}
+
+static inline void power_row(
+    float *restrict out, const float *restrict exponents, float base, ptrdiff_t width) {
+    for (ptrdiff_t x = 0; x < width; x++) {
+        out[x] = powf(base, exponents[x]);
+    }
+}
+
+/* The byte sums a row's weights are looked up by: how unlike each pixel is
+ * from the one before it (`along`) and from the one above it (`down`). The
+ * first pixel is its own neighbour and is taken apart from the loop, which
+ * is then the same three differences for every pixel, with no test in it. */
+static inline void unlikeness_bytes(
+    uint16_t *restrict along, uint16_t *restrict down, const uint8_t *restrict row,
+    const uint8_t *restrict above, ptrdiff_t n) {
+    along[0] = 0;
+    down[0] = (uint16_t)(abs(row[0] - above[0]) + abs(row[1] - above[1]) + abs(row[2] - above[2]));
+    const uint8_t *restrict before = row;
+    row += 3, above += 3;
+    for (ptrdiff_t i = 3; i < n; i += 3, row += 3, above += 3, before += 3) {
+        *++along = (uint16_t)(abs(row[0] - before[0]) + abs(row[1] - before[1]) + abs(row[2] - before[2]));
+        *++down = (uint16_t)(abs(row[0] - above[0]) + abs(row[1] - above[1]) + abs(row[2] - above[2]));
+    }
+}
+
+/* The same as exponents, in OpenCV's arithmetic and its order of summing. */
+static inline void unlikeness_exponents(
+    float *restrict along, float *restrict down, const float *restrict row,
+    const float *restrict above, ptrdiff_t n, float ratio) {
+    for (ptrdiff_t i = 0; i < n; i += 3) {
+        const float *restrict here = row + i;
+        const float *restrict before = i ? here - 3 : here;
+        const float *restrict over = above + i;
+        float dx = 0.0f, dy = 0.0f;
+        dx = dx + fabsf(here[0] - before[0]);
+        dx = dx + fabsf(here[1] - before[1]);
+        dx = dx + fabsf(here[2] - before[2]);
+        dy = dy + fabsf(here[0] - over[0]);
+        dy = dy + fabsf(here[1] - over[1]);
+        dy = dy + fabsf(here[2] - over[2]);
+        *along++ = 1.0f + dx * ratio;
+        *down++ = 1.0f + dy * ratio;
+    }
+}
+
+static int WM_FN(edge_preserving)(
+    const uint8_t *src, uint8_t *dst, ptrdiff_t height, ptrdiff_t width,
+    float sigma_s, float sigma_r, int tabled) {
+    const ptrdiff_t n = 3 * width, pixels = height * width, values = height * n;
+    const float unit = (float)(1.0 / 255.0);
+    const float ratio = sigma_s / sigma_r;
+    float *image = malloc((size_t)values * sizeof(float));
+    /* The weights along the rows, for the few rows smoothed together. */
+    float *across = malloc((size_t)(WM_TOGETHER * width) * sizeof(float));
+    float *weight3 = malloc((size_t)n * sizeof(float));
+    /* What the weights are a function of: the byte sums, or the exponents
+     * themselves and with them the weights down the frame, which are wanted
+     * twice a pass and are a power each. */
+    uint16_t *sum = tabled ? malloc((size_t)(2 * pixels) * sizeof(uint16_t)) : NULL;
+    float *exponent = tabled ? NULL : malloc((size_t)(2 * pixels) * sizeof(float));
+    float *down = tabled ? NULL : malloc((size_t)pixels * sizeof(float));
+    if (!image || !across || !weight3 || (tabled ? !sum : !exponent || !down)) {
+        free(image), free(across), free(weight3), free(sum), free(exponent), free(down);
+        return 1;
+    }
+
+    {
+        const uint8_t *bytes = src;
+        float *row = image;
+        for (ptrdiff_t y = 0; y < height; y++, bytes += n, row += n) {
+            for (ptrdiff_t i = 0; i < n; i++) {
+                row[i] = (float)bytes[i] * unit;
+            }
+            const ptrdiff_t at = y * width;
+            if (tabled) {
+                unlikeness_bytes(sum + at, sum + pixels + at, bytes, y ? bytes - n : bytes, n);
+            } else {
+                unlikeness_exponents(
+                    exponent + at, exponent + pixels + at, row, y ? row - n : row, n, ratio);
+            }
+        }
+    }
+
+    for (int pass = 0; pass < 3; pass++) {
+        const float sigma_h =
+            (float)(sigma_s * sqrt(3.0) * pow(2.0, 3 - (pass + 1)) / sqrt(pow(4.0, 3) - 1));
+        const float base = (float)exp((-1.0 * sqrt(2.0)) / sigma_h);
+        float table[766];
+        if (tabled) {
+            for (int k = 0; k < 766; k++) {
+                table[k] = powf(base, 1.0f + ((float)k * unit) * ratio);
+            }
+        } else {
+            power_row(down, exponent + pixels, base, pixels);
+        }
+
+        /* Along the rows and down the frame in one sweep. A row is drawn
+         * towards the one above as soon as it has been smoothed along
+         * itself, while it is still in the cache; the row above had its turn
+         * a moment before, so the values are those of two separate sweeps. */
+        for (ptrdiff_t y = 0; y < height; y += WM_TOGETHER) {
+            const ptrdiff_t group = height - y < WM_TOGETHER ? height - y : WM_TOGETHER;
+            float *row = image + y * n;
+            for (ptrdiff_t k = 0; k < group; k++) {
+                const ptrdiff_t at = (y + k) * width;
+                if (tabled) {
+                    lookup_row(across + k * width, sum + at, table, width);
+                } else {
+                    power_row(across + k * width, exponent + at, base, width);
+                }
+            }
+            smooth_along(row, across, width, n, group);
+            for (ptrdiff_t k = 0; k < group; k++, row += n) {
+                const ptrdiff_t at = (y + k) * width;
+                if (y + k == 0) {
+                    continue;
+                }
+                if (tabled) {
+                    thrice_tabled(weight3, sum + pixels + at, table, width);
+                } else {
+                    thrice(weight3, down + at, width);
+                }
+                smooth_towards(row, row - n, weight3, n);
+            }
+        }
+        /* And back up. */
+        float *row = image + (height - 2) * n;
+        for (ptrdiff_t y = height - 2; y >= 0; y--, row -= n) {
+            const ptrdiff_t at = (y + 1) * width;
+            if (tabled) {
+                thrice_tabled(weight3, sum + pixels + at, table, width);
+            } else {
+                thrice(weight3, down + at, width);
+            }
+            smooth_towards(row, row + n, weight3, n);
+        }
+    }
+
+    /* cv::convertScaleAbs: the magnitude, to the nearest level, saturated. */
+    for (ptrdiff_t i = 0; i < values; i++) {
+        const float level = nearbyintf(fabsf(image[i] * 255.0f));
+        dst[i] = (uint8_t)(level > 255.0f ? 255.0f : level);
+    }
+    free(image), free(across), free(weight3), free(sum), free(exponent), free(down);
+    return 0;
+}
+
+/* ----------------------------------------------------------- lens dirt */
+
+/* One value a pixel written out for each of its three channels, so that
+ * what follows is one loop over a block's values. */
+static inline void thrice_block(float *restrict out, const float *restrict in, ptrdiff_t count) {
+    for (ptrdiff_t i = 0; i < count; i++, out += 3) {
+        out[0] = out[1] = out[2] = in[i];
+    }
+}
+
+static inline void emphasis_gains(
+    float *restrict gain, const float *restrict luma, ptrdiff_t count, float boost) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < count; i++) {
+        /* np.clip: a NaN passes through both comparisons, as it does there. */
+        float highlight = (luma[i] - 0.35f) / 0.65f;
+        highlight = highlight < 0.0f ? 0.0f : highlight;
+        highlight = highlight > 1.0f ? 1.0f : highlight;
+        gain[i] = 1.0f + boost * highlight;
+    }
+}
+
+static inline void scale_block(
+    float *restrict out, const float *restrict in, const float *restrict gain, ptrdiff_t n) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        out[i] = in[i] * gain[i];
+    }
+}
+
+/* linear * (1 + boost * clip((luma - 0.35) / 0.65, 0, 1)): the scene with
+ * its highlights weighted up, which is what a deposit scatters most of. */
+static void WM_FN(dirt_emphasise)(
+    float *out, const float *linear, const float *luma, ptrdiff_t pixels, float boost) {
+    float gain[WM_BLOCK], gain3[3 * WM_BLOCK];
+    for (ptrdiff_t done = 0; done < pixels; done += WM_BLOCK) {
+        const ptrdiff_t count = pixels - done < WM_BLOCK ? pixels - done : WM_BLOCK;
+        emphasis_gains(gain, luma + done, count, boost);
+        thrice_block(gain3, gain, count);
+        scale_block(out + 3 * done, linear + 3 * done, gain3, 3 * count);
+    }
+}
+
+static inline void dirt_weights(
+    float *restrict veil, float *restrict blocked, const float *restrict mask, ptrdiff_t count,
+    float veil_strength, float absorption) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < count; i++) {
+        float v = veil_strength * mask[i];
+        v = v < 0.0f ? 0.0f : v;
+        veil[i] = v > 0.95f ? 0.95f : v;
+        blocked[i] = absorption * mask[i];
+    }
+}
+
+static WM_NOINLINE void dirt_block(
+    float *restrict out, const float *restrict linear, const float *restrict spread,
+    const float *restrict albedo, const float *restrict veil, const float *restrict blocked,
+    const float *restrict around, ptrdiff_t n, float forward, float body) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float arriving = spread[i] * forward + around[i];
+        const float scattered = arriving * albedo[i];
+        const float veiled = linear[i] * (1.0f - veil[i]) + scattered * veil[i];
+        out[i] = veiled * (1.0f - blocked[i]) + (albedo[i] * body) * blocked[i];
+    }
+}
+
+/* What the deposit does to the frame: a lerp towards the light it scatters
+ * in, then towards its own dark body where it is caked. The numpy code is
+ * eleven expressions over the frame, each with a frame-sized result. */
+static void WM_FN(dirt_composite)(
+    float *out, const float *linear, const float *spread, const float *mask,
+    const float *albedo, const float *surroundings, ptrdiff_t pixels,
+    float forward, float veil_strength, float absorption, float body) {
+    float veil[WM_BLOCK], blocked[WM_BLOCK];
+    float veil3[3 * WM_BLOCK], blocked3[3 * WM_BLOCK], around[3 * WM_BLOCK];
+    /* The light from outside the frame, the same three values for every
+     * pixel, laid out once in the order a block's values come in. */
+    for (ptrdiff_t i = 0; i < 3 * WM_BLOCK; i += 3) {
+        around[i] = surroundings[0], around[i + 1] = surroundings[1], around[i + 2] = surroundings[2];
+    }
+    for (ptrdiff_t done = 0; done < pixels; done += WM_BLOCK) {
+        const ptrdiff_t count = pixels - done < WM_BLOCK ? pixels - done : WM_BLOCK;
+        const ptrdiff_t at = 3 * done;
+        dirt_weights(veil, blocked, mask + done, count, veil_strength, absorption);
+        thrice_block(veil3, veil, count);
+        thrice_block(blocked3, blocked, count);
+        dirt_block(
+            out + at, linear + at, spread + at, albedo + at, veil3, blocked3, around, 3 * count,
+            forward, body);
     }
 }
 
@@ -1081,4 +1463,7 @@ const wm_kernel_table WM_FN(wm_table) = {
     WM_FN(wet_composite),
     WM_FN(mirror_rows),
     WM_FN(wet_reflection),
+    WM_FN(edge_preserving),
+    WM_FN(dirt_emphasise),
+    WM_FN(dirt_composite),
 };
