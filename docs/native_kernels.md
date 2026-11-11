@@ -17,9 +17,9 @@ before any of it was changed.
 **Its method, yes, all of it. Its kernels, no.** Pillow-AllSIMD's design
 notes prescribe an order: find where the time goes, fix the algorithm, help
 the compiler, and only then write SIMD by hand. Followed here, the first
-three steps made fog, rain and snow 6 to 13 times faster on one core at
-1024 pixels, and the 22 transforms 3.8 times faster as a geometric mean
-(2.8 at 512 pixels), and left nothing for the fourth to do.
+three steps made fog, rain and snow 9 to 15 times faster on one core at
+1024 pixels, and the 22 transforms 4.6 times faster as a geometric mean
+(3.2 at 512 pixels), and left nothing for the fourth to do.
 
 **C, yes, in a few places.** Colour conversion, snowflake sprites, rain
 streaks, the wet road's reflection, the denoise filter, and the compositing
@@ -38,12 +38,13 @@ but not quite the same operation are a mode, on by default, and
 off. Exact mode reproduces the parent branch byte for byte on every frame
 compared. See [Fast and exact mode](#fast-and-exact-mode).
 
-**Explicit SIMD, no, not now.** Three loops of the kernels were written a
-second time with AVX2 and NEON intrinsics and timed against the plain C. On
-x86-64 the intrinsics were between 0.74 and 1.14 times the compiler's speed.
-The best of those is worth about 1% of one transform. The arm64 half of the
-question is still open: the NEON code is verified correct under emulation,
-but nothing here could time it.
+**Explicit SIMD, no.** Three loops of the kernels were written a second
+time with AVX2 and NEON intrinsics and timed against the plain C. On x86-64
+the intrinsics were between 0.74 and 1.14 times the compiler's speed, the
+best of that worth about 1% of one transform. On a Jetson Orin NX they beat
+Ubuntu 22.04's GCC 11 by 1.2 to 1.4 times and lose to GCC 14, whose plain C
+is faster than either: on arm64 the answer is a current compiler. See
+[arm64, on a Jetson Orin NX](#arm64-on-a-jetson-orin-nx).
 
 ## What it bought
 
@@ -58,50 +59,53 @@ two codec transforms.
 
 | Transform | 512: original | now | | 1024: original | now | |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `RandomRain`, dry road | 158.1 | 23.3 | 6.8x | 1035.2 | 81.8 | 12.6x |
-| `RandomRain`, wet road drawn | 270.5 | 68.1 | 4.0x | 1692.1 | 181.7 | 9.3x |
-| `DirtSoil` | 48.8 | 7.0 | 7.0x | 254.0 | 28.9 | 8.8x |
-| `AcFlicker` | 6.7 | 1.0 | 6.5x | 31.8 | 3.8 | 8.3x |
-| `NightFog` | 97.0 | 26.7 | 3.6x | 832.3 | 112.6 | 7.4x |
-| `TemporalDenoiseArtifacts` | 66.5 | 14.8 | 4.5x | 333.6 | 46.8 | 7.1x |
-| `RandomSnow` | 179.2 | 51.5 | 3.5x | 1298.6 | 188.4 | 6.9x |
-| `NightSnow` | 45.2 | 6.2 | 7.3x | 254.0 | 37.2 | 6.8x |
-| `HousingOccluders` | 14.6 | 6.1 | 2.4x | 104.2 | 16.1 | 6.5x |
-| `SunFlare` | 27.8 | 6.7 | 4.2x | 130.5 | 21.4 | 6.1x |
-| `RandomFog` | 88.1 | 22.9 | 3.8x | 800.1 | 132.8 | 6.0x |
-| `SourceGlare` | 48.7 | 11.6 | 4.2x | 221.5 | 39.0 | 5.7x |
-| `NightRain` | 116.8 | 25.0 | 4.7x | 341.7 | 60.5 | 5.6x |
-| `ExposureTransient` | 7.6 | 2.1 | 3.6x | 35.0 | 8.6 | 4.1x |
-| the depth estimate, once per new frame | 31.1 | 12.0 | 2.6x | 36.0 | 15.8 | 2.3x |
-| `SensorNoise` | 13.4 | 6.0 | 2.2x | 65.2 | 31.1 | 2.1x |
-| `CastShadows` | 26.7 | 21.0 | 1.3x | 138.6 | 76.0 | 1.8x |
-| `NightIrMode` | 19.0 | 12.3 | 1.5x | 83.8 | 51.3 | 1.6x |
-| `WdrToneMapping` | 121.8 | 116.5 | 1.0x | 164.4 | 127.7 | 1.3x |
-| `WaterDroplets` | 52.4 | 45.8 | 1.1x | 140.2 | 125.4 | 1.1x |
-| `RollingShutter` | 2.0 | 1.9 | 1.0x | 7.7 | 7.7 | 1.0x |
-| `VideoCodecArtifacts` | 143.6 | 145.8 | 1.0x | 182.3 | 186.7 | 1.0x |
-| `VideoCodecArtifacts`, with PyAV | 143.6 | 9.2 | 15.7x | 182.3 | 29.4 | 6.2x |
-| `TransmissionFaults` | 171.9 | 172.3 | 1.0x | 281.6 | 293.4 | 1.0x |
-| `TransmissionFaults`, with PyAV | 171.9 | 23.1 | 7.4x | 281.6 | 79.1 | 3.6x |
-| **Geometric mean of the 22 transforms** | | | **2.80x** | | | **3.80x** |
-| **All 22 once each** | 1727 | 795 | **2.17x** | 8428 | 1859 | **4.53x** |
-| **Geometric mean, with PyAV** | | | **3.48x** | | | **4.38x** |
-| **All once each, with PyAV** | 1727 | 509 | **3.39x** | 8428 | 1487 | **5.67x** |
+| `RandomRain`, dry road | 157.9 | 20.6 | 7.6x | 1036.5 | 70.9 | 14.6x |
+| `DirtSoil` | 49.4 | 6.4 | 7.8x | 255.6 | 22.9 | 11.1x |
+| `RandomRain`, wet road drawn | 271.4 | 63.4 | 4.3x | 1682.5 | 156.6 | 10.7x |
+| `NightFog` | 97.5 | 24.2 | 4.0x | 823.8 | 90.5 | 9.1x |
+| `RandomSnow` | 180.0 | 49.8 | 3.6x | 1300.8 | 143.1 | 9.1x |
+| `RandomFog` | 88.5 | 20.6 | 4.3x | 804.8 | 91.7 | 8.8x |
+| `AcFlicker` | 6.7 | 1.1 | 6.2x | 34.2 | 4.0 | 8.5x |
+| `NightSnow` | 45.5 | 6.3 | 7.2x | 254.3 | 34.8 | 7.3x |
+| `TemporalDenoiseArtifacts` | 66.8 | 14.8 | 4.5x | 329.3 | 46.0 | 7.2x |
+| `NightRain` | 117.4 | 20.7 | 5.7x | 341.6 | 53.2 | 6.4x |
+| `HousingOccluders` | 14.7 | 6.1 | 2.4x | 104.7 | 16.7 | 6.3x |
+| `SunFlare` | 27.9 | 6.7 | 4.2x | 128.7 | 21.0 | 6.1x |
+| `SourceGlare` | 48.8 | 11.6 | 4.2x | 216.8 | 38.4 | 5.6x |
+| `WdrToneMapping` | 122.1 | 26.0 | 4.7x | 163.1 | 39.6 | 4.1x |
+| `ExposureTransient` | 7.8 | 2.2 | 3.6x | 34.9 | 8.6 | 4.0x |
+| `CastShadows` | 26.7 | 20.8 | 1.3x | 142.1 | 46.9 | 3.0x |
+| `SensorNoise` | 13.6 | 6.1 | 2.2x | 64.7 | 27.5 | 2.4x |
+| the depth estimate, once per new frame | 32.0 | 12.1 | 2.6x | 36.2 | 15.9 | 2.3x |
+| `NightIrMode` | 18.9 | 9.4 | 2.0x | 88.5 | 41.5 | 2.1x |
+| `WaterDroplets` | 52.2 | 22.7 | 2.3x | 137.9 | 70.1 | 2.0x |
+| `RollingShutter` | 2.0 | 2.0 | 1.0x | 7.8 | 7.7 | 1.0x |
+| `VideoCodecArtifacts` | 143.7 | 144.2 | 1.0x | 181.0 | 180.1 | 1.0x |
+| `VideoCodecArtifacts`, with PyAV | 143.7 | 9.2 | 15.6x | 181.0 | 29.5 | 6.1x |
+| `TransmissionFaults` | 171.5 | 171.7 | 1.0x | 280.1 | 279.4 | 1.0x |
+| `TransmissionFaults`, with PyAV | 171.5 | 23.2 | 7.4x | 280.1 | 79.3 | 3.5x |
+| **Geometric mean of the 22 transforms** | | | **3.24x** | | | **4.61x** |
+| **All 22 once each** | 1731 | 657 | **2.63x** | 8414 | 1491 | **5.64x** |
+| **Geometric mean, with PyAV** | | | **4.02x** | | | **5.30x** |
+| **All once each, with PyAV** | 1731 | 374 | **4.63x** | 8414 | 1140 | **7.38x** |
 
 - **The geometric mean** is over the 22 transforms, each counted once
-  whatever it costs: 2.8 times at 512 pixels and 3.8 at 1024. Three of them
-  did not change. Over the 19 that changed by more than a tenth it is 3.3
-  and 4.7. With PyAV the two codec transforms change as well, and it is 3.5
-  and 4.4 over all 22.
+  whatever it costs: 3.2 times at 512 pixels and 4.6 at 1024. Three of them
+  did not change. Over the 19 that changed by more than a tenth it is 3.9
+  and 5.9. With PyAV the two codec transforms change as well, and it is 4.0
+  and 5.3 over all 22.
 - **"All 22 once each"** adds the times up instead, so the heavy transforms
-  weigh more: 2.2 and 4.5 times, 3.4 and 5.7 with PyAV. Neither figure is a
+  weigh more: 2.6 and 5.6 times, 4.6 and 7.4 with PyAV. Neither figure is a
   pipeline's: that depends on which transforms it holds and how often each
   fires.
+- **On arm64**, a Jetson Orin NX, the same comparison over the 20
+  transforms it can run is 3.1 and 4.6 times; see
+  [arm64, on a Jetson Orin NX](#arm64-on-a-jetson-orin-nx).
 - **`RandomRain` is two rows** because its default changed. The original
   drew the wet road in 70% of frames and this branch draws it in 40%, which
   is a choice about pictures and not a speed-up; the rows show the same
   work in both. Weighted by each branch's own default, a rain frame at
-  1024 pixels went from about 1490 ms to about 120.
+  1024 pixels went from about 1490 ms to about 105.
 - **The depth estimate** is paid once for each new frame, by the first
   depth-conditioned transform that fires, and is not in the means.
 - **Part of the first four rows is a regression being undone.** The sky-edge
@@ -109,15 +113,15 @@ two codec transforms.
   and night fog ran two Gaussian blurs with a sigma of 58 pixels and a
   59-pixel disc dilation at full resolution. With OpenCV's sixteen threads
   that was about a fifth of a second at 1024 pixels. On one thread it was
-  most of a second. The README's timing table was measured before that
-  change and with all threads, so it never showed it.
+  most of a second. The README's timing table of the time was measured
+  before that change and with all threads, so it never showed it.
 - **The machine was not idle.** Other jobs were running on it throughout and
   the hardware counters were not readable (`perf_event_paranoid` is 4). The
   same pinned loop measured 87 ms in one hour and 144 ms in another. Ratios
   within a row hold; absolute figures are good to perhaps 40%, and differ
   between the tables on this page, which were made on different days.
-- **The README's table is all-threads and stale.** It has not been
-  re-measured on this branch.
+- **The README's tables are this table's "now" column**, split into the
+  transforms that need depth and those that do not.
 
 ### After the first round
 
@@ -256,17 +260,9 @@ The columns that do differ are the first two. The AVX2 tier is up to twice
 the SSE2 tier on the same source, so compiling per tier and choosing at load
 is worth its complexity, and that part of Pillow-AllSIMD's design is kept.
 
-**On arm64 this is unanswered.** The NEON versions give the same bits as the
-plain C in an arm64 container under QEMU, where timings mean nothing. On the
-Jetson, one command answers it:
-
-```bash
-taskset -c <a big core> sh native/experiments/run.sh
-```
-
-If the NEON intrinsics win there by a margin that matters, the experiment's
-functions can be moved into `wm_kernels.c` under `#if defined(__ARM_NEON)`
-as they stand; they are already checked bit for bit.
+**On arm64 the compiler decides it.** Timed on a Jetson Orin NX, the NEON
+intrinsics beat GCC 11's plain C by 1.2 to 1.4 times and lose to GCC 14's
+by 1.1 to 1.45; see [arm64, on a Jetson Orin NX](#arm64-on-a-jetson-orin-nx).
 
 **When this would change.** Explicit kernels become worth writing when a
 loop is hot, bound by the core, and the compiler cannot be brought to
@@ -349,10 +345,10 @@ all three. What remains is listed under [Not done](#not-done).
   on other seeds. Everything else a kernel computes is numpy's to the bit.
 - **Across machines**: [`native/check/run.sh`](../native/check/run.sh) prints
   a hash per kernel, and one more each for the fast-mode sprites and the
-  tabled filter. The SSE2 and AVX2 builds (glibc, GCC 13.3) and an arm64
-  build under QEMU (musl, GCC 13.2) print the same twelve, the denoise
-  filter's among them, which also holds one C library's `powf` to the
-  other's.
+  tabled filter. The SSE2 and AVX2 builds (glibc, GCC 13.3), an arm64
+  build under QEMU (musl, GCC 13.2) and two on a Jetson Orin NX (glibc, GCC
+  11.4 and 14.2) print the same fourteen, the denoise filter's among them,
+  which also holds one C library's `powf` to the other's.
 - **Against OpenCV and against ffmpeg**, where a kernel or PyAV stands in
   for one of them: tried once on each installation and relied on in exact
   mode only where it gave the same bytes
@@ -408,6 +404,11 @@ four example scenes, two seeds):
 | float32 where two scalars had widened the settled-snow fields | `RandomSnow` | 6% of a frame with settled snow | one level, in 0.002% of values |
 | Overcast light's contrast gain from a table of 65536 values, and the relighting in one pass | `RandomRain`, `RandomSnow` | 46 ms to 13 at 1024 px | within a level; one level in 0.1% of values on the scenes |
 | The brightest pixels' mean from a histogram; a frame's mean colour summed by OpenCV | `RandomRain`, `RandomSnow`, `RandomFog` | 37 ms to 12 at 1024 px | the fifth digit of a colour |
+| The tone mapper's base layer filtered at a radius of 8 for 12, on a smaller copy | `WdrToneMapping` | 154 ms to 40 at 1024 px | 1.3 levels on average; up to 40 along strong edges |
+| The water surface in C, its outline harmonics from a recurrence | `WaterDroplets` | the surface 26 ms to 10 at 1024 px | a level in one value in 100,000 |
+| A wide penumbra blurred on a reduced copy | `CastShadows` | with the exact relighting change, 81 ms to 45 at 1024 px | a level, in 0.04% of values |
+| The illuminator's beam on a coarse grid; the exposure level from a histogram | `NightIrMode` | 54 ms to 42 at 1024 px | 3 levels at most, in 0.4% of values |
+| The local mean of snow's canopy test on a reduced copy | `RandomSnow` | a 24 ms blur on frames with settled snow; with the ground fill's kernel, 206 ms to 174 | 2 levels in 99.9% of values |
 | H.265 encoded in the process, and damaged streams decoded there | `VideoCodecArtifacts(codec="h265")`, `TransmissionFaults`, with PyAV | 2 to 9 times at 512 px and below | another release of libx265; an unconcealed loss is always the zeroed hole |
 
 Six transforms give the same bytes in both modes on these frames:
@@ -781,6 +782,146 @@ four scenes and two seeds:
 - **What it carried with it**: `RandomSnow` 296 ms to 199 and the wet road
   265 to 175 at 1024 pixels, from the same blend, overcast and statistics.
 
+## A seventh round: the other slow transforms, and the sky's edge
+
+What was left at 1024 pixels after the sixth round, by where its time went.
+One pinned core, fast mode, against the commit before, twelve frames each
+(four scenes, three seeds):
+
+| Transform | Was | Now | What changed | Against exact mode |
+| --- | ---: | ---: | --- | --- |
+| `WdrToneMapping` | 154 ms | 40 | the base layer's bilateral filter at a radius of at most 8 pixels, on a copy reduced to match, for 12 | 1.3 levels on average; up to 40 along strong edges, in lines a pixel or two wide |
+| `WaterDroplets` | 108 | 75 | drops placed by a C loop; the water surface one C pass; the film and the drops composited in one C pass | a level in one value in 100,000 |
+| `CastShadows` | 81 | 45 | the penumbra blurred on a reduced copy; the relighting in two arrays, not six | a level, in 0.04% of values |
+| `NightIrMode` | 54 | 42 | the beam on a grid four times coarser; the exposure level from a histogram | 3 levels at most, in 0.4% of values |
+| `RandomSnow` | 206 | 174 | the local mean canopy texture is measured against, blurred on a reduced copy | 2 levels in 99.9% of values; 31 at a few pixels where canopy detection tips |
+| `RandomFog`, `NightFog`, `RandomRain` | | 10 ms off each | the sky's edge: its comparison one C pass, its rows found with numpy | the same bytes |
+
+- **The tone mapper's change is the largest per-pixel one fast mode makes
+  outside depth.** The bilateral filter costs the square of its radius at
+  every pixel of the copy it runs on; a smaller cap means a smaller copy and
+  a smaller radius on it, a fifth of the work. The base layer is then a
+  third coarser, and where it meets an edge strong enough to halo, the halo
+  moves by a pixel or two. Side by side on the example scenes the pictures
+  are not told apart; the differences are lines along the stripes of a
+  crossing. Exact mode keeps the cap of 12.
+- **Water drops, in three parts.** Placing drops apart was a Python loop
+  over a few thousand candidates with five array operations each; in C with
+  the same arithmetic in double it places the same drops, in both modes.
+  The water surface was a dozen array operations for each of a few hundred
+  drops, an `arctan2` and four `sin` a pixel among them; fast mode adds
+  every lobe in one C pass that takes the outline's harmonics from a
+  recurrence on the angle's sine and cosine, the same surface to a few
+  units in the last place. The condensation film and the drops over it were
+  five frame-sized results, read from strided slices of a four-channel
+  layer; one exact C pass now.
+- **The sky's edge gained most from a function call.** Its band of rows
+  was found with `cv2.reduce(..., REDUCE_MAX)` across each row, 8 ms on a
+  1024-pixel frame; numpy's maximum along a row takes 0.4. Its comparison
+  of each pixel with the sky's colour near it, ten frame-sized results, is
+  now one C pass with numpy's arithmetic (`grow_alike`), which the ground's
+  fill to an object's edge in snow and rain uses as well.
+- **Not done.** `SensorNoise` is two-thirds its random draw, which decides
+  the picture a seed gives; drawing float32 directly is another stream. The
+  water's aperture blur is a disc with an antialiased rim, which does not
+  reduce to running sums. `WdrToneMapping` could keep its cap with a
+  separable approximation of the bilateral filter, closer to exact mode
+  than the coarser copy is; that was not tried.
+
+## arm64, on a Jetson Orin NX
+
+The arm64 half of the second question, answered on the hardware it is for:
+a Jetson Orin NX (eight Cortex-A78AE cores), its core 2 to itself, the rest
+of the board busy with other work, as a deployed one is. Two compilers: the
+board's own GCC 11.4 (Ubuntu 22.04), and GCC 14.2 in a Debian container
+with Python 3.12, numpy 2.5 and OpenCV 5.0, the versions this machine runs.
+
+**Explicit NEON: no, with a current compiler.** The experiment's three
+loops, plain C against NEON intrinsics, nanoseconds per value:
+
+| Loop | GCC 11 plain C | GCC 11 NEON | NEON / plain | GCC 14 plain C | GCC 14 NEON | NEON / plain |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| encode | 1.99 | 1.43 | 1.39x | 1.18 | 1.70 | 0.69x |
+| capsule distance | 1.58 | 1.32 | 1.20x | 1.22 | 1.32 | 0.93x |
+| sprite shading | 3.32 | 2.37 | 1.40x | 2.03 | 2.36 | 0.86x |
+
+- **GCC 11 leaves a fifth to two-fifths on the table**, and the intrinsics
+  take it back.
+- **GCC 14 takes more than that itself**: its plain C is 1.3 to 1.7 times
+  GCC 11's and faster than the intrinsics under either compiler. Pillow-SIMD
+  found the same on this board: which of NEON and portable code wins
+  depends on the GCC version.
+- **So the answer is the compiler, not intrinsics.** Binary wheels for
+  arm64 should be built with GCC 12 or later (the build image's compiler is
+  worth checking when the wheel job is set up); a user building from
+  source with Ubuntu 22.04's GCC 11 gets the slower column and the same
+  pixels.
+
+**The same pixels.** The hash check prints the same fourteen lines on the
+board, from both compilers, as on x86-64 with SSE2 and AVX2. The kernel and
+mode tests pass on it in both modes. The denoise kernel gives OpenCV's
+bytes there too, so exact mode uses it on arm64 as it does on x86-64.
+
+**A bug only arm64 shows**: a NaN reaching the colour conversion went
+through as a black pixel there; see [Found on the way](#found-on-the-way).
+
+**What it bought there.** The table at the top, made the same way on the
+board with GCC 14 (its own core, depth from maps the network made on this
+machine), with a column for this branch without the kernels. The two codec
+transforms are not in it: the board has no ffmpeg in that container.
+
+| Transform | 512: original | now | | 1024: original | no kernels | now | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `RandomRain`, dry road | 352.6 | 52.2 | 6.8x | 2188.5 | 906.7 | 165.0 | 13.3x |
+| `NightFog` | 142.6 | 40.9 | 3.5x | 1435.8 | 153.2 | 134.1 | 10.7x |
+| `NightRain` | 286.6 | 40.2 | 7.1x | 939.4 | 826.4 | 93.6 | 10.0x |
+| `RandomRain`, wet road drawn | 521.5 | 136.3 | 3.8x | 3214.0 | 1255.1 | 336.4 | 9.6x |
+| `NightSnow` | 112.2 | 13.6 | 8.2x | 621.2 | 560.2 | 68.4 | 9.1x |
+| `RandomSnow` | 296.4 | 101.1 | 2.9x | 2281.9 | 696.7 | 273.9 | 8.3x |
+| `RandomFog` | 142.6 | 44.4 | 3.2x | 1456.6 | 195.3 | 177.6 | 8.2x |
+| `DirtSoil` | 87.4 | 15.9 | 5.5x | 420.2 | 99.7 | 52.1 | 8.1x |
+| `TemporalDenoiseArtifacts` | 113.4 | 30.2 | 3.8x | 563.5 | 369.7 | 90.7 | 6.2x |
+| `HousingOccluders` | 23.0 | 11.1 | 2.1x | 146.3 | 34.8 | 26.3 | 5.6x |
+| `AcFlicker` | 10.0 | 2.9 | 3.5x | 39.7 | 17.7 | 9.3 | 4.2x |
+| `SunFlare` | 51.0 | 17.2 | 3.0x | 188.5 | 61.3 | 46.5 | 4.1x |
+| `SourceGlare` | 73.5 | 25.9 | 2.8x | 281.9 | 103.0 | 77.9 | 3.6x |
+| `WdrToneMapping` | 152.3 | 37.2 | 4.1x | 204.4 | 73.2 | 64.7 | 3.2x |
+| `ExposureTransient` | 11.4 | 4.7 | 2.4x | 45.3 | 24.3 | 15.7 | 2.9x |
+| `CastShadows` | 42.6 | 34.7 | 1.2x | 202.9 | 85.8 | 77.7 | 2.6x |
+| `SensorNoise` | 20.3 | 10.2 | 2.0x | 88.0 | 51.6 | 43.1 | 2.0x |
+| `NightIrMode` | 31.9 | 16.7 | 1.9x | 123.6 | 72.4 | 63.7 | 1.9x |
+| `WaterDroplets` | 120.6 | 55.9 | 2.2x | 367.7 | 339.3 | 247.5 | 1.5x |
+| `RollingShutter` | 3.1 | 3.0 | 1.0x | 11.1 | 11.1 | 11.1 | 1.0x |
+| **Geometric mean of the 20 transforms** | | | **3.09x** | | | | **4.63x** |
+| **All 20 once each** | 2595 | 694 | **3.74x** | 14821 | 5938 | 2075 | **7.14x** |
+
+- **The kernels matter more here than on x86-64.** With them this branch is
+  1.75 times as fast as without at 512 pixels and 1.94 at 1024, by
+  geometric mean, and 8.8 and 8.2 times for `NightRain` and `NightSnow`:
+  the Python and numpy paths the kernels replace are slower on this core,
+  relative to compiled code, than on a laptop's.
+- **The board's core is 1.7 to 4.3 times slower than the laptop's** in the
+  kernels, as the table below shows: least in the rain streaks and the
+  denoise filter, most in the flakes drawn through an iris.
+
+The kernels on their own, milliseconds at 1024 pixels, best of eleven,
+against this machine's AVX2 tier:
+
+| Kernel | Core Ultra 9, AVX2 | Orin NX, NEON (GCC 14) | |
+| --- | ---: | ---: | ---: |
+| encode to 8-bit sRGB | 1.44 | 4.27 | 3.0x |
+| decode from 8-bit sRGB | 0.84 | 1.79 | 2.1x |
+| small round flakes | 2.83 | 7.63 | 2.7x |
+| large round flakes | 17.39 | 57.92 | 3.3x |
+| large flakes through an iris, exact | 22.15 | 95.34 | 4.3x |
+| the same, fast | 18.68 | 62.35 | 3.3x |
+| rain streaks | 24.65 | 41.76 | 1.7x |
+| what each pixel mirrors | 1.51 | 5.01 | 3.3x |
+| and the mirror image | 2.63 | 8.12 | 3.1x |
+| wet-road composite | 1.94 | 5.26 | 2.7x |
+| denoise filter, exact | 47.09 | 109.37 | 2.3x |
+| denoise filter, tabled | 18.16 | 38.15 | 2.1x |
+
 ## Three suggestions, measured
 
 Three general prescriptions were tried against this code. Each was worth
@@ -1046,6 +1187,16 @@ measured.
 
 ## Found on the way
 
+- **A NaN became a black pixel on arm64.** The colour conversion refused a
+  NaN by accident: converting it to a table index gave an index far out of
+  range on x86-64, and the lookup raised. On arm64 the conversion gives 0, a
+  valid index, and the NaN went through as black, with the kernels or
+  without. The test that says so failed on the Jetson and nowhere else. A
+  NaN is now looked for and refused with a `ValueError` on every machine.
+- **`cv2.reduce` with `REDUCE_MAX` across rows is slow**: 8 ms for a
+  1024-pixel frame, against 0.4 ms for numpy's maximum along a row and for
+  `cv2.reduce` with `REDUCE_SUM`. It was the largest single cost left in the
+  sky's edge.
 - **Exact mode could be handed fast mode's depth.** The shared depth
   provider keyed its cache on the frame alone. The bundled estimator runs
   in half precision in fast mode, so a frame whose depth had been
@@ -1091,14 +1242,14 @@ measured.
 - **CI has never run.** The workflow now builds the kernels, runs the suite
   both ways and adds an arm64 job, and none of that has been executed: the
   repository has no remote.
-- **NEON on real hardware**, above.
 - **What is left in the frame time**, at 1024 pixels on one thread, none of
   it a case for intrinsics:
-  - `bilateralFilter`, most of `WdrToneMapping`: OpenCV's, and the effect
-    itself. No shortcut found that keeps the picture.
-  - The sky's edge, a quarter of a dry-road rain frame and shared by fog,
-    snow and night fog: a mean of the sky's colour near each pixel, and a
-    comparison with it, over most of the frame.
+  - `bilateralFilter`, most of `WdrToneMapping` even at fast mode's radius
+    of 8: OpenCV's, and the effect itself. A separable approximation, which
+    might keep exact mode's radius at the same cost, was not tried.
+  - `SensorNoise`'s random draw, which decides the picture a seed gives.
+  - `WaterDroplets`' aperture blur, a disc with an antialiased rim, which
+    does not reduce to running sums.
   - The veil's transmission and the streaks' opacity: an exponential over
     the frame each.
   - The blob patches of `DirtSoil`'s deposit field, placed on whole pixels:
@@ -1145,4 +1296,12 @@ python scripts/benchmark_single_core.py compare --before before_*.json --after a
 
 `save-depth` and `--load-depth` run the same frames without torch or a GPU,
 from depth maps estimated once on a machine that has them; that is how the
-arm64 figures were made.
+arm64 figures were made:
+
+```bash
+python scripts/benchmark_single_core.py save-depth depth.npz      # where the GPU is
+# on the board, its core 2 to itself:
+taskset -c 2 python scripts/benchmark_single_core.py run --load-depth depth.npz --out now.json
+taskset -c 2 sh native/experiments/run.sh                         # plain C against NEON
+sh native/check/run.sh                                            # the same fourteen hashes
+```

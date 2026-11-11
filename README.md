@@ -108,8 +108,8 @@ augmented = transform(image=image)["image"]
 
 Construct **one** `SharedDepthProvider` and pass that same instance to every
 depth-conditioned transform, so depth is estimated once per image instead of
-once per transform. This is the single biggest throughput decision in a
-pipeline here — see [Performance](#performance). `provider.cache_info()`
+once per transform: a provider per transform pays the estimate again in
+each (see [Performance](#performance) for what it costs). `provider.cache_info()`
 reports hits and misses if you want to confirm it is happening.
 
 ```python
@@ -343,51 +343,73 @@ transform = A.Compose([...], seed=42)
 
 ## Performance
 
-Measured with `scripts/benchmark.py` on one machine (Intel Core Ultra 9 285H,
-RTX PRO 1000 Blackwell Laptop GPU, torch 2.11 + CUDA 12.8), median of 15
-calls per measurement. Treat these as *relative* costs; absolute numbers will
-differ on your hardware.
+Milliseconds per call on **one core**, which is what a `DataLoader` worker
+has: an Intel Core Ultra 9 285H performance core with OpenCV held to one
+thread, fast mode, the compiled kernels built. Each figure is the mean over
+four of the example scenes and two seeds of the least of two calls after a
+warm-up, and the least of three such runs. Between runs most figures moved
+by under 5%, but one more than doubled once; absolute numbers will differ
+on your hardware, and the ordering is the part to plan around.
 
 ```bash
-python scripts/benchmark.py                        # 512px and 1024px
-python scripts/benchmark.py --sizes 1024 --csv out.csv
-python scripts/benchmark.py --no-depth             # CPU-only subset
+taskset -c 2 python scripts/benchmark_single_core.py run --out times.json
+python scripts/benchmark.py --sizes 512 1024     # parameters and rendering apart
 ```
 
-### CPU-only transforms — total ms per image
+[`docs/native_kernels.md`](docs/native_kernels.md) has the same transforms
+against the code before the native kernels, on this machine and on a Jetson
+Orin NX, and what exact mode costs.
+
+### CPU-only transforms — ms per image
 
 | Transform | 512 px | 1024 px |
-| --- | --- | --- |
-| `RollingShutter` | **0.2** | 1.1 |
-| `AcFlicker` | 4.1 | 21.3 |
-| `ExposureTransient` | 4.8 | 24.3 |
-| `SensorNoise` | 13.1 | 50.1 |
-| `HousingOccluders` | 10.8 | 66.7 |
-| `SunFlare` | 21.4 | 125.5 |
-| `DirtSoil` | 35.4 | 173.5 |
-| `SourceGlare` | 38.7 | 196.1 |
-| `TemporalDenoiseArtifacts` | 38.6 | 237.4 |
-| `WdrToneMapping` | 102.9 | 146.2 |
-| `WaterDroplets` | 112.7 | 194.7 |
-| `TransmissionFaults` | 151.4 | 190.0 |
-| `VideoCodecArtifacts` | 170.4 | 251.9 |
+| --- | ---: | ---: |
+| `AcFlicker` | 1.1 | 4.0 |
+| `RollingShutter` | 2.0 | 7.7 |
+| `ExposureTransient` | 2.2 | 8.6 |
+| `HousingOccluders` | 6.1 | 16.7 |
+| `SensorNoise` | 6.1 | 27.5 |
+| `NightSnow` | 6.3 | 34.8 |
+| `DirtSoil` | 6.4 | 22.9 |
+| `SunFlare` | 6.7 | 21.0 |
+| `VideoCodecArtifacts`, with PyAV | 9.2 | 29.5 |
+| `SourceGlare` | 11.6 | 38.4 |
+| `TemporalDenoiseArtifacts` | 14.8 | 46.0 |
+| `NightRain` | 20.7 | 53.2 |
+| `WaterDroplets` | 22.7 | 70.1 |
+| `TransmissionFaults`, with PyAV | 23.2 | 79.3 |
+| `WdrToneMapping` | 26.0 | 39.6 |
+| `VideoCodecArtifacts`, through ffmpeg | 144.2 | 180.1 |
+| `TransmissionFaults`, through ffmpeg | 171.7 | 279.4 |
 
-### Depth-conditioned transforms — total ms per image
+The two codec transforms run ffmpeg as two subprocesses per call unless
+PyAV is installed (see [Install](#install)), and then encode in process.
 
-"Cold" pays for depth estimation; "warm" is what the second and subsequent
-depth-conditioned transform costs when they share one provider.
+### Depth-conditioned transforms — ms per image
 
-| Transform | 512 cold | 512 warm | 1024 cold | 1024 warm |
-| --- | --- | --- | --- | --- |
-| `CastShadows` | 61.5 | **24.2** | 209.0 | 126.7 |
-| `NightIrMode` | 81.4 | **13.5** | 136.0 | 77.3 |
-| `RandomFog` | 86.7 | **19.8** | 212.7 | 114.0 |
-| `NightFog` | — | 28.9 | — | 125.0 |
-| `RandomRain` | 140.1 | 81.4 | 384.4 | 304.8 |
-| `RandomSnow` | 135.4 | **32.1** | 245.8 | 177.0 |
+With depth already estimated: what every depth-conditioned transform costs
+once one provider holds the frame's depth.
 
-Sharing one provider saves roughly **62 ms per extra transform at 512 px and
-86 ms at 1024 px**. Constructing a provider per transform throws that away.
+| Transform | 512 px | 1024 px |
+| --- | ---: | ---: |
+| `NightIrMode` | 9.4 | 41.5 |
+| `RandomFog` | 20.6 | 91.7 |
+| `RandomRain`, dry road | 20.6 | 70.9 |
+| `CastShadows` | 20.8 | 46.9 |
+| `NightFog` | 24.2 | 90.5 |
+| `RandomSnow` | 49.8 | 143.1 |
+| `RandomRain`, wet road | 63.4 | 156.6 |
+
+`RandomRain` draws the wet road in 40% of frames by default
+(`wetness_probability`), so it costs about 38 ms at 512 px and 105 ms at
+1024 px on average.
+
+The depth map itself is estimated once per new frame on the GPU: 12 and
+16 ms at 512 and 1024 px (an RTX PRO 1000 Blackwell Laptop GPU, torch 2.11
++ CUDA 12.8, in fast mode, which runs the network in half precision). Every
+depth-conditioned transform that shares one `SharedDepthProvider` reuses it:
+chained in one pipeline, only the first pays. Constructing a provider per
+transform pays it again in each.
 
 The saving holds along a whole pipeline, not only between adjacent
 transforms: each transform here passes the scene on with its output, so depth
@@ -399,36 +421,20 @@ the chain, and the next depth-conditioned transform then estimates afresh:
 library, which cannot be assumed not to. If you know such a step keeps
 geometry (a colour jitter, a blur), `provider.carry(before, after)` says so.
 
-**Both tables predate the `native-kernels` work and were measured with
-OpenCV using every core.** A `DataLoader` worker has one, and there the
-picture is different: see the single-core table in
-[`docs/native_kernels.md`](docs/native_kernels.md), where `RandomFog`,
-`RandomRain` and `RandomSnow` are 5 to 8 times faster than they were at
-1024 px and the geometric mean over all 22 transforms is 2.8 times (2.1 at
-512 px).
-
-These are a laptop under thermal limits: absolute numbers move by up to 2x
-between runs, and the relative ordering plus the cold/warm gap are the parts
-worth planning around. For that reason the `WaterDroplets`, `DirtSoil` and
-`RandomRain` rows, whose renderers changed after the table was measured, are
-not from a fresh run: each is the table's earlier figure scaled by the
-new-to-old ratio timed back to back in one session (droplets 1.17x at 512 px
-and 0.93x at 1024 px, dirt 1.08x and 1.01x, rain 1.21x and 1.13x).
-
 ### Choosing a budget
 
-A `DataLoader` worker must keep ahead of the GPU. Rough guidance:
+A `DataLoader` worker must keep ahead of the GPU. Rough guidance, at 512 px:
 
-- **Cheap enough to apply liberally** (under ~25 ms at 512 px):
-  `RollingShutter`, `AcFlicker`, `ExposureTransient`, `SensorNoise`,
-  `HousingOccluders`,
-  `SunFlare`.
-- **Moderate** (25-115 ms): `DirtSoil`, `TemporalDenoiseArtifacts`,
-  `WaterDroplets`, `WdrToneMapping`, and any *warm* depth-conditioned
-  transform.
-- **Expensive, keep `p` low**: `VideoCodecArtifacts` and `TransmissionFaults`
-  (two ffmpeg subprocesses per call each, unless PyAV is installed: see
-  [Install](#install)), and the first depth-conditioned transform in a pipeline.
+- **Cheap enough to apply liberally** (under ~10 ms): `AcFlicker`,
+  `RollingShutter`, `ExposureTransient`, `HousingOccluders`, `SensorNoise`,
+  `NightSnow`, `DirtSoil`, `SunFlare`, `NightIrMode`, and
+  `VideoCodecArtifacts` with PyAV.
+- **Moderate** (10-30 ms): `SourceGlare`, `TemporalDenoiseArtifacts`,
+  `NightRain`, `WaterDroplets`, `WdrToneMapping`, `TransmissionFaults` with
+  PyAV, `CastShadows`, `RandomFog`, `NightFog`, and `RandomRain` on a dry
+  road.
+- **Expensive, keep `p` low**: `RandomSnow`, `RandomRain` on a wet road,
+  and `VideoCodecArtifacts` and `TransmissionFaults` without PyAV.
 
 Cost is paid only when `p` fires, so a pipeline of ten effects at `p=0.2`
 costs about two of them per image, not ten. The depth estimate is the

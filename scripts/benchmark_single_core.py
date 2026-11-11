@@ -35,11 +35,11 @@ drawn, because whether it is drawn is a random choice that dominates its cost.
 
 Depth without the network
 -------------------------
-The depth model needs torch and a CUDA GPU. ``--save-depth FILE`` stores the
+The depth model needs torch and a CUDA GPU. ``save-depth FILE`` stores the
 maps it makes, for every scene and size, in both precisions the library uses
-(full, and half in fast mode); ``--load-depth FILE`` reads them back in place
-of the network, so the same frames can be timed on a machine with neither,
-an arm64 board for one. Each checkout is given the maps its own mode would
+(full, and half in fast mode); ``run --load-depth FILE`` reads them back in
+place of the network, so the same frames can be timed on a machine with
+neither, an arm64 board for one. Each checkout is given the maps its own mode would
 have made: half precision for this branch in fast mode, full precision
 otherwise.
 
@@ -329,7 +329,7 @@ def main() -> None:
     timing.add_argument("--sizes", type=int, nargs="+", default=[512, 1024])
     timing.add_argument("--only", nargs="+", default=None, help="time only these transforms")
     timing.add_argument("--out", required=True, help="JSON file to write")
-    timing.add_argument("--load-depth", default=None, help="depth maps saved by --save-depth")
+    timing.add_argument("--load-depth", default=None, help="depth maps stored by save-depth")
 
     saving = commands.add_parser("save-depth", help="estimate depth for every scene and store it")
     saving.add_argument("file")
