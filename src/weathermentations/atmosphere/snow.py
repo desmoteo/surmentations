@@ -97,6 +97,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import _native
 from weathermentations.base import WeatherTransform, first_frame, require_depth_provider, scene_of
 from weathermentations.depth.normals import upward_facing
 from weathermentations.depth.provider import SharedDepthProvider
@@ -287,6 +288,50 @@ def _paste_flake_sprite(
 
     region = canvas[dst_y0:dst_y1, dst_x0:dst_x1]
     np.maximum(region, sprite[src_y0:src_y1, src_x0:src_x1], out=region)
+
+
+def render_flake_field(
+    canvas: np.ndarray,
+    flakes: dict[str, np.ndarray],
+    blades: int,
+    blade_rotation: float,
+    rim_gain: float,
+    cats_eye: float,
+    frame_centre: tuple[float, float],
+    gain: np.ndarray | None = None,
+) -> None:
+    """Max-blend every flake of a field into ``canvas``.
+
+    One call per flake to :func:`_paste_flake_sprite` is several thousand
+    Python calls a frame, each of which spends more time setting numpy up
+    than computing: a 15-pixel sprite cost what a 150-pixel one did. The
+    compiled kernel draws the whole field in one call and is used when it is
+    installed; the loop below is the same picture without it.
+    """
+    xs, ys = flakes["x"], flakes["y"]
+    radii, blurs, smears = flakes["radius"], flakes["blur_radius"], flakes["smear"]
+    dir_xs, dir_ys = flakes["dir_x"], flakes["dir_y"]
+    if _native.render_flakes(
+        canvas, xs, ys, radii, blurs, smears, dir_xs, dir_ys, gain,
+        blades, blade_rotation, rim_gain, cats_eye, frame_centre,
+    ):  # fmt: skip
+        return
+    for i in range(len(xs)):
+        _paste_flake_sprite(
+            canvas,
+            float(xs[i]),
+            float(ys[i]),
+            float(radii[i]),
+            float(blurs[i]),
+            float(smears[i]),
+            (float(dir_xs[i]), float(dir_ys[i])),
+            blades,
+            blade_rotation,
+            rim_gain,
+            cats_eye,
+            frame_centre,
+            gain=1.0 if gain is None else float(gain[i]),
+        )
 
 
 # Liquid-equivalent snowfall rate at which the light is most of the way to
@@ -913,24 +958,9 @@ class RandomSnow(WeatherTransform):
         frame_centre = (width / 2.0, height / 2.0)
 
         flake_layer = np.zeros((height, width), dtype=np.float32)
-        xs, ys = flakes["x"], flakes["y"]
-        radii, blurs, smears = flakes["radius"], flakes["blur_radius"], flakes["smear"]
-        dir_xs, dir_ys = flakes["dir_x"], flakes["dir_y"]
-        for i in range(len(xs)):
-            _paste_flake_sprite(
-                flake_layer,
-                float(xs[i]),
-                float(ys[i]),
-                float(radii[i]),
-                float(blurs[i]),
-                float(smears[i]),
-                (float(dir_xs[i]), float(dir_ys[i])),
-                blades,
-                blade_rotation,
-                rim_gain,
-                cats_eye,
-                frame_centre,
-            )
+        render_flake_field(
+            flake_layer, flakes, blades, blade_rotation, rim_gain, cats_eye, frame_centre
+        )
 
         linear, scale, is_integer = to_linear_unit(img)
         # Snow falls from cloud; relight the scene before anything is lit by it.

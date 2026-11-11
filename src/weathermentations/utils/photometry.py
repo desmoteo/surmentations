@@ -29,6 +29,14 @@ Small arrays (colour constants, airlight, a droplet's tint) skip the table
 and use the exact expression, because below a few thousand elements the
 gather costs more than the arithmetic and there is no reason to accept even
 that much error on a value that will be broadcast over a whole frame.
+
+Why the encode has a table of its own
+-------------------------------------
+Encoding to uint8 was still five passes over the image: clip, scale, gather
+a float, scale and round it, clip and cast. The last three depend only on
+the table entry, so they are folded into a second table, of code values. It
+gives the same bytes, in three passes, or in one where the compiled kernels
+are installed (:mod:`weathermentations._native`).
 """
 
 from __future__ import annotations
@@ -36,6 +44,8 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+
+from weathermentations import _native
 
 # Size of the float->float lookup tables. 16 bits keeps the worst-case error
 # at 0.05/255 while the table itself (256 KB) still sits in L2.
@@ -67,11 +77,35 @@ _SRGB_TO_LINEAR_LUT = _srgb_to_linear_exact(_RAMP)
 _LINEAR_TO_SRGB_LUT = _linear_to_srgb_exact(_RAMP)
 # uint8 sRGB codes decode exactly through a 256-entry table.
 _U8_TO_LINEAR_LUT = _srgb_to_linear_exact(np.arange(256, dtype=np.float32) / 255.0)
+# Linear light straight to a uint8 code: the encode table, already scaled,
+# rounded and clipped as `from_linear_unit` does it.
+_LINEAR_TO_SRGB_U8_LUT = np.clip(np.rint(_LINEAR_TO_SRGB_LUT * 255.0), 0, 255).astype(np.uint8)
+
+
+def _lut_index(image: np.ndarray) -> np.ndarray:
+    """Table index of each value: ``int(clip(image, 0, 1) * (size - 1))``.
+
+    Scaled first and clipped in place, which is the same number and one
+    full-size temporary fewer. A NaN stays one and is refused by the lookup.
+    """
+    scaled = np.multiply(image, _LUT_SIZE - 1)
+    np.clip(scaled, 0.0, _LUT_SIZE - 1, out=scaled)
+    return scaled.astype(np.int32)
 
 
 def _through_lut(image: np.ndarray, lut: np.ndarray) -> np.ndarray:
-    index = np.clip(image, 0.0, 1.0) * (_LUT_SIZE - 1)
-    return lut[index.astype(np.int32)]
+    out = _native.encode_f32(image, lut)
+    if out is None:
+        out = np.take(lut, _lut_index(image))
+    return out
+
+
+def _decode_u8(image: np.ndarray) -> np.ndarray:
+    out = _native.decode_u8(image, _U8_TO_LINEAR_LUT)
+    if out is None:
+        # `take` is the same gather as `lut[image]`, a quarter faster.
+        out = np.take(_U8_TO_LINEAR_LUT, image)
+    return out
 
 
 def srgb_to_linear(image: np.ndarray) -> np.ndarray:
@@ -81,7 +115,7 @@ def srgb_to_linear(image: np.ndarray) -> np.ndarray:
     prior division by 255.
     """
     if image.dtype == np.uint8:
-        return _U8_TO_LINEAR_LUT[image]
+        return _decode_u8(image)
     if image.size < _EXACT_BELOW:
         return _srgb_to_linear_exact(image)
     return _through_lut(image, _SRGB_TO_LINEAR_LUT)
@@ -105,7 +139,7 @@ def to_linear_unit(img: np.ndarray) -> tuple[np.ndarray, float, bool]:
     if img.dtype == np.uint8:
         # The table already folds in the /255, so this skips a full-size
         # float conversion of the source image.
-        return _U8_TO_LINEAR_LUT[img], scale, True
+        return _decode_u8(img), scale, True
     return srgb_to_linear(img.astype(np.float32) / scale), scale, is_integer
 
 
@@ -119,6 +153,13 @@ def from_linear_unit(linear: np.ndarray, scale: float, is_integer: bool, dtype: 
     five applies it five times, and an effect whose whole job is a few percent
     of contrast (rain streaks at 2% opacity) is competing with it.
     """
+    if is_integer and np.dtype(dtype) == np.uint8 and linear.size >= _EXACT_BELOW:
+        # The table holds `clip(rint(srgb * 255), 0, 255)` per entry, so this
+        # is the general expression below, bit for bit.
+        codes = _native.encode_u8(linear, _LINEAR_TO_SRGB_U8_LUT)
+        if codes is None:
+            codes = np.take(_LINEAR_TO_SRGB_U8_LUT, _lut_index(linear))
+        return codes
     encoded = linear_to_srgb(linear) * scale
     if is_integer:
         return np.clip(np.rint(encoded), 0, 255).astype(dtype)
