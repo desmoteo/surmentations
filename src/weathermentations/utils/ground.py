@@ -11,6 +11,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from weathermentations.utils.channels import channel_max, channel_min
 from weathermentations.utils.noise import value_noise
 
 # Vegetation: hue between yellow-green and blue-green, with enough
@@ -38,8 +39,8 @@ def vegetation_weight(linear_rgb: np.ndarray) -> np.ndarray:
     By colour alone, which is all that is needed to tell grass and foliage
     from paving and nothing like enough to tell them from green paint.
     """
-    high = linear_rgb.max(axis=2)
-    low = linear_rgb.min(axis=2)
+    high = channel_max(linear_rgb)
+    low = channel_min(linear_rgb)
     chroma = high - low
     saturation = chroma / np.maximum(high, 1e-4)
     red, green, blue = linear_rgb[..., 0], linear_rgb[..., 1], linear_rgb[..., 2]
@@ -83,7 +84,7 @@ def fill_to_edges(ground: np.ndarray, linear_rgb: np.ndarray) -> np.ndarray:
     weight = cv2.GaussianBlur(ground, (0, 0), sigmaX=sigma)
     colour = cv2.GaussianBlur(linear_rgb * ground[..., None], (0, 0), sigmaX=sigma)
     colour = colour / np.maximum(weight, 1e-4)[..., None]
-    distance = np.abs(linear_rgb - colour).max(axis=2)
+    distance = channel_max(np.abs(linear_rgb - colour))
     alike = np.clip(2.0 - distance / _EDGE_FILL_TOLERANCE, 0.0, 1.0)
     return np.maximum(ground, grown * alike * (weight > 0.02)).astype(np.float32)
 

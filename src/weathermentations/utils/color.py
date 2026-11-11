@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from weathermentations.utils.channels import weighted_colour
 from weathermentations.utils.photometry import luminance
 
 
@@ -125,8 +126,7 @@ def veil_radiance_linear(linear_rgb: np.ndarray, sky: np.ndarray | None = None) 
     """
     channels = linear_rgb.shape[-1]
     if sky is not None and float(sky.mean()) >= _MIN_SKY_FRACTION:
-        weight = sky[..., None]
-        colour = (linear_rgb * weight).sum(axis=(0, 1)) / weight.sum()
+        colour = weighted_colour(linear_rgb, sky) / sky.sum()
         # Two corrections, because the sky in the photograph is the sky
         # before the weather. Water droplets scatter all wavelengths alike,
         # so the veil is nearly white where a clear sky is blue; and it is as

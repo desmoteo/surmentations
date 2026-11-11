@@ -57,6 +57,7 @@ from weathermentations.base import (
 )
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.diagnostics import record_draw
+from weathermentations.utils.channels import channel_mean
 from weathermentations.utils.color import veil_radiance_linear
 from weathermentations.utils.photometry import from_linear_unit, linear_to_srgb, to_linear_unit
 from weathermentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
@@ -220,7 +221,7 @@ class RandomFog(WeatherTransform):
         # as well as fades. Blur strength follows optical depth, which the
         # mean transmission already encodes.
         if scatter_sigma > 0.3:
-            mean_t = transmission.mean(axis=2)
+            mean_t = channel_mean(transmission)
             softness = np.clip(1.0 - mean_t, 0.0, 1.0)[..., None]
             blurred = cv2.GaussianBlur(linear, (0, 0), sigmaX=scatter_sigma)
             linear = linear * (1.0 - softness) + blurred * softness

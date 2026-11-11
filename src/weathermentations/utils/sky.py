@@ -33,6 +33,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from weathermentations.utils.channels import channel_max
 from weathermentations.utils.photometry import luminance
 
 # Detection runs on a copy this many pixels wide: sky is a large region, and
@@ -182,7 +183,7 @@ def sky_to_depth_edge(
         weight = cv2.GaussianBlur(sky, (0, 0), sigmaX=sigma)
         nearby = cv2.GaussianBlur(linear_rgb * sky[..., None], (0, 0), sigmaX=sigma)
         nearby = nearby / np.maximum(weight, 1e-4)[..., None]
-        unlike = np.abs(linear_rgb - nearby).max(axis=2)
+        unlike = channel_max(np.abs(linear_rgb - nearby))
         alike = np.clip(2.0 - unlike / _SKY_COLOUR_TOLERANCE, 0.0, 1.0) * (weight > 0.02)
         # With colour to go by, depth only has to not contradict it: the
         # last pixels of sky before a roofline are sky-coloured and, in a

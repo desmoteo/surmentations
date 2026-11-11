@@ -19,6 +19,8 @@ from typing import NamedTuple
 import cv2
 import numpy as np
 
+from weathermentations.utils.channels import channel_max
+
 # Detection runs on a copy this wide, so thresholds on area mean the same
 # thing at every resolution.
 _WORK_WIDTH = 320
@@ -53,7 +55,7 @@ class LightSource(NamedTuple):
 
 def source_mask(linear_rgb: np.ndarray) -> np.ndarray:
     """``[0, 1]`` weight of how clipped each pixel is, shape ``(H, W)``."""
-    peak = linear_rgb.max(axis=2)
+    peak = channel_max(linear_rgb)
     return np.clip((peak - _SOURCE_LEVEL) / (1.0 - _SOURCE_LEVEL), 0.0, 1.0).astype(np.float32)
 
 
@@ -66,7 +68,7 @@ def light_sources(linear_rgb: np.ndarray, max_sources: int = 4) -> list[LightSou
     # Thresholded at full size and then reduced, so a lamp a few pixels wide
     # is neither lost between samples nor diluted below the bar, and a bright
     # but unclipped surface does not pass a bar lowered to catch it.
-    clipped = (linear_rgb.max(axis=2) >= _SOURCE_LEVEL).astype(np.float32)
+    clipped = (channel_max(linear_rgb) >= _SOURCE_LEVEL).astype(np.float32)
     lit = (cv2.resize(clipped, size, interpolation=cv2.INTER_AREA) > 0.2).astype(np.uint8)
     count, labels, stats, centroids = cv2.connectedComponentsWithStats(lit, connectivity=8)
 
