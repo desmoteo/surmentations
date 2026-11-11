@@ -24,6 +24,7 @@ import albumentations as A
 import numpy as np
 import pytest
 
+from weathermentations import mode
 from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow
 from weathermentations.camera import NightIrMode, RollingShutter
 from weathermentations.depth.estimator import DepthEstimator
@@ -406,3 +407,28 @@ def test_calibration_changes_what_a_transform_renders() -> None:
 
     calibrated = SharedDepthProvider(_GroundPlane(), depth_range_m=(2.0, 9.0))
     assert pickle.loads(pickle.dumps(calibrated)).depth_range_m == (2.0, 9.0)
+
+
+def test_depth_estimated_in_one_mode_is_not_handed_to_the_other() -> None:
+    """The bundled estimator runs in half precision in fast mode. A map
+    cached there and handed to a later exact-mode call for the same frame
+    made exact mode depend on what had run before it."""
+    estimator = _GroundPlane()
+    provider = SharedDepthProvider(estimator)
+    image = np.full((48, 64, 3), 120, dtype=np.uint8)
+    before = mode.fast()
+    try:
+        mode.set_fast(True)
+        provider.get_depth(image)
+        provider.get_depth(image)
+        assert estimator.calls == 1
+        mode.set_fast(False)
+        provider.get_depth(image)
+        assert estimator.calls == 2, "exact mode was given the map made in fast mode"
+        provider.get_depth(image)
+        assert estimator.calls == 2
+        mode.set_fast(True)
+        provider.get_depth(image)
+        assert estimator.calls == 2, "the fast-mode map was still held and was not used"
+    finally:
+        mode.set_fast(before)

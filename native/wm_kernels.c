@@ -1409,6 +1409,122 @@ static void WM_FN(dirt_composite)(
     }
 }
 
+/* ------------------------------------------------ veils and relighting */
+
+/* Three values repeated down a block, in the order its values come in. */
+static inline void pattern_block(float *restrict out, const float *restrict three) {
+    for (ptrdiff_t i = 0; i < 3 * WM_BLOCK; i += 3) {
+        out[i] = three[0], out[i + 1] = three[1], out[i + 2] = three[2];
+    }
+}
+
+static WM_NOINLINE void veil_block(
+    float *restrict out, const float *restrict linear, const float *restrict through,
+    const float *restrict air, ptrdiff_t n) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        out[i] = linear[i] * through[i] + air[i] * (1.0f - through[i]);
+    }
+}
+
+static WM_NOINLINE void veil_and_layer_block(
+    float *restrict out, const float *restrict linear, const float *restrict through,
+    const float *restrict air, const float *restrict alpha, const float *restrict light,
+    ptrdiff_t n) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float veiled = linear[i] * through[i] + air[i] * (1.0f - through[i]);
+        out[i] = veiled * (1.0f - alpha[i]) + light[i] * alpha[i];
+    }
+}
+
+/* The numpy code this replaces is two expressions over the frame and ten
+ * frame-sized results; the arithmetic and its order are that code's. */
+static void WM_FN(veil_blend)(
+    float *out, const float *linear, const float *transmission, const float *airlight,
+    const float *alpha, const float *light, const float *light_map, ptrdiff_t pixels) {
+    float through[3 * WM_BLOCK], cover[3 * WM_BLOCK];
+    float air[3 * WM_BLOCK], lit[3 * WM_BLOCK];
+    pattern_block(air, airlight);
+    if (alpha && !light_map) {
+        pattern_block(lit, light);
+    }
+    for (ptrdiff_t done = 0; done < pixels; done += WM_BLOCK) {
+        const ptrdiff_t count = pixels - done < WM_BLOCK ? pixels - done : WM_BLOCK;
+        const ptrdiff_t at = 3 * done;
+        thrice_block(through, transmission + done, count);
+        if (!alpha) {
+            veil_block(out + at, linear + at, through, air, 3 * count);
+            continue;
+        }
+        thrice_block(cover, alpha + done, count);
+        veil_and_layer_block(
+            out + at, linear + at, through, air, cover, light_map ? light_map + at : lit,
+            3 * count);
+    }
+}
+
+static inline void cloud_weights(
+    float *restrict cover, float *restrict shade, const float *restrict sky,
+    const float *restrict grey, ptrdiff_t count, float cover_scale, float mean_grey) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < count; i++) {
+        cover[i] = sky[i] * cover_scale;
+        shade[i] = 0.85f + (0.15f * grey[i]) / mean_grey;
+    }
+}
+
+static WM_NOINLINE void relight_block(
+    float *restrict out, const float *restrict linear, const float *restrict gain,
+    const float *restrict grey, ptrdiff_t n, float desaturate) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float lifted = linear[i] * gain[i];
+        out[i] = lifted + desaturate * (grey[i] - lifted);
+    }
+}
+
+static WM_NOINLINE void cloud_block(
+    float *restrict out, const float *restrict cover, const float *restrict shade,
+    const float *restrict tint, ptrdiff_t n) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        out[i] = out[i] * (1.0f - cover[i]) + (tint[i] * shade[i]) * cover[i];
+    }
+}
+
+static WM_NOINLINE void clip_block(float *restrict out, ptrdiff_t n) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        /* np.clip: a NaN passes through both comparisons, as it does there. */
+        float v = out[i];
+        v = v < 0.0f ? 0.0f : v;
+        out[i] = v > 1.0f ? 1.0f : v;
+    }
+}
+
+/* The numpy code is eight expressions over the frame; a block of it stays
+ * in the cache from the first to the last. */
+static void WM_FN(overcast_blend)(
+    float *out, const float *linear, const float *gain, const float *grey,
+    const float *sky, const float *cloud, ptrdiff_t pixels,
+    float desaturate, float cover_scale, float mean_grey) {
+    float gain3[3 * WM_BLOCK], grey3[3 * WM_BLOCK];
+    float cover[WM_BLOCK], shade[WM_BLOCK], cover3[3 * WM_BLOCK], shade3[3 * WM_BLOCK];
+    float tint[3 * WM_BLOCK];
+    if (sky) {
+        pattern_block(tint, cloud);
+    }
+    for (ptrdiff_t done = 0; done < pixels; done += WM_BLOCK) {
+        const ptrdiff_t count = pixels - done < WM_BLOCK ? pixels - done : WM_BLOCK;
+        const ptrdiff_t at = 3 * done, n = 3 * count;
+        thrice_block(gain3, gain + done, count);
+        thrice_block(grey3, grey + done, count);
+        relight_block(out + at, linear + at, gain3, grey3, n, desaturate);
+        if (sky) {
+            cloud_weights(cover, shade, sky + done, grey + done, count, cover_scale, mean_grey);
+            thrice_block(cover3, cover, count);
+            thrice_block(shade3, shade, count);
+            cloud_block(out + at, cover3, shade3, tint, n);
+        }
+        clip_block(out + at, n);
+    }
+}
+
 #ifdef WM_NATIVE
 /* The native tier is compiled with -march=native, for whatever the build
  * machine had. Run on a CPU without one of those instruction sets it would
@@ -1466,4 +1582,6 @@ const wm_kernel_table WM_FN(wm_table) = {
     WM_FN(edge_preserving),
     WM_FN(dirt_emphasise),
     WM_FN(dirt_composite),
+    WM_FN(veil_blend),
+    WM_FN(overcast_blend),
 };

@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from weathermentations import _native, mode
 from weathermentations.utils.channels import weighted_colour
-from weathermentations.utils.photometry import luminance
+from weathermentations.utils.photometry import TABLE_SIZE, luminance, through_table
 
 # At full strength: how far the logarithm of each pixel's luminance is pulled
 # towards the scene's level, which is what losing the direct beam does to
@@ -76,6 +77,9 @@ def apply_overcast(
     # the scene's level, in the logarithm, and it acts on a shadow's whole
     # area — pulling pixels towards a local average instead flattened
     # texture and left the middle of every shadow as dark as it was.
+    if mode.fast() and linear_rgb.dtype == np.float32 and linear_rgb.ndim == 3:
+        return _relight_fast(linear_rgb, amount, sky if has_sky else None)
+
     luma = np.maximum(luminance(linear_rgb), 1e-4)
     ground = luma[sky < 0.5] if has_sky and sky is not None else luma
     level = float(np.exp(np.log(ground).mean())) if ground.size else float(luma.mean())
@@ -94,3 +98,64 @@ def apply_overcast(
         out = out * (1.0 - cover) + cloud * cover
 
     return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+# Where in each cell of the gain table its gain is taken: the middle, so that
+# a luminance is at most half a cell from the one its gain was worked out for.
+_TABLE_CENTRES = (np.arange(TABLE_SIZE, dtype=np.float32) + 0.5) / np.float32(TABLE_SIZE - 1)
+
+
+def _relight_fast(linear_rgb: np.ndarray, amount: float, sky: np.ndarray | None) -> np.ndarray:
+    """:func:`apply_overcast` in fast mode, for a float32 RGB frame.
+
+    The same relighting with three things taken once that the reference
+    takes per pixel or more than once:
+
+    * **The contrast gain is a power of luminance**, a million powers a
+      frame. Luminance is in ``[0, 1]``, so the power is taken for 65536
+      values of it and looked up. A pixel's gain is the gain of a luminance
+      within 8 millionths of its own.
+    * **Luminance is computed once**, where the reference computes it three
+      times. The grey of the relit frame is the gain times the luminance it
+      was made from, which is what the luminance of the product comes to.
+    * **The frame is gone over once**, by a compiled pass where there is
+      one, where the reference makes eight frame-sized results.
+
+    The statistics, the level the frame is compressed towards and the cloud's
+    brightness, are the reference's. Against it a frame is within a level.
+    """
+    raw = luminance(linear_rgb)
+    luma = np.maximum(raw, 1e-4)
+    ground = luma[sky < 0.5] if sky is not None else luma
+    level = float(np.exp(np.log(ground).mean())) if ground.size else float(luma.mean())
+
+    table = np.clip(
+        (level / np.maximum(_TABLE_CENTRES, 1e-4)) ** (_CONTRAST_LOSS * amount), 0.5, 3.0
+    ).astype(np.float32)
+    gain = through_table(raw, table)
+    grey = gain * raw
+    mean_grey = max(float(grey.mean()), 1e-6)
+    desaturate = _SATURATION_LOSS * amount
+
+    cloud = np.zeros(3, dtype=np.float32)
+    cover_scale = 0.0
+    if sky is not None:
+        cloud_level = float(np.percentile(raw[sky > 0.5], 85.0)) * _CLOUD_LEVEL
+        cloud = (cloud_level * _CLOUD_TINT).astype(np.float32)
+        cover_scale = _SKY_COVER * amount
+
+    done = _native.overcast_blend(
+        linear_rgb, gain, grey, sky, cloud, desaturate, cover_scale, mean_grey
+    )
+    if done is not None:
+        return done
+    # What the kernel computes, in its order, so that the frame is the same
+    # with and without it.
+    out = linear_rgb * gain[..., None]
+    out = out + desaturate * (grey[..., None] - out)
+    if sky is not None:
+        cover = (sky * cover_scale)[..., None]
+        shade = (0.85 + (0.15 * grey) / mean_grey)[..., None]
+        out = out * (1.0 - cover) + (cloud * shade) * cover
+    clipped: np.ndarray = np.clip(out, 0.0, 1.0)
+    return clipped

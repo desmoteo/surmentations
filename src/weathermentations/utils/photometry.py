@@ -100,6 +100,21 @@ def _through_lut(image: np.ndarray, lut: np.ndarray) -> np.ndarray:
     return out
 
 
+# The length a table for :func:`through_table` must have.
+TABLE_SIZE = _LUT_SIZE
+
+
+def through_table(image: np.ndarray, table: np.ndarray) -> np.ndarray:
+    """``table[int(clip(image, 0, 1) * (TABLE_SIZE - 1))]`` for a float32 table.
+
+    Any function of one value in ``[0, 1]`` that costs more than a lookup,
+    a power for one, taken from a table of :data:`TABLE_SIZE` entries as
+    the transfer functions here are. Entry ``k`` serves the values from
+    ``k / (TABLE_SIZE - 1)`` up to the next entry's.
+    """
+    return _through_lut(image, table)
+
+
 def _decode_u8(image: np.ndarray) -> np.ndarray:
     out = _native.decode_u8(image, _U8_TO_LINEAR_LUT)
     if out is None:

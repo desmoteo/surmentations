@@ -27,7 +27,9 @@ from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare
 from weathermentations.lens import dirt as dirt_module
 from weathermentations.lens import sun_flare as flare_module
 from weathermentations.lens.sun_flare import diffraction_starburst, polygon_distance
-from weathermentations.utils.channels import weighted_colour
+from weathermentations.utils import color, overcast
+from weathermentations.utils import sky as sky_module
+from weathermentations.utils.channels import channel_max, frame_mean, weighted_colour
 from weathermentations.utils.filters import wide_blur, wide_dilate
 from weathermentations.utils.grids import centered_grid
 from weathermentations.utils.ground import ground_noise
@@ -512,3 +514,125 @@ def test_a_glow_drawn_in_its_own_square_is_the_glow_over_the_frame() -> None:
         square = (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2
         full = np.exp(-square / 14.0**2)[..., None] * colour
         assert np.abs(canvas - full).max() < 1e-3
+
+
+# ---------------------------------------------------- rain's relighting
+
+
+def _daylight(height: int = 300, width: int = 400, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """A linear-light frame with a bright sky over darker textured ground,
+    and the sky's mask with a soft lower edge."""
+    rng = np.random.default_rng(seed)
+    rows = np.linspace(0.0, 1.0, height, dtype=np.float32)[:, None]
+    sky = np.clip((0.42 - rows) / 0.04, 0.0, 1.0) * np.ones((1, width), dtype=np.float32)
+    ground = rng.uniform(0.02, 0.35, (height, width, 3)).astype(np.float32)
+    above = np.array([0.45, 0.6, 0.85], dtype=np.float32) + rng.uniform(
+        -0.03, 0.03, (height, width, 3)
+    ).astype(np.float32)
+    linear = ground * (1.0 - sky[..., None]) + above * sky[..., None]
+    return linear.astype(np.float32), sky.astype(np.float32)
+
+
+def test_the_mean_colour_of_a_frame_is_the_same_mean() -> None:
+    linear, _sky = _daylight()
+    mode.set_fast(False)
+    exact = frame_mean(linear)
+    assert np.array_equal(exact, linear.reshape(-1, 3).mean(axis=0))
+    mode.set_fast(True)
+    assert frame_mean(linear).dtype == np.float32
+    # Five digits: the reference adds float32 values in sequence, and it is
+    # the one that is out. Against a sum in double the fast form is exact.
+    assert np.abs(frame_mean(linear) - exact).max() < 2e-5
+    in_double = linear.reshape(-1, 3).astype(np.float64).mean(axis=0)
+    assert np.abs(frame_mean(linear) - in_double).max() < 1e-7
+
+
+@pytest.mark.parametrize("with_sky", [True, False])
+@pytest.mark.parametrize("amount", [0.2, 0.6, 1.0])
+def test_overcast_from_a_table_is_within_a_level(with_sky: bool, amount: float) -> None:
+    """Fast mode takes the contrast gain, a power of luminance, from a table
+    of 65536 of its values and goes over the frame once."""
+    linear, sky = _daylight()
+    frames = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        frames[flag] = overcast.apply_overcast(linear, amount, sky if with_sky else None)
+    assert np.abs(frames[False] - linear).max() > 0.02, "the fixture was not relit"
+    assert frames[True].dtype == frames[False].dtype == np.float32
+    difference = np.abs(frames[True] - frames[False])
+    assert difference.max() < 1.0 / 255.0
+    assert difference.mean() < 1e-4
+
+
+@pytest.mark.parametrize("percentile", [90.0, 97.0, 99.5])
+def test_the_brightest_pixels_mean_by_counting_is_the_same_colour(percentile: float) -> None:
+    """Fast mode finds the percentile from a histogram and averages above
+    it in place, where the reference sorts for it and copies the pixels out."""
+    for seed in range(3):
+        linear, _sky = _daylight(seed=seed)
+        colours = {}
+        for flag in (True, False):
+            mode.set_fast(flag)
+            colours[flag] = color.sky_radiance_linear(linear, percentile)
+        assert colours[True].dtype == np.float32 and colours[True].shape == (3,)
+        assert np.abs(colours[True] - colours[False]).max() < 2e-3
+    flat = np.full((40, 50, 3), 0.25, dtype=np.float32)
+    mode.set_fast(True)
+    assert np.allclose(color.sky_radiance_linear(flat, 97.0), 0.25)
+    assert np.allclose(color.sky_radiance_linear(np.zeros_like(flat), 97.0), 0.0)
+
+
+def _sky_edge_over_the_whole_frame(sky, relative_depth, linear_rgb=None):
+    """`sky_to_depth_edge` as it was before it kept to the rows the mask reaches."""
+    core = sky > 0.9
+    if not core.any():
+        return sky
+    level = float(np.median(relative_depth[core]))
+    near_level = np.clip(
+        2.0 - np.abs(relative_depth - level) / sky_module._SKY_DEPTH_TOLERANCE, 0.0, 1.0
+    )
+    tolerance = sky_module._SKY_KEPT_TOLERANCE * sky_module._SKY_DEPTH_TOLERANCE
+    plainly_not = np.clip(2.0 - np.abs(relative_depth - level) / tolerance, 0.0, 1.0)
+    kept = sky * plainly_not
+    reach = max(3, round(sky_module._SKY_EDGE_REACH * float(np.hypot(*sky.shape))) | 1)
+    grown = wide_dilate(sky, reach)
+    if linear_rgb is not None:
+        sigma = float(reach)
+        weight = wide_blur(sky, sigma)
+        nearby = wide_blur(linear_rgb * sky[..., None], sigma)
+        nearby = nearby / np.maximum(weight, 1e-4)[..., None]
+        unlike = channel_max(np.abs(linear_rgb - nearby))
+        alike = np.clip(2.0 - unlike / sky_module._SKY_COLOUR_TOLERANCE, 0.0, 1.0)
+        alike = alike * (weight > 0.02)
+        return np.maximum(kept, grown * alike * plainly_not).astype(np.float32)
+    return np.maximum(kept, grown * near_level).astype(np.float32)
+
+
+@pytest.mark.parametrize("fast", [True, False], ids=["fast", "exact"])
+@pytest.mark.parametrize("with_colour", [True, False])
+def test_the_sky_s_edge_redrawn_on_its_own_rows_is_the_same_mask(
+    fast: bool, with_colour: bool
+) -> None:
+    """Below the lowest row the grown mask reaches there is nothing to
+    redraw, and the redraw is done on the rows above it. The same bytes as
+    going over the frame, in either mode."""
+    mode.set_fast(fast)
+    for seed, (height, width) in enumerate(((300, 400), (480, 640), (97, 131))):
+        linear, sky = _daylight(height, width, seed)
+        rng = np.random.default_rng(seed)
+        depth = (0.9 * sky + 0.3 * (1.0 - sky) * np.linspace(1.0, 0.2, height)[:, None]).astype(
+            np.float32
+        )
+        depth += rng.uniform(-0.01, 0.01, depth.shape).astype(np.float32)
+        colour = linear if with_colour else None
+        ours = sky_module.sky_to_depth_edge(sky, depth, colour)
+        reference = _sky_edge_over_the_whole_frame(sky, depth, colour)
+        assert ours.dtype == np.float32 and ours.shape == sky.shape
+        assert ours[: height // 3].max() > 0.9 and not ours[-height // 4 :].any()
+        assert np.array_equal(ours, reference)
+    everywhere = np.ones((60, 80), dtype=np.float32)
+    even = np.full((60, 80), 0.9, dtype=np.float32)
+    assert np.array_equal(
+        sky_module.sky_to_depth_edge(everywhere, even),
+        _sky_edge_over_the_whole_frame(everywhere, even),
+    )

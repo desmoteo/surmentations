@@ -823,12 +823,8 @@ class RandomRain(WeatherTransform):
         # Distant rain that no longer resolves into individual streaks
         # scatters into a veil, the same Koschmieder compositing as fog but
         # with the rain's own (sky-coloured) radiance.
-        t = veil_transmission[..., None]
-        out = linear * t + airlight[None, None, :] * (1.0 - t)
-
         # Time-averaged streaks: I = (1-a)*I_bg + a*L_streak.
-        a = alpha_layer[..., None]
-        streak_light: np.ndarray = streak_radiance[None, None, :]
+        streak_light: np.ndarray = streak_radiance
         if lamp_glint > 0.0:
             # At night the frame's bright end is the lamps themselves, and
             # lighting every streak by it draws grey rain across a black
@@ -836,7 +832,19 @@ class RandomRain(WeatherTransform):
             streak_light = airlight[None, None, :] + (
                 lamp_glint * _DROP_GLINT_SHARE * _lamp_light(linear)
             )
-        out = out * (1.0 - a) + streak_light * a
+        # The veil and the streaks over it are one compiled pass where there
+        # is one, with the arithmetic of the two expressions below in their
+        # order: the same floats without ten frame-sized results on the way.
+        blended = _native.veil_blend(
+            linear, veil_transmission, airlight, alpha_layer, streak_light
+        )
+        if blended is None:
+            t = veil_transmission[..., None]
+            a = alpha_layer[..., None]
+            out = linear * t + airlight[None, None, :] * (1.0 - t)
+            out = out * (1.0 - a) + streak_light * a
+        else:
+            out = blended
 
         # Stand-in for the camera's auto-exposure pulling the frame back to a
         # normal level after the air got brighter and hazier. Before the

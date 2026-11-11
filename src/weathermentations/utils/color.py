@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
-from weathermentations.utils.channels import weighted_colour
+from weathermentations import mode
+from weathermentations.utils.channels import frame_mean, weighted_colour
 from weathermentations.utils.photometry import luminance
 
 
@@ -21,11 +23,44 @@ def sky_radiance_linear(linear_rgb: np.ndarray, percentile: float = 97.0) -> np.
     ``100 - percentile`` percent of pixels by luminance.
     """
     luma = luminance(linear_rgb)
+    if mode.fast() and linear_rgb.dtype == np.float32 and linear_rgb.shape[-1] == 3:
+        return _brightest_mean(linear_rgb, luma, percentile)
     threshold = float(np.percentile(luma, percentile))
     bright = linear_rgb[luma >= threshold]
     if bright.size == 0:
-        return linear_rgb.reshape(-1, linear_rgb.shape[-1]).mean(axis=0)
+        return frame_mean(linear_rgb)
     return bright.mean(axis=0).astype(np.float32)
+
+
+# Bins of the luminance histogram the fast form reads its threshold from.
+_LUMA_BINS = 16384
+
+
+def _brightest_mean(linear_rgb: np.ndarray, luma: np.ndarray, percentile: float) -> np.ndarray:
+    """:func:`sky_radiance_linear` in fast mode: the same mean, found by counting.
+
+    A percentile of a million values is a partial sort of them, 5 ms, and
+    taking the pixels above it out of the frame is 4 more. A histogram is
+    one pass: the threshold is the edge of the bin at which the brightest
+    ``100 - percentile`` percent has been counted, which is the percentile
+    to within a 16384th of the frame's range, and OpenCV averages what is
+    above it in place. The mean is of the same pixels give or take those in
+    one bin.
+    """
+    top = float(luma.max())
+    if not top > 0.0:
+        return frame_mean(linear_rgb)
+    luma = np.ascontiguousarray(luma)
+    # The upper end is past the brightest value, which would otherwise fall
+    # outside the last bin and not be counted.
+    width = top * (1.0 + 1e-6) / _LUMA_BINS
+    counts = cv2.calcHist([luma], [0], None, [_LUMA_BINS], [0.0, width * _LUMA_BINS]).ravel()
+    wanted = max(1.0, luma.size * (1.0 - percentile / 100.0))
+    # Brighter-or-equal counts, by bin; the last bin that still holds enough.
+    above = np.cumsum(counts[::-1])[::-1]
+    first = int(np.flatnonzero(above >= wanted)[-1])
+    bright = (luma >= np.float32(first * width)).view(np.uint8)
+    return np.asarray(cv2.mean(linear_rgb, mask=bright)[:3], dtype=np.float32)
 
 
 def estimate_airlight(image: np.ndarray, top_percent: float = 0.1) -> np.ndarray:
@@ -75,7 +110,7 @@ def illuminant_radiance_linear(linear_rgb: np.ndarray, percentile: float = 97.0)
     """
     sky = sky_radiance_linear(linear_rgb, percentile)
 
-    mean_colour = linear_rgb.reshape(-1, linear_rgb.shape[-1]).mean(axis=0)
+    mean_colour = frame_mean(linear_rgb)
     mean_luma = float(luminance(mean_colour.reshape(1, 1, -1)).ravel()[0])
     sky_luma = float(luminance(sky.reshape(1, 1, -1)).ravel()[0])
 
@@ -147,7 +182,7 @@ def veil_radiance_linear(linear_rgb: np.ndarray, sky: np.ndarray | None = None) 
     blurred = _gaussian(small, kernel, sigma)
     region = sky_radiance_linear(blurred, 97.0)
 
-    mean_luma = float(luminance(linear_rgb.reshape(-1, channels).mean(axis=0)[None, None, :])[0, 0])
+    mean_luma = float(luminance(frame_mean(linear_rgb)[None, None, :])[0, 0])
     implied = min(mean_luma / TYPICAL_SCENE_ALBEDO, 1.0)
     region_luma = float(luminance(region.reshape(1, 1, -1)).ravel()[0])
     if region_luma >= implied:
