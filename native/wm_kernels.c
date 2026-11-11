@@ -862,6 +862,110 @@ static int WM_FN(render_streaks)(
     return 0;
 }
 
+/* ----------------------------------------------------------- wet road */
+
+/* One row of the wet road: the darkened surface, the mirror image over it,
+ * and the blend with the dry frame, for values that have each been given
+ * their pixel's weights. The numpy code this replaces is nine expressions
+ * over the frame, each with a frame-sized result; the arithmetic and its
+ * order are that code's, in fast mode, where the cube is two
+ * multiplications. */
+static WM_NOINLINE void wet_row(
+    float *restrict out, const float *restrict dry, const float *restrict sharp,
+    const float *restrict rough, const float *restrict water, const float *restrict mirror,
+    const float *restrict wetness, ptrdiff_t n, float ratio, float spare) {
+    WM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float d = dry[i];
+        const float c = clamp01(d);
+        float kept = 1.0f - spare * (c * c * c);
+        kept = kept > 1e-6f ? kept : 1e-6f;
+        const float albedo = ratio * c / kept;
+        const float mirrored = sharp[i] * water[i] + rough[i] * (1.0f - water[i]);
+        const float wet = albedo * (1.0f - mirror[i]) + mirrored * mirror[i];
+        out[i] = d * (1.0f - wetness[i]) + wet * wetness[i];
+    }
+}
+
+static int WM_FN(wet_composite)(
+    float *out, const float *dry, const float *sharp, const float *rough,
+    const float *wetness, const float *puddles, const float *fresnel,
+    const float *film_fresnel, ptrdiff_t rows, ptrdiff_t width,
+    float ratio, float spare, float film, float gloss) {
+    /* `spare` is one minus `ratio`, taken by the caller in double as numpy
+     * takes it: taken here in float it is a rounding off, often enough to
+     * show. A pixel's weights are written out once per channel so that a
+     * row is one loop over its values. */
+    const ptrdiff_t n = 3 * width;
+    float *scratch = malloc((size_t)(3 * n) * sizeof(float));
+    if (!scratch) {
+        return 1;
+    }
+    float *restrict water = scratch, *restrict mirror = scratch + n, *restrict wet = scratch + 2 * n;
+    for (ptrdiff_t r = 0; r < rows; r++) {
+        const float flat = fresnel[r], tilted = film_fresnel[r];
+        const float *restrict pool = puddles ? puddles + r * width : NULL;
+        const float *restrict soaked = wetness + r * width;
+        for (ptrdiff_t x = 0; x < width; x++) {
+            const float standing = pool ? pool[x] * film : 0.0f;
+            const float weight = flat * standing + tilted * (1.0f - standing) * film * gloss;
+            for (int c = 0; c < 3; c++) {
+                water[3 * x + c] = standing;
+                mirror[3 * x + c] = weight;
+                wet[3 * x + c] = soaked[x];
+            }
+        }
+        wet_row(
+            out + r * n, dry + r * n, sharp + r * n, rough + r * n, water, mirror, wet, n,
+            ratio, spare);
+    }
+    free(scratch);
+    return 0;
+}
+
+#ifdef WM_NATIVE
+/* The native tier is compiled with -march=native, for whatever the build
+ * machine had. Run on a CPU without one of those instruction sets it would
+ * fault, so the dispatcher asks first. The list is the sets a compiler uses
+ * for the loops in this file; a build copied to a different CPU is not
+ * supported beyond that, and says so in docs/native_kernels.md. */
+int wm_native_usable(void) {
+#if defined(__x86_64__) && defined(__GNUC__)
+    __builtin_cpu_init();
+    int usable = 1;
+#ifdef __AVX__
+    usable &= __builtin_cpu_supports("avx") != 0;
+#endif
+#ifdef __AVX2__
+    usable &= __builtin_cpu_supports("avx2") != 0;
+#endif
+#ifdef __FMA__
+    usable &= __builtin_cpu_supports("fma") != 0;
+#endif
+#ifdef __BMI__
+    usable &= __builtin_cpu_supports("bmi") != 0;
+#endif
+#ifdef __BMI2__
+    usable &= __builtin_cpu_supports("bmi2") != 0;
+#endif
+#ifdef __AVX512F__
+    usable &= __builtin_cpu_supports("avx512f") != 0;
+#endif
+#ifdef __AVX512BW__
+    usable &= __builtin_cpu_supports("avx512bw") != 0;
+#endif
+#ifdef __AVX512DQ__
+    usable &= __builtin_cpu_supports("avx512dq") != 0;
+#endif
+#ifdef __AVX512VL__
+    usable &= __builtin_cpu_supports("avx512vl") != 0;
+#endif
+    return usable;
+#else
+    return 1;
+#endif
+}
+#endif
+
 const wm_kernel_table WM_FN(wm_table) = {
     WM_STR(WM_TIER),
     WM_FN(encode_u8),
@@ -869,4 +973,5 @@ const wm_kernel_table WM_FN(wm_table) = {
     WM_FN(decode_u8),
     WM_FN(render_flakes),
     WM_FN(render_streaks),
+    WM_FN(wet_composite),
 };

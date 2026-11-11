@@ -134,16 +134,22 @@ def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any
     return factory(p=probability, **{**SEVERITY[severity][name], **extra})
 
 
+# Share of the pipelines' rain frames that get a wet road when the ground is
+# left to chance. It was 0.85; see `_ground`.
+_WET_ROAD_SHARE = 0.5
+
+
 def _ground(name: str, ground_severity: int | None) -> dict[str, Any]:
     """Ground-state arguments for the rain or snow transform.
 
     ``None`` leaves the ground to the transform, which draws it per frame
     over its whole range: dry to soaked, bare to buried, whatever is falling.
-    Rain's chance of a wet road is raised on the way, since by day the road
-    is most of what shows that it is raining at all.
+    Rain's chance of a wet road is raised a little on the way, since by day
+    the road is most of what shows that it is raining at all. Only a little:
+    a wet road is also two to three times the cost of the frame.
     """
     if ground_severity is None:
-        return {"wetness_probability": 0.85} if name == "RandomRain" else {}
+        return {"wetness_probability": _WET_ROAD_SHARE} if name == "RandomRain" else {}
     if ground_severity not in GROUND_SEVERITY:
         raise ValueError(
             f"ground_severity must be one of {sorted(GROUND_SEVERITY)} or None, "

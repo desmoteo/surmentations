@@ -21,6 +21,7 @@ from weathermentations import _native, mode
 from weathermentations.atmosphere import NightSnow
 from weathermentations.atmosphere.snow import render_flake_field
 from weathermentations.camera import SensorNoise, TemporalDenoiseArtifacts
+from weathermentations.depth.normals import upward_facing
 from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare
 from weathermentations.lens.sun_flare import diffraction_starburst, polygon_distance
 from weathermentations.utils.channels import weighted_colour
@@ -144,6 +145,43 @@ def test_a_coarser_working_sigma_reduces_sooner_and_differs_by_more() -> None:
     assert np.abs(coarse - exact).max() < 0.02 * exact.max()
     mode.set_fast(False)
     assert np.array_equal(wide_blur(image, 10.0, work_sigma=4.0), exact)
+
+
+def test_a_blur_longer_one_way_is_reduced_that_way_only() -> None:
+    image = _frame()
+    exact = cv2.GaussianBlur(image, (0, 0), sigmaX=3.0, sigmaY=30.0)
+    mode.set_fast(True)
+    fast = wide_blur(image, 3.0, sigma_y=30.0)
+    assert fast.shape == image.shape and not np.array_equal(fast, exact)
+    assert np.abs(fast - exact).max() < 0.02 * exact.max()
+    mode.set_fast(False)
+    assert np.array_equal(wide_blur(image, 3.0, sigma_y=30.0), exact)
+
+
+def test_normals_read_at_the_depth_map_s_size_find_the_same_ground() -> None:
+    """A road receding under a camera, a kerb across it and a box on it, at
+    1200 pixels. Fast mode reads the surface normals at 518 and enlarges
+    the result; what counts as level ground moves at the edges only."""
+    height, width = 900, 1200
+    rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+    depth = np.broadcast_to(1.5 * 800.0 / np.maximum(rows - 250.0, 1.0), (height, width)).copy()
+    depth = np.minimum(depth, 60.0)
+    depth[500:700, 400:650] = depth[700, 0]  # a box standing on the road
+    depth[780:800] *= 0.97  # a kerb
+    facing = {}
+    for flag in (True, False):
+        mode.set_fast(flag)
+        facing[flag] = upward_facing(depth, camera_pitch_deg=10.0)
+    assert facing[True].shape == facing[False].shape == (height, width)
+    ground = {flag: facing[flag] > 0.5 for flag in facing}
+    assert 0.2 < ground[False].mean() < 0.9
+    assert (ground[True] == ground[False]).mean() > 0.97
+    # A frame of the depth map's own size is read as it is, in either mode.
+    small = np.ascontiguousarray(depth[::2, ::2])
+    mode.set_fast(True)
+    in_fast = upward_facing(small)
+    mode.set_fast(False)
+    assert np.array_equal(in_fast, upward_facing(small))
 
 
 def test_the_ground_pattern_is_folded_to_the_same_place_either_way() -> None:

@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same five lines. It needs only a
+ * architecture, the program must print the same six lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -133,5 +133,26 @@ int main(void) {
         vertices, VERTICES, geometry[4], s[0], s[1], s[2], s[3], s[4], s[5], s[6], beading, 256);
     printf("%-9s streaks  %016llx\n", WM_TABLE.name,
            (unsigned long long)fnv(canvas, W * H * sizeof(float)));
+
+    /* The wet road, over the colour test's frame: a row's reflectance from a
+     * short table, puddles from the beading values. */
+    float *dry = malloc(N * sizeof(float)), *sharp = malloc(N * sizeof(float));
+    float *road = malloc(N * sizeof(float)), *wet = malloc(W * H * sizeof(float));
+    float *pools = malloc(W * H * sizeof(float)), flat[H], tilted[H];
+    for (int i = 0; i < N; i++) {
+        dry[i] = uniform() * 1.1f;
+        sharp[i] = uniform();
+    }
+    for (int i = 0; i < W * H; i++) {
+        wet[i] = uniform();
+        pools[i] = beading[i & 255] > 0.8f ? uniform() : 0.0f;
+    }
+    for (int r = 0; r < H; r++) {
+        flat[r] = 0.02f + 0.98f * uniform() * uniform();
+        tilted[r] = 0.02f + 0.98f * uniform();
+    }
+    WM_TABLE.wet_composite(
+        road, dry, sharp, linear, wet, pools, flat, tilted, H, W, 0.55f, 0.45f, 0.7f, 0.6f);
+    printf("%-9s wet      %016llx\n", WM_TABLE.name, (unsigned long long)fnv(road, N * sizeof(float)));
     return 0;
 }

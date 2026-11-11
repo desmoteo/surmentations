@@ -344,6 +344,33 @@ def test_an_empty_field_draws_nothing() -> None:
     assert native.shape == (64, 64) and not native.any() and not reference.any()
 
 
+# --------------------------------------------------------------- wet road
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("with_puddles", [True, False])
+def test_the_wet_road_kernel_is_the_numpy_arithmetic(tier: str, with_puddles: bool) -> None:
+    """Fast mode's, where the cube is two multiplications: every operation
+    is then float32 arithmetic in numpy's order, and the kernel is exact."""
+    _native.set_tier(tier)
+    mode.set_fast(True)
+    rng = np.random.default_rng(3)
+    linear = rng.uniform(0.0, 1.1, (150, 211, 3)).astype(np.float32)  # some above 1
+    wetness = np.zeros((150, 211), dtype=np.float32)
+    wetness[60:] = rng.uniform(0.0, 1.0, (90, 211)).astype(np.float32)
+    puddles = np.clip(rng.uniform(-1.0, 1.0, (150, 211)), 0.0, 1.0).astype(np.float32)
+    sky = np.array([0.5, 0.6, 0.7], dtype=np.float32)
+    for darkening in rng.uniform(0.4, 0.9, 6):
+        arguments = (linear, wetness, float(darkening), 40.0, 250.0)
+        extra = {"sky_radiance": sky, "puddles": puddles if with_puddles else None}
+        native = rain_module._apply_ground_wetness(*arguments, **extra)
+        with _native.disabled():
+            reference = rain_module._apply_ground_wetness(*arguments, **extra)
+        assert np.abs(reference - linear).max() > 0.05
+        assert np.array_equal(native, reference), f"darkening {darkening}"
+
+
 # ------------------------------------------------------------------ tiers
 
 

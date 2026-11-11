@@ -61,6 +61,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from weathermentations import mode
+
 # Assumed horizontal field of view when none is supplied. A typical
 # surveillance/dashcam lens sits near here, and the normal direction is only
 # weakly sensitive to it.
@@ -133,6 +135,11 @@ def _one_sided_tangent(point: _Planes, axis: int, step: int) -> _Planes:
 # edge-on and carries nothing anyway; the ramp between a treetop and the sky
 # behind it exceeds it several times over.
 _SILHOUETTE_RELATIVE_JUMP = 0.2
+
+# The longer side, in pixels, the depth network works at, and how much larger
+# than that a frame has to be before fast mode reads its normals there.
+_DEPTH_WORK_PX = 518
+_REDUCE_ABOVE = 1.5
 
 
 def _normals_and_jump(
@@ -214,7 +221,34 @@ def upward_facing(
     ``camera_pitch_deg`` is positive when the camera is tilted **down**,
     which is the usual mounting for a surveillance camera and rotates world
     "up" away from the image's vertical axis.
+
+    In fast mode (:mod:`weathermentations.mode`) a large frame's normals are
+    read at the resolution the depth map was estimated at and the result is
+    enlarged. The depth network works at about 518 pixels and its map is
+    interpolated up from there, so the differences taken between neighbours
+    at 1024 pixels are differences of interpolated values.
     """
+    height, width = depth_m.shape[:2]
+    longest = max(height, width)
+    if mode.fast() and longest > _REDUCE_ABOVE * _DEPTH_WORK_PX:
+        scale = _DEPTH_WORK_PX / longest
+        size = (max(2, round(width * scale)), max(2, round(height * scale)))
+        small = cv2.resize(depth_m.astype(np.float32), size, interpolation=cv2.INTER_AREA)
+        # The smoothing is a distance in the scene, so it shrinks with the frame.
+        sigma = smooth_sigma_px * scale
+        facing = _upward_facing(small, horizontal_fov_deg, camera_pitch_deg, sigma)
+        enlarged = cv2.resize(facing, (width, height), interpolation=cv2.INTER_LINEAR)
+        return np.clip(enlarged, 0.0, 1.0).astype(np.float32)
+    return _upward_facing(depth_m, horizontal_fov_deg, camera_pitch_deg, smooth_sigma_px)
+
+
+def _upward_facing(
+    depth_m: np.ndarray,
+    horizontal_fov_deg: float,
+    camera_pitch_deg: float,
+    smooth_sigma_px: float,
+) -> np.ndarray:
+    """:func:`upward_facing` at the resolution it is given."""
     (_nx, ny, nz), jump = _normals_and_jump(depth_m, horizontal_fov_deg, smooth_sigma_px)
 
     # World up expressed in camera coordinates. With no pitch that is -y

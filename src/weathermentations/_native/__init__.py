@@ -52,11 +52,12 @@ __all__ = [
     "set_tier",
     "tier",
     "tiers",
+    "wet_composite",
 ]
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 2
+_ABI_VERSION = 3
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -74,6 +75,10 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
         + [ctypes.c_int]
         + [ctypes.c_double] * 5
         + [ctypes.c_int],
+    ),
+    "wm_wet_composite": (
+        ctypes.c_int,
+        [_pointer] * 8 + [ctypes.c_ssize_t] * 2 + [ctypes.c_float] * 4,
     ),
     "wm_render_streaks": (
         ctypes.c_int,
@@ -333,3 +338,56 @@ def render_streaks(
         len(table),
     )
     return failed == 0
+
+
+def wet_composite(
+    dry: np.ndarray,
+    sharp: np.ndarray,
+    rough: np.ndarray,
+    wetness: np.ndarray,
+    puddles: np.ndarray | None,
+    fresnel: np.ndarray,
+    film_fresnel: np.ndarray,
+    ratio: float,
+    film: float,
+    gloss: float,
+) -> np.ndarray | None:
+    """The wet road over ``dry``, ``(rows, width, 3)``; ``None`` if not done.
+
+    The arithmetic of ``rain._apply_ground_wetness`` in fast mode, in one
+    pass: the darkened surface, the mirror image weighted over it, and the
+    blend with the dry frame by ``wetness``. ``fresnel`` and ``film_fresnel``
+    hold one value a row.
+    """
+    if not _enabled or dry.dtype != np.float32 or dry.ndim != 3 or dry.shape[2] != 3:
+        return None
+    assert _library is not None
+    rows, width = dry.shape[:2]
+    images = [_float32(v) for v in (dry, sharp, rough)]
+    soaked = _float32(wetness)
+    pools = None if puddles is None else _float32(puddles)
+    per_row = [_float32(fresnel).reshape(-1), _float32(film_fresnel).reshape(-1)]
+    shapes_agree = (
+        all(image.shape == dry.shape for image in images)
+        and soaked.shape == (rows, width)
+        and (pools is None or pools.shape == (rows, width))
+        and all(values.shape == (rows,) for values in per_row)
+    )
+    if not shapes_agree:
+        return None
+    out = np.empty(dry.shape, dtype=np.float32)
+    failed = _library.wm_wet_composite(
+        out.ctypes.data,
+        *(image.ctypes.data for image in images),
+        soaked.ctypes.data,
+        None if pools is None else pools.ctypes.data,
+        *(values.ctypes.data for values in per_row),
+        rows,
+        width,
+        float(ratio),
+        # In double, as numpy's `1.0 - ratio` is, and rounded once on the way in.
+        1.0 - float(ratio),
+        float(film),
+        float(gloss),
+    )
+    return None if failed else out

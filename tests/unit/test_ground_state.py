@@ -142,9 +142,11 @@ def test_pipelines_take_the_ground_separately_from_the_weather() -> None:
     share, darkening = _wet_share(state(severity=1, ground_severity=5))
     assert share == 1.0 and max(darkening) <= 0.55
 
-    # Left unset, every state of the ground turns up under one weather level.
+    # Left unset, every state of the ground turns up under one weather level,
+    # and the road is wet in about half the rain frames: it was 0.85 until
+    # a wet road turned out to be two to three times the cost of the frame.
     share, darkening = _wet_share(state(severity=3), samples=150)
-    assert 0.7 < share < 0.97
+    assert 0.35 < share < 0.65
     assert min(darkening) < 0.5 and max(darkening) > 0.8
 
     with pytest.raises(ValueError, match="ground_severity"):
