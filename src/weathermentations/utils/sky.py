@@ -33,6 +33,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from weathermentations import mode
 from weathermentations.utils.channels import channel_max
 from weathermentations.utils.photometry import luminance
 
@@ -152,9 +153,10 @@ def wide_blur(image: np.ndarray, sigma: float) -> np.ndarray:
     :func:`sky_to_depth_edge` have a sigma of 4% of the diagonal, 58 pixels
     on a 1024-pixel frame. On one core, which is what a ``DataLoader``
     worker has, they took 400 ms of every fog, rain and snow frame; this way
-    they take 5. Below twice the working sigma it is the plain blur.
+    they take 5. Below twice the working sigma, and in exact mode
+    (:mod:`weathermentations.mode`), it is the plain blur.
     """
-    factor = int(sigma / _WIDE_BLUR_WORK_SIGMA)
+    factor = int(sigma / _WIDE_BLUR_WORK_SIGMA) if mode.fast() else 1
     if factor < 2:
         return cv2.GaussianBlur(image, (0, 0), sigmaX=sigma)
     height, width = image.shape[:2]
@@ -179,10 +181,10 @@ def wide_dilate(mask: np.ndarray, diameter: int) -> np.ndarray:
     agrees with the exact dilation except in a band about one block wide
     where the reach ends, which it draws soft. Good for a bound on how far
     something may grow, which is its one use here; not for a shape whose
-    outline matters. Below twice the working diameter it is the plain
-    dilation.
+    outline matters. Below twice the working diameter, and in exact mode,
+    it is the plain dilation.
     """
-    factor = diameter // _WIDE_DILATE_WORK_PX
+    factor = diameter // _WIDE_DILATE_WORK_PX if mode.fast() else 1
     if factor < 2:
         return cv2.dilate(
             mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (diameter, diameter))

@@ -19,7 +19,7 @@ import sys
 import numpy as np
 import pytest
 
-from weathermentations import _native
+from weathermentations import _native, mode
 from weathermentations.atmosphere import NightRain, NightSnow
 from weathermentations.atmosphere import rain as rain_module
 from weathermentations.atmosphere.snow import render_flake_field
@@ -36,10 +36,14 @@ TIERS = _native.tiers() or ("none",)
 
 
 @pytest.fixture(autouse=True)
-def _restore_native_state():
-    """A test that switches tier or disables the kernels must not leak it."""
-    was_enabled, tier = _native.enabled(), _native.tier()
+def _exact_mode_and_restored_state():
+    """Exact mode is where the kernels are held to the numpy code; what fast
+    mode may differ by is in test_modes.py. And a test that switches tier or
+    disables the kernels must not leak it."""
+    was_enabled, tier, was_fast = _native.enabled(), _native.tier(), mode.fast()
+    mode.set_fast(False)
     yield
+    mode.set_fast(was_fast)
     if tier is not None:
         _native.set_tier(tier)
     _native.set_enabled(was_enabled)

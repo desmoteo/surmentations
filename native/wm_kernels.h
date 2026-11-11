@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define WM_ABI_VERSION 1
+#define WM_ABI_VERSION 2
 
 typedef struct {
     const char *name;
@@ -31,13 +31,15 @@ typedef struct {
 
     /* Max-blend a field of snowflake sprites into `canvas`
      * (snow._paste_flake_sprite, for every flake in one call). `gain` may be
-     * NULL. Returns nonzero when it could not allocate its scratch space. */
+     * NULL. With `fast`, divisions become multiplications by a reciprocal,
+     * which moves a sprite by a few units in the last place. Returns nonzero
+     * when it declines the field or cannot allocate its scratch space. */
     int (*render_flakes)(
         float *canvas, int height, int width, ptrdiff_t count,
         const float *x, const float *y, const float *radius, const float *blur_radius,
         const float *smear, const float *dir_x, const float *dir_y, const float *gain,
         int blades, double blade_rotation, double rim_gain, double cats_eye,
-        double centre_x, double centre_y);
+        double centre_x, double centre_y, int fast);
 
     /* Add a field of rain streaks to `layer` (rain.render_streak_layer):
      * each a polyline drawn as cv2.polylines draws it on a float image,

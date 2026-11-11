@@ -62,3 +62,7 @@ jobs:
       - name: pytest without the native kernels
         # What an install with no C compiler runs: the numpy code alone.
         run: WEATHERMENTATIONS_NATIVE=0 pytest tests -q
+
+      - name: pytest in exact mode
+        # Fast mode is the default and what the runs above used.
+        run: WEATHERMENTATIONS_FAST=0 pytest tests -q

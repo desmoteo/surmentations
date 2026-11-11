@@ -58,6 +58,7 @@ approximation of that model, not a full wave-optics simulation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Annotated, Any
 
@@ -67,6 +68,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
+from weathermentations import mode
 from weathermentations.base import WeatherTransform
 from weathermentations.diagnostics import record_draw
 from weathermentations.utils.grids import centered_grid, pixel_grid, radial_distance
@@ -79,20 +81,26 @@ from weathermentations.utils.spectral import (
 
 
 def polygon_distance(
-    dy: np.ndarray, dx: np.ndarray, blades: int, rotation: float
+    dy: np.ndarray,
+    dx: np.ndarray,
+    blades: int,
+    rotation: float,
+    scalar: Callable[[float], Any] = mode.scalar,
 ) -> np.ndarray:
     """Signed distance to a regular ``blades``-gon: 0 at centre, 1 on the edge.
 
     The maximum over the polygon's edge half-planes, which is what gives a
     defocused point its polygonal aperture shape. ``blades < 3`` falls back to
     a circle. ``dy``/``dx`` may be broadcastable axes rather than full grids.
+
+    ``scalar`` decides the precision of the field: by default the mode's
+    (float32 in fast mode, the reference code's float64 in exact mode).
     """
     if blades < 3:
         return np.sqrt(dx**2 + dy**2)
     angles = rotation + 2.0 * np.pi * np.arange(blades) / blades
-    return np.max(
-        np.stack([dx * np.cos(a) + dy * np.sin(a) for a in angles], axis=0), axis=0
-    ) / np.cos(np.pi / blades)
+    planes = [dx * scalar(np.cos(a)) + dy * scalar(np.sin(a)) for a in angles]
+    return np.max(np.stack(planes, axis=0), axis=0) / scalar(np.cos(np.pi / blades))
 
 
 def aperture_image(
@@ -186,7 +194,9 @@ def diffraction_starburst(blades: int) -> np.ndarray:
     dy, dx = centered_grid(size, scale=size / 2.0)
     # The aperture occupies a small part of the grid so the transform is
     # finely sampled — zero padding sets the resolution of the pattern.
-    dist = polygon_distance(dy * 4.0, dx * 4.0, blades, 0.0)
+    # Always in float64: the pattern is cached, and must not depend on the
+    # mode the process was in when it was first asked for.
+    dist = polygon_distance(dy * 4.0, dx * 4.0, blades, 0.0, scalar=np.float64)
     aperture = (dist <= 1.0).astype(np.float32)
 
     spectrum = np.fft.fftshift(np.fft.fft2(aperture))
@@ -239,7 +249,7 @@ def _add_starburst(
     # Sample the cached pattern over just the part of the canvas it lands on.
     dy = (np.arange(y0, y1, dtype=np.float32) - source[1]).reshape(-1, 1)
     dx = (np.arange(x0, x1, dtype=np.float32) - source[0]).reshape(1, -1)
-    cos_r, sin_r = np.cos(rotation), np.sin(rotation)
+    cos_r, sin_r = mode.scalar(np.cos(rotation)), mode.scalar(np.sin(rotation))
     rot_x = dx * cos_r - dy * sin_r
     rot_y = dx * sin_r + dy * cos_r
 
@@ -410,7 +420,7 @@ def add_scratch_streaks(
     for angle, length, strength in scratches:
         if strength <= 1e-4 or length <= 1.0:
             continue
-        sin_a, cos_a = np.sin(angle), np.cos(angle)
+        sin_a, cos_a = mode.scalar(np.sin(angle)), mode.scalar(np.cos(angle))
 
         # Distance across the streak's own axis. A scratch streak is only a
         # couple of pixels wide, so it is evaluated only in the thin band it
