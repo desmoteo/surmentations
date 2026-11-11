@@ -2,7 +2,7 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same six lines. It needs only a
+ * architecture, the program must print the same seven lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
@@ -21,6 +21,8 @@ static float uniform(void) {
     state = state * 1664525u + 1013904223u;
     return (float)(state >> 8) / 16777216.0f;
 }
+
+static float clamp_unit(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 
 static uint64_t fnv(const void *data, size_t bytes) {
     const unsigned char *p = data;
@@ -154,5 +156,29 @@ int main(void) {
     WM_TABLE.wet_composite(
         road, dry, sharp, linear, wet, pools, flat, tilted, H, W, 0.55f, 0.45f, 0.7f, 0.6f);
     printf("%-9s wet      %016llx\n", WM_TABLE.name, (unsigned long long)fnv(road, N * sizeof(float)));
+
+    /* What each pixel mirrors, and the mirror image: solid things of several
+     * heights on the road, rows mirrored at fractional heights. */
+    uint8_t *solid = calloc(W * H, 1);
+    float *about_foot = malloc(W * H * sizeof(float)), *reach = malloc(W * H * sizeof(float));
+    float about_horizon[H], off_frame[H];
+    const float sky[3] = {0.5f, 0.6f, 0.7f};
+    for (int k = 0; k < 40; k++) {
+        const int y0 = (int)(uniform() * (H - 4)), x0 = (int)(uniform() * (W - 4));
+        const int tall = 2 + (int)(uniform() * 120), wide = 2 + (int)(uniform() * 60);
+        for (int y = y0; y < y0 + tall && y < H; y++) {
+            for (int x = x0; x < x0 + wide && x < W; x++) {
+                solid[y * W + x] = 1;
+            }
+        }
+    }
+    WM_TABLE.mirror_rows(solid, H, W, 0.3 * H, about_foot, reach);
+    for (int r = 0; r < H; r++) {
+        about_horizon[r] = 2.0f * 71.3f - (float)r;
+        off_frame[r] = clamp_unit((19.2f - about_horizon[r]) / 19.2f);
+    }
+    WM_TABLE.wet_reflection(road, dry, H, W, H, about_horizon, off_frame, about_foot, reach, sky);
+    printf("%-9s mirror   %016llx\n", WM_TABLE.name,
+           (unsigned long long)(fnv(road, N * sizeof(float)) ^ fnv(about_foot, W * H * sizeof(float))));
     return 0;
 }

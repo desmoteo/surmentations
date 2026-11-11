@@ -50,14 +50,16 @@ __all__ = [
     "render_streaks",
     "set_enabled",
     "set_tier",
+    "mirror_rows",
     "tier",
     "tiers",
     "wet_composite",
+    "wet_reflection",
 ]
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 3
+_ABI_VERSION = 4
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -76,6 +78,11 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
         + [ctypes.c_double] * 5
         + [ctypes.c_int],
     ),
+    "wm_mirror_rows": (
+        ctypes.c_int,
+        [_pointer, ctypes.c_ssize_t, ctypes.c_ssize_t, ctypes.c_double, _pointer, _pointer],
+    ),
+    "wm_wet_reflection": (None, [_pointer] * 2 + [ctypes.c_ssize_t] * 3 + [_pointer] * 5),
     "wm_wet_composite": (
         ctypes.c_int,
         [_pointer] * 8 + [ctypes.c_ssize_t] * 2 + [ctypes.c_float] * 4,
@@ -391,3 +398,83 @@ def wet_composite(
         float(gloss),
     )
     return None if failed else out
+
+
+def mirror_rows(solid: np.ndarray, limit: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """``(about_foot, in_reach)`` of ``rain._mirrored_rows`` from its ``solid`` mask.
+
+    ``about_foot`` is the row each pixel is mirrored about the foot of what
+    stands above it, ``in_reach`` 1 where that mirror applies and 0 where it
+    does not, both ``(H, W)`` float32, the second before it is feathered.
+    ``None`` if not done.
+    """
+    if not _enabled or solid.dtype != np.bool_ or solid.ndim != 2:
+        return None
+    assert _library is not None
+    mask = np.ascontiguousarray(solid).view(np.uint8)
+    about_foot = np.empty(mask.shape, dtype=np.float32)
+    in_reach = np.empty(mask.shape, dtype=np.float32)
+    failed = _library.wm_mirror_rows(
+        mask.ctypes.data,
+        mask.shape[0],
+        mask.shape[1],
+        float(limit),
+        about_foot.ctypes.data,
+        in_reach.ctypes.data,
+    )
+    return None if failed else (about_foot, in_reach)
+
+
+def wet_reflection(
+    source: np.ndarray,
+    about_horizon: np.ndarray,
+    off_frame: np.ndarray,
+    about_foot: np.ndarray,
+    under_object: np.ndarray | None,
+    sky: np.ndarray,
+) -> np.ndarray | None:
+    """The wet road's mirror image for a band of rows; ``None`` if not done.
+
+    ``source`` is the whole frame, ``(H, W, 3)``. ``about_horizon`` and
+    ``off_frame`` hold one value for each row of the band, ``about_foot``
+    and ``under_object`` one for each of its pixels; ``under_object`` is
+    ``None`` where nothing in the band is mirrored about a foot.
+    """
+    usable = (
+        _enabled
+        and source.dtype == np.float32
+        and source.ndim == 3
+        and source.shape[2] == 3
+        and sky.dtype == np.float32
+        and sky.size == 3
+    )
+    if not usable:
+        return None
+    assert _library is not None
+    height, width = source.shape[:2]
+    frame = np.ascontiguousarray(source)
+    per_row = [_float32(about_horizon).reshape(-1), _float32(off_frame).reshape(-1)]
+    rows = len(per_row[0])
+    foot = _float32(about_foot)
+    under = None if under_object is None else _float32(under_object)
+    shapes_agree = (
+        len(per_row[1]) == rows
+        and foot.shape == (rows, width)
+        and (under is None or under.shape == (rows, width))
+    )
+    if not shapes_agree:
+        return None
+    out = np.empty((rows, width, 3), dtype=np.float32)
+    _library.wm_wet_reflection(
+        out.ctypes.data,
+        frame.ctypes.data,
+        height,
+        width,
+        rows,
+        per_row[0].ctypes.data,
+        per_row[1].ctypes.data,
+        foot.ctypes.data,
+        None if under is None else under.ctypes.data,
+        np.ascontiguousarray(sky).reshape(-1).ctypes.data,
+    )
+    return out

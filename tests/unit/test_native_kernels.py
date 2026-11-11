@@ -371,6 +371,63 @@ def test_the_wet_road_kernel_is_the_numpy_arithmetic(tier: str, with_puddles: bo
         assert np.array_equal(native, reference), f"darkening {darkening}"
 
 
+def _road_with_things_on_it(seed: int) -> tuple[np.ndarray, np.ndarray, float]:
+    """A frame, its wet ground with dry blocks standing on it (one touching
+    the top of the frame, which nothing may be mirrored about), a horizon."""
+    rng = np.random.default_rng(seed)
+    height, width = int(rng.integers(120, 300)), int(rng.integers(150, 400))
+    linear = rng.uniform(0.0, 1.2, (height, width, 3)).astype(np.float32)
+    wetness = np.zeros((height, width), dtype=np.float32)
+    top = int(rng.integers(0, height - 20))
+    wetness[top:] = rng.uniform(0.0, 1.0, (height - top, width)).astype(np.float32)
+    for _ in range(int(rng.integers(1, 9))):
+        y0, x0 = int(rng.integers(0, height - 5)), int(rng.integers(0, width - 5))
+        wetness[y0 : y0 + int(rng.integers(3, height // 2)), x0 : x0 + int(rng.integers(3, 80))] = 0
+    wetness[0:40, 10:30] = 0.0
+    return linear, wetness, float(rng.uniform(-50.0, 0.7 * height))
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+def test_what_each_pixel_mirrors_is_found_the_same_in_one_sweep(tier: str) -> None:
+    """In either mode: it is integer bookkeeping down each column."""
+    _native.set_tier(tier)
+    for seed in range(8):
+        _, wetness, horizon = _road_with_things_on_it(seed)
+        native = rain_module._mirrored_rows(wetness, horizon)
+        with _native.disabled():
+            reference = rain_module._mirrored_rows(wetness, horizon)
+        assert reference[2].max() > 0.0, "nothing in the fixture is mirrored about its foot"
+        for ours, theirs in zip(native, reference, strict=True):
+            assert np.array_equal(ours, theirs), f"seed {seed}"
+
+
+@requires_native
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("with_puddles", [True, False])
+def test_the_whole_wet_road_does_not_depend_on_the_kernels(tier: str, with_puddles: bool) -> None:
+    """Fast mode, where the mirror image is the library's own arithmetic and
+    not OpenCV's warp: a row of the frame at a fractional height is two rows
+    weighted, in numpy and in C alike."""
+    _native.set_tier(tier)
+    mode.set_fast(True)
+    for seed in range(6):
+        linear, wetness, horizon = _road_with_things_on_it(seed)
+        rng = np.random.default_rng(seed + 100)
+        puddles = np.clip(rng.uniform(-1.0, 1.0, wetness.shape), 0.0, 1.0).astype(np.float32)
+        extra = {
+            "sky_radiance": rng.uniform(0.2, 0.9, 3).astype(np.float32),
+            "lamp_gain": 3.0,
+            "puddles": puddles if with_puddles else None,
+        }
+        arguments = (linear, wetness, float(rng.uniform(0.4, 0.95)), horizon, 300.0)
+        native = rain_module._apply_ground_wetness(*arguments, **extra)
+        with _native.disabled():
+            reference = rain_module._apply_ground_wetness(*arguments, **extra)
+        assert np.abs(reference - linear).max() > 0.05
+        assert np.array_equal(native, reference), f"seed {seed}"
+
+
 # ------------------------------------------------------------------ tiers
 
 
