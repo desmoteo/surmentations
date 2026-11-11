@@ -57,9 +57,13 @@ _native; print(_native.tier())"` prints the instruction set in use, or
 See [`docs/native_kernels.md`](docs/native_kernels.md).
 
 **Fast and exact mode.** By default a few operations use a faster form that
-differs slightly from the reference arithmetic: most visibly, the sky's edge
-in fog, rain and snow is found on a reduced copy of the frame, which is 5 to
-7 times faster at 1024 px and moves about 1% of pixels along the skyline.
+differs slightly from the reference arithmetic. The two that show: wide
+blurs, the sky's edge in fog, rain and snow among them, are made on a
+reduced copy of the frame, which is 5 to 7 times faster at 1024 px and
+moves about 1% of pixels along the skyline; and the depth network runs in
+half precision, which halves the depth estimate and moves depth-dependent
+edges by a pixel here and there (`DepthAnythingV2Estimator(half_precision=False)`
+keeps full precision).
 `weathermentations.set_fast(False)`, `with weathermentations.exact():` or
 `WEATHERMENTATIONS_FAST=0` selects exact mode. The bounds are in
 [`docs/native_kernels.md`](docs/native_kernels.md#fast-and-exact-mode).

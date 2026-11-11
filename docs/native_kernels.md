@@ -239,8 +239,9 @@ all three. What remains is listed under [Not done](#not-done).
   with more than the baseline, so the binary runs on any CPU of its
   architecture.
 - **Flags.** `-O3 -ffp-contract=off -fno-math-errno -fno-trapping-math
-  -fno-thread-jumps`. No fused multiply-add and no `-ffast-math`, so every
-  tier and compiler rounds as numpy does.
+  -fno-thread-jumps -funroll-loops`. No fused multiply-add and no
+  `-ffast-math`, so every tier and compiler rounds as numpy does. What
+  other flags were measured is [below](#compiler-flags-and-the-types-left-in-the-c-measured).
 - **Optional.** [`hatch_build.py`](../hatch_build.py) compiles it when a
   wheel or an editable install is made, and goes on without it if there is
   no C compiler. `python hatch_build.py` builds it in place in a checkout.
@@ -309,12 +310,28 @@ four example scenes, two seeds):
 | A weighted mean colour as a matrix-vector product | the same four | 12 ms to under 1 ms at 1024 px | float32 rounding of a sum |
 | float32 where the reference is float64 by accident | aperture and scratch geometry in `SunFlare`, `SourceGlare`; polygonal flakes without the kernels | `SunFlare` 1.16 times | one level, in 0.02% of values |
 | Multiplying by a reciprocal for a division | polygonal sprites in the flake kernel | the kernel 1.2 times (AVX2) to 1.4 times (SSE2) | 2e-6 of a sprite's peak |
+| Blur on a reduced copy, once its sigma reaches 8 or 16 px | defocus in `HousingOccluders` and `DirtSoil`, chroma in `TemporalDenoiseArtifacts`, settled snow and ground filling in `RandomSnow` and `RandomRain` | 1.2 to 4 times at 1024 px, less at 512 | 2 levels at most in the first three |
+| The depth network in half precision | every depth-conditioned transform | the estimate 2.2 to 2.5 times | see below |
+| Folding the ground-noise tile with a floor, not a remainder | settled snow, puddles | 26 ms to 3 ms per field at 1024 px | millionths of a pixel |
 
-The other thirteen transforms give the same bytes in both modes.
+Eight transforms give the same bytes in both modes on these frames:
+`WaterDroplets`, `AcFlicker`, `RollingShutter`, `SensorNoise`,
+`ExposureTransient`, `WdrToneMapping`, `NightRain` and `NightSnow`.
+`DirtSoil` does too below about 1100 pixels.
+
+**Half precision moves depth edges.** The network's output differs by 0.01%
+of its range on average, and everything read off a threshold of depth moves
+with it by a pixel here and there: settled snow's outline, a cast shadow's.
+Against exact mode, `RandomSnow` differs in 8% of pixels (0.1 levels on
+average, 54 at most) and `CastShadows` in 3% (16 at most), with fog, rain
+and `NightIrMode` at 2 to 4 levels at most. Side by side the worst frames
+are not distinguishable. `DepthAnythingV2Estimator(half_precision=False)`
+keeps full precision in fast mode.
 
 **Exact mode is the parent branch.** With the kernels off, all 152 frames
-are byte-identical to the frames the parent branch makes. With the kernels
-on they are byte-identical again, in exact mode and in fast mode.
+are byte-identical to the frames the parent branch makes, and with the
+kernels on they are byte-identical again. That was checked after each round
+of changes, the second round's included.
 
 **The skyline is the difference that can matter.** The reduced dilation
 decides how far the sky mask may grow, and it is largest in the night street
@@ -325,6 +342,62 @@ were. If one comes back, exact mode is the first thing to try.
 Each bound above is asserted in
 [`tests/unit/test_modes.py`](../tests/unit/test_modes.py), except the
 skyline figures, which need the depth model and were measured as described.
+
+## A second round: the heavy effects
+
+After the kernels, the transforms were profiled again on one thread, on real
+scenes and not only the benchmark's synthetic one, which never draws settled
+snow. Milliseconds per call at 1024 pixels, the mean of four example scenes
+and two seeds, depth already estimated, before this round and after:
+
+| | 512: before | after | | 1024: before | after | |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `HousingOccluders` | 9.1 | 6.1 | 1.5x | 71.5 | 17.5 | 4.1x |
+| the depth estimate itself | 31.7 | 12.5 | 2.5x | 36.4 | 16.7 | 2.2x |
+| `NightRain` | 68.2 | 35.6 | 1.9x | 109.5 | 70.8 | 1.5x |
+| `DirtSoil` | 43.6 | 43.1 | 1.0x | 228.7 | 165.1 | 1.4x |
+| `RandomSnow` | 82.3 | 72.9 | 1.1x | 425.5 | 318.4 | 1.3x |
+| `TemporalDenoiseArtifacts` | 66.8 | 63.0 | 1.1x | 330.6 | 267.4 | 1.2x |
+| `RandomRain` | 49.1 | 42.2 | 1.2x | 179.3 | 171.5 | 1.05x |
+
+The other twelve measured are within 5% either way, which is the noise of
+the run.
+
+What was done:
+
+- **Reduced-size blurs** in the five places the fast-mode table lists. The
+  blur in `HousingOccluders` was most of that transform. Settled snow, added
+  in an earlier round, had six blurs of 10 to 29 pixels at full size, five
+  of which are now reduced.
+- **Half-precision depth**, 28 ms to 11 ms for the network at 518 pixels.
+- **The depth model's preprocessing without its processor.** The Hugging Face
+  processor spent 3 to 5 ms a frame on a resize and a normalisation. The
+  estimator now makes the same calls itself in 1 to 2 ms, after checking
+  when it is built that it reproduces the processor's tensor bit for bit;
+  with a version of `transformers` where it does not, the processor is used
+  as before. Exact, in both modes.
+- **Particle sampling that skips hopeless candidates.** `NightRain` drew
+  2,000,000 candidate drops to keep 16,000, and computed a diameter and a
+  distance for every one. Nearly all can be ruled out from their two
+  uniforms by a table lookup. The same uniforms are drawn in the same order
+  and the same particles come back: 54 ms to 18 ms. Exact.
+- **Diagnostics that cost nothing when nobody is recording.** The median of
+  the depth map, and eight other statistics of a whole frame, were computed
+  on every call to be handed to a recorder that was not there. They are now
+  passed as functions. Exact.
+
+What was tried and dropped:
+
+- **Resizing for the depth model on the GPU.** A millisecond faster than the
+  exact preprocessing, and it changed the far-field depth of the night
+  scene by several percent, because the mapping from disparity to depth is
+  steep there.
+- **Percentiles from a thinned grid of pixels.** 1 to 5 ms a frame, and it
+  moved `NightIrMode`, whose exposure hangs on one percentile, by 3 levels.
+- **The edge-preserving filter at half size**, which is three quarters of
+  `TemporalDenoiseArtifacts`: 169 ms to 37 ms, and a different picture. It
+  differs from the full-size filter by 1.7 levels on average where the
+  filter itself changes the frame by 3.0.
 
 ## Three suggestions, measured
 
@@ -363,6 +436,63 @@ something in one place and nothing in the others.
 - *Table indices* as uint16 convert three times faster than int32 in the
   numpy encode (0.7 ms against 2.1 ms), but a NaN then becomes index 0
   instead of an error. Left as int32; the kernel does not use that path.
+
+## Compiler flags and the types left in the C, measured
+
+Each flag was applied to the whole library, every kernel timed with it on
+one pinned core, and its output compared with the standard build's. Times in
+milliseconds, AVX2 tier; "changed" means the output is no longer the bytes
+the standard build gives.
+
+| Build | encode | small sprites | large round | large iris, exact | large iris, fast | streaks | Output |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| standard (`-O3` and the flags above) | 1.66 | 2.95 | 17.6 | 22.3 | 19.0 | 23.8 | |
+| `-fstrict-overflow` | 1.64 | 2.94 | 17.6 | 22.3 | 19.1 | 23.8 | same; the machine code is identical |
+| `-funroll-loops` | 1.36 | 3.02 | 17.8 | 22.5 | 19.1 | 24.2 | same |
+| `-Ofast` | 1.62 | 2.68 | 16.7 | 18.4 | 17.4 | 24.0 | changed |
+| `-Ofast -funroll-loops` | 1.17 | 2.66 | 16.8 | 18.5 | 17.4 | 24.2 | changed |
+| `-ffp-contract=fast -mfma` | 1.52 | 2.81 | 17.2 | 22.3 | 18.1 | 24.5 | changed |
+| `-O2` | 8.25 | 6.56 | 78.4 | 110.1 | 86.0 | 33.4 | same |
+| set-up in float, not double | 1.64 | 2.91 | 17.5 | 22.3 | 19.0 | 23.8 | changed |
+| int16 in the line walker | 1.54 | 2.96 | 17.6 | 22.4 | 18.8 | 24.1 | same |
+
+- **`-fstrict-overflow` is already on.** GCC applies it at `-O2` and above
+  unless told otherwise. Python's own build tells it otherwise
+  (`-fno-strict-overflow`), which is why it mattered in Pillow-AllSIMD, but
+  this library is not compiled with Python's flags, and its loops count in
+  `ptrdiff_t` and `size_t` in any case.
+- **`-funroll-loops` is adopted.** It is worth 8 to 18% on the encode's table
+  lookups over three runs, nothing elsewhere, and changes no output. The
+  library grows from 63 to 104 KB.
+- **`-Ofast` is not.** Its best case is the exact-mode iris, 17%, where it
+  does on its own what fast mode already does by hand; on the fast-mode
+  sprites it adds 8%, which is about half a percent of a snow frame, and on
+  streaks and the colour kernels nothing. The price is the build's one
+  promise: with `-ffast-math` each tier and each compiler may reorder
+  arithmetic its own way, so SSE2, AVX2 and NEON stop giving the same
+  bytes; the NaN that the encode refuses is assumed not to exist; and
+  there is no exact mode left in that binary.
+- **Fused multiply-add is not**, for the same reason and 4% at most.
+- **`-O2` is four to five times slower.** It is `-O3` that vectorises.
+
+On the types still visible in the source:
+
+- **The doubles are per particle, not per pixel.** A sprite's size and
+  corner are rounded from Python floats in the numpy code, so the kernel
+  computes them in double to land on the same pixel. Every per-pixel loop
+  is float. Rewriting the set-up in float, with a reciprocal for its one
+  division per column, measured no faster even on six thousand of the
+  smallest sprites, where set-up is the largest share, and moved sprites.
+- **The remaining divisions** are per pixel only in exact mode, where they
+  are numpy's own; fast mode multiplies. The rest are per particle, or are
+  OpenCV's integer arithmetic for a line's slope, reproduced so that the
+  same pixels are set.
+- **int16 for int32 gains nothing here.** C widens a 16-bit integer to `int`
+  for arithmetic anyway. A narrower type pays where it halves a large array
+  or doubles the lanes of a vector loop, and the kernels have neither: their
+  integer inputs are a megabyte per 16,000 streaks, read once, and their
+  vector loops are all float. Tried twice, in the pixel list and in the
+  line walker, with no change either time.
 
 ## A memory pool for the kernels
 
@@ -442,16 +572,17 @@ measured.
 - **NEON on real hardware**, above.
 - **What is left in the frame time**, at 1024 pixels on one thread, none of
   it a case for intrinsics:
-  - `edgePreservingFilter` and `bilateralFilter` (`TemporalDenoiseArtifacts`
-    439 ms, `WdrToneMapping` 84 ms): OpenCV's, and the effect itself.
-  - `apply_overcast`, a quarter of `RandomSnow`: `pow`, `exp` and `log` over
-    the frame. A fused C pass would need a table or a vector maths library
-    to stay exact.
-  - `np.percentile` on whole frames, about 10% of snow: a histogram would do.
-  - Wet ground and surface normals in `RandomRain`, about a fifth of it:
-    Gaussian blurs and numpy passes, candidates for `wide_blur` and for the
-    518-pixel normals `optimizations.md` proposes (C3).
-  - Sampling the drops for `NightRain`: a third of what is left of it.
+  - `edgePreservingFilter` (three quarters of `TemporalDenoiseArtifacts`)
+    and `bilateralFilter` (most of `WdrToneMapping`): OpenCV's, and the
+    effect itself. No shortcut found that keeps the picture.
+  - `apply_overcast`, a quarter of `RandomSnow` without settled snow: `pow`,
+    `exp` and `log` over the frame. A fused C pass would need a table or a
+    vector maths library to stay exact.
+  - Surface normals at full resolution in `RandomRain`, `RandomSnow` and
+    `CastShadows`: `optimizations.md` (C3) measured them six times faster
+    at the depth map's own 518 pixels.
+  - `VideoCodecArtifacts` and `TransmissionFaults`: two ffmpeg processes a
+    call. An in-process codec was not tried.
 - **Threads.** The kernels run on one. A `DataLoader` already uses one
   worker per core, so splitting a frame across threads would oversubscribe.
 
