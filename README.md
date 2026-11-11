@@ -44,9 +44,18 @@ Optional runtime dependencies:
 | Need | Required for |
 | --- | --- |
 | CUDA GPU | the depth-conditioned effects (fog, rain, snow, night IR, cast shadows) |
-| `ffmpeg` on PATH | `VideoCodecArtifacts` and `TransmissionFaults` |
+| `ffmpeg` on PATH, or PyAV | `VideoCodecArtifacts` and `TransmissionFaults` |
 
 Everything else runs on CPU with no extra setup.
+
+`pip install "weathermentations[codec]"` adds [PyAV](https://pyav.org), and
+the two codec transforms then encode inside the process: an H.264 frame in
+about 10 ms at 512 px where starting two ffmpeg processes takes 150 or
+more. For H.264 the frame is the binary's to the byte, which is checked
+once on each installation and not assumed; H.265 comes from another release
+of the encoder and is used in fast mode only. PyAV's wheels carry their own
+FFmpeg built with GPL components (libx264, libx265) and are about 130 MB
+installed. `WEATHERMENTATIONS_CODEC=ffmpeg` keeps to the binary.
 
 If a C compiler (`cc`, `gcc` or `clang`) is present, installing also builds a
 small native library that draws rain and snow and converts colour several
@@ -418,7 +427,8 @@ A `DataLoader` worker must keep ahead of the GPU. Rough guidance:
   `WaterDroplets`, `WdrToneMapping`, and any *warm* depth-conditioned
   transform.
 - **Expensive, keep `p` low**: `VideoCodecArtifacts` and `TransmissionFaults`
-  (two ffmpeg subprocesses per call each), and the first depth-conditioned transform in a pipeline.
+  (two ffmpeg subprocesses per call each, unless PyAV is installed: see
+  [Install](#install)), and the first depth-conditioned transform in a pipeline.
 
 Cost is paid only when `p` fires, so a pipeline of ten effects at `p=0.2`
 costs about two of them per image, not ten. The depth estimate is the
