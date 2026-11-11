@@ -23,6 +23,9 @@ than exposed.
   of whether the implementation lives up to that, including where it did not.
 - **[`optimizations.md`](optimizations.md)** — where the CPU time actually
   goes, and an assessment of what is worth optimising.
+- **[`docs/native_kernels.md`](docs/native_kernels.md)** — the optional
+  compiled kernels: what was moved to C and why, what it bought, and why
+  there is no hand-written SIMD.
 - **[`docs/proposed_augmentations.md`](docs/proposed_augmentations.md)** —
   effects not yet built, in the order to build them, each with its model,
   its place in the chain and what would show it works.
@@ -44,6 +47,14 @@ Optional runtime dependencies:
 | `ffmpeg` on PATH | `VideoCodecArtifacts` and `TransmissionFaults` |
 
 Everything else runs on CPU with no extra setup.
+
+If a C compiler (`cc`, `gcc` or `clang`) is present, installing also builds a
+small native library that draws rain and snow and converts colour several
+times faster. It is optional and changes no picture: without it the same
+transforms run their numpy code. `python -c "from weathermentations import
+_native; print(_native.tier())"` prints the instruction set in use, or
+`None` if it was not built; `python hatch_build.py` builds it in a checkout.
+See [`docs/native_kernels.md`](docs/native_kernels.md).
 
 ---
 
@@ -359,6 +370,13 @@ the chain, and the next depth-conditioned transform then estimates afresh:
 library, which cannot be assumed not to. If you know such a step keeps
 geometry (a colour jitter, a blur), `provider.carry(before, after)` says so.
 
+**Both tables predate the `native-kernels` work and were measured with
+OpenCV using every core.** A `DataLoader` worker has one, and there the
+picture is different: see the single-core table in
+[`docs/native_kernels.md`](docs/native_kernels.md), where `RandomFog`,
+`RandomRain` and `RandomSnow` are 3 to 7 times faster than they were at
+1024 px.
+
 These are a laptop under thermal limits: absolute numbers move by up to 2x
 between runs, and the relative ordering plus the cold/warm gap are the parts
 worth planning around. For that reason the `WaterDroplets`, `DirtSoil` and
@@ -585,10 +603,12 @@ and what the failures had in common.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-ruff check src tests docs scripts
+pip install -e ".[dev]"                      # also builds the native kernels
+ruff check src tests docs scripts hatch_build.py
 mypy src/weathermentations
 pytest tests -q
+WEATHERMENTATIONS_NATIVE=0 pytest tests -q   # the numpy path alone
+python hatch_build.py                        # rebuild after editing native/*.c
 ```
 
 Depth-conditioned tests skip automatically when no CUDA device is present.
