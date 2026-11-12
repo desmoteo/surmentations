@@ -360,6 +360,21 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "text_height_range": (_lerp(0.02, 0.05, t), _lerp(0.03, 0.08, t)),
                 "privacy_mask_count_range": (int(_lerp(0, 2, t)), int(_lerp(1, 5, t))),
             },
+            "GroundFog": {
+                # Thicker at the ground and deeper: less seen along the
+                # road, then less seen at all.
+                "visibility_range_m": (_lerp(150.0, 12.0, t), _lerp(300.0, 30.0, t)),
+                "layer_height_range_m": (_lerp(1.0, 5.0, t), _lerp(2.5, 12.0, t)),
+            },
+            "LocalPlumes": {
+                # More plumes, denser at the source.
+                "plume_count_range": (1, int(_lerp(1, 5, t))),
+                "opacity_range": (_lerp(0.3, 1.5, t), _lerp(0.8, 4.0, t)),
+            },
+            "HeatShimmer": {
+                # Hotter ground: from a mild day to tarmac at noon.
+                "log10_cn2_range": (_lerp(-13.6, -12.4, t), _lerp(-13.2, -12.0, t)),
+            },
             "CastShadows": {
                 # At least two. A figure's shadow covers a fifth of what a
                 # crown's does, so a single draw can be one thin figure on

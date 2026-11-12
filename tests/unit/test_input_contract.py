@@ -35,7 +35,10 @@ from weathermentations.atmosphere import (
     RandomRain,
     RandomSnow,
 )
+from weathermentations.atmosphere.ground_fog import GroundFog
+from weathermentations.atmosphere.heat_shimmer import HeatShimmer
 from weathermentations.atmosphere.night_insects import NightInsects
+from weathermentations.atmosphere.plumes import LocalPlumes
 from weathermentations.camera import (
     AcFlicker,
     ExposureTransient,
@@ -94,6 +97,16 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),
     "HousingOccluders": lambda: HousingOccluders(p=1.0),
+    "GroundFog": lambda: GroundFog(depth_provider=_PROVIDER, p=1.0),
+    "LocalPlumes": lambda: LocalPlumes(depth_provider=_PROVIDER, p=1.0),
+    # A long lens over a long path: over this file's fifty metres it rightly does nothing.
+    "HeatShimmer": lambda: HeatShimmer(
+        depth_provider=_PROVIDER,
+        p=1.0,
+        depth_scale=6000.0,
+        horizontal_fov_range_deg=(3.0, 5.0),
+        log10_cn2_range=(-12.4, -12.0),
+    ),
     "OnScreenOverlay": lambda: OnScreenOverlay(p=1.0),
     "CameraVibration": lambda: CameraVibration(p=1.0),
     # Focused very near: on a frame this small a milder error is under a pixel.

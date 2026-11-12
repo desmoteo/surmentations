@@ -34,6 +34,11 @@ _STAGE_ORDER: dict[str, int] = {
     "RandomFog": 1,
     "RandomRain": 1,
     "RandomSnow": 1,
+    # A layer of fog on the ground, plumes of steam standing in it, and the
+    # air's own turbulence over a long path.
+    "GroundFog": 1,
+    "LocalPlumes": 1,
+    "HeatShimmer": 1,
     # Optics: on or in the lens.
     "WaterDroplets": 2,
     "DirtSoil": 2,
