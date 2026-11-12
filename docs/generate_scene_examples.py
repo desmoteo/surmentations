@@ -57,6 +57,7 @@ from docs.generate_examples import (  # noqa: E402
     EFFECTS,
     GROUND_ROW_WEATHER_LEVEL,
     GROUND_ROWS,
+    LAMP_LIT,
     _build,
     _night_base,
     _render_representative,
@@ -84,11 +85,16 @@ PIPELINE_DRAWS = 4
 
 # Lit by the camera's own illuminator, so rendered over an infrared night
 # version of the scene, as in the severity gallery.
-LAMP_LIT = ("night_rain", "night_snow", "night_droplets", "spider_web")
 NEEDS_SUN = ("sun_flare", "cast_shadows")
 NEEDS_OPEN_SKY = (
-    "rain", "snow", "wet_ground", "snow_cover", "night_rain", "night_snow", *NEEDS_SUN
-)
+    "rain", "snow", "wet_ground", "snow_cover", "night_rain", "night_snow", *NEEDS_SUN,
+    "frost_on_glass", "snow_on_housing", "foliage_intrusion", "night_foliage", "ground_fog",
+)  # fmt: skip
+# Faults and effects of the daytime picture.
+DAYTIME_ONLY = ("ir_cut_filter_fault",)
+# Turbulence over ground the sun has heated, which shows over a long path.
+NEEDS_A_LONG_VIEW = ("heat_shimmer",)
+LONG_VIEW_M = 500.0
 DAYLIGHT_WEATHER = ("fog",)
 NEEDS_LAMPS = ("night_fog", "source_glare")
 
@@ -112,6 +118,11 @@ WHY_NOT = {
         "the lamps"
     ),
     "lamps": "it acts on artificial lights at night, and this is a daylit scene",
+    "daytime": "it is a fault of the colour picture by day, and the scene is at night",
+    "long view": (
+        "it is turbulence over sunlit ground, which shows over a kilometre or so by day: "
+        "this scene is too short, under a roof or at night"
+    ),
 }
 
 # An open iris, and rain metered for street lighting: see presets/pipelines.py.
@@ -185,6 +196,13 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
         # Against the scene's own distances, from the provider, in place of
         # the severity gallery's 40-90 m far plane.
         extra["depth_scale"] = None
+    if effect == "ground_fog":
+        extra["camera_pitch_range_deg"] = (pitch, pitch)
+        extra["depth_scale"] = None
+    if effect in ("heat_shimmer", "local_plumes"):
+        # Over the scene's own distances, in place of the severity
+        # gallery's stand-ins.
+        extra["depth_scale"] = None
     if effect == "night_fog":
         visibility = FOG_VISIBILITY * scene.depth_range_m[1]
         extra["visibility_range_m"] = (0.85 * visibility, 1.15 * visibility)
@@ -214,6 +232,12 @@ def _why_not(effect: str, scene: Scene) -> str | None:
         return WHY_NOT["daylight"]
     if not scene.night and effect in NEEDS_LAMPS:
         return WHY_NOT["lamps"]
+    if scene.night and effect in DAYTIME_ONLY:
+        return WHY_NOT["daytime"]
+    if effect in NEEDS_A_LONG_VIEW and (
+        scene.night or scene.sheltered or scene.depth_range_m[1] < LONG_VIEW_M
+    ):
+        return WHY_NOT["long view"]
     return None
 
 

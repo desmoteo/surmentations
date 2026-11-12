@@ -93,12 +93,20 @@ def test_effects_are_left_out_where_they_do_not_apply() -> None:
     night = Scene((5.0, 100.0), 10.0, night=True)
     indoors = Scene((2.0, 40.0), 5.0, sheltered=True)
 
-    assert {e for e in EFFECTS if _why_not(e, day)} == {"night_fog", "source_glare"}
-    assert {e for e in EFFECTS if _why_not(e, night)} == {"sun_flare", "cast_shadows", "fog"}
+    far = Scene((20.0, 2000.0), 5.0)
+
+    # A hundred metres is too short a path for the air to show.
+    assert {e for e in EFFECTS if _why_not(e, day)} == {"night_fog", "source_glare", "heat_shimmer"}
+    assert {e for e in EFFECTS if _why_not(e, far)} == {"night_fog", "source_glare"}
+    assert {e for e in EFFECTS if _why_not(e, night)} == {
+        "sun_flare", "cast_shadows", "fog", "ir_cut_filter_fault", "heat_shimmer",
+    }  # fmt: skip
     assert {e for e in EFFECTS if _why_not(e, indoors)} == {
         "sun_flare", "cast_shadows", "rain", "snow", "night_rain", "night_snow",
         "night_fog", "source_glare", "wet_ground", "snow_cover",
-    }
+        "frost_on_glass", "snow_on_housing", "foliage_intrusion", "night_foliage", "ground_fog",
+        "heat_shimmer",
+    }  # fmt: skip
 
 
 def test_weather_is_scaled_to_the_scene() -> None:

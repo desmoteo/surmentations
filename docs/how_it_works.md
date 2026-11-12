@@ -24,12 +24,15 @@ flowchart TD
         SF[SunFlare]
         HO[HousingOccluders]
         SW[SpiderWeb]
-        CAM["Camera / ISP / codec<br/>7 transforms"]
+        ON["More on the housing<br/>IrDomeGlare, FrostOnGlass, SnowOnHousing,<br/>LensTamper, FoliageIntrusion, FocusShift"]
+        LIT["Lit by the camera at night<br/>NightRain, NightSnow, NightInsects"]
+        CAM["Camera / ISP / link<br/>14 transforms"]
     end
     subgraph depthful["Depth-conditioned — needs CUDA"]
         FOG[RandomFog]
         RAIN[RandomRain]
         SNOW[RandomSnow]
+        AIR["GroundFog, LocalPlumes, HeatShimmer"]
         CS[CastShadows]
         IR[NightIrMode]
     end
@@ -529,9 +532,9 @@ flowchart LR
     OPT --> SENS["sensor"]
     SENS --> ISP["ISP"]
     ISP --> CODEC["codec"]
-    SENS -.-> S1["NightIrMode, NightRain, NightSnow, SpiderWeb, AcFlicker, RollingShutter, SensorNoise"]
-    ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts"]
-    CODEC -.-> S3["VideoCodecArtifacts, TransmissionFaults"]
+    SENS -.-> S1["NightIrMode, IrCutFilterFault, NightRain, NightSnow, NightInsects, SpiderWeb, IrDomeGlare, AcFlicker, RollingShutter, CameraVibration, SensorNoise, DemosaicArtifacts"]
+    ISP -.-> S2["ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts, OnScreenOverlay drawn by the camera"]
+    CODEC -.-> S3["VideoCodecArtifacts or AnalogVideoArtifacts, TransmissionFaults, OnScreenOverlay drawn by the recorder"]
 ```
 
 `physical_order()` sorts a list of transforms into this chain. Out of order
@@ -715,6 +718,30 @@ forty times a thread's band at the same distance, which no exposure holds.
 It sorts **after** `NightIrMode`, with the night rain and snow and for
 their reason. `HousingOccluders` still draws its own, simpler webs as
 blurred lines; this is the web as geometry.
+
+### Fifteen more, and the one idea behind each
+
+Each of these is built the way the web is: from the one physical fact that
+decides the picture, with the rest derived from it and the derivation
+tested. The module docstrings carry the arithmetic; this is the index.
+
+| Transform | The fact it is built on | What follows, and is tested |
+| --- | --- | --- |
+| `NightInsects` | An insect moves during a long exposure and returns a fixed amount of light in it | A streak as long as speed times shutter time over distance; the same light over a longer streak for a faster insect; one lobe a wing beat; brightness by its own distance from the lamp |
+| `IrDomeGlare` | The dome mirrors the ring of LEDs that surrounds the lens | A ring, defocused to a band; an arc when the lens is tilted off the dome's axis; one lobe an LED; dirt moves the light and adds none |
+| `FrostOnGlass` | Ice scatters and does not absorb, and grows as ferns | The scene behind is replaced by its own wide blur plus picked-up light, not darkened; fronds start at the cold rim, branch at sixty degrees and run ahead of the even layer, with clear glass between them |
+| `SnowOnHousing` | A lump of snow is thick, on the housing, and lit through | It hides, with an edge that is a gradient; pale and a little blue by day, darker where it is thicker; clipped under the lamp |
+| `LensTamper` | Whatever is on the lens is far out of focus | Speckle merges to haze and tape edges to gradients; tape and a cover pass light and no image, and beside them the scene is untouched |
+| `FoliageIntrusion` | A branch has a distance, and every leaf its own turn | Distance sizes the leaves, sets their blur through the aperture, their smear in the wind over the exposure, and their brightness under the lamp; a leaf's turn foreshortens it and, under the lamp, dims it by as much |
+| `FocusShift` | A displaced focal plane is a lens focused at some near distance `s` | Every point is the aperture's disc, `A f abs(1/s - 1/z)` across: far things blurred alike, whatever stands at `s` sharp |
+| `IrCutFilterFault` | Past 800 nm all three colour filters are nearly clear | The infrared picture is added to every channel; exposure holds the level and white balance the average, and foliage, bright in the infrared, stays pale |
+| `DemosaicArtifacts` | A sensor samples one colour a pixel | Detail as fine as the pixels comes out coloured, which colour depending on where the pattern falls; the lens's blur limits it |
+| `CameraVibration` | The exposure adds up the picture over the camera's path | Smear proportional to shutter time until it holds the whole swing, piled up at the swing's ends; the frame displaced by the path's mean, annotations with it |
+| `AnalogVideoArtifacts` | Brightness and colour share one one-dimensional signal | Detail is lost along the line only; encoding onto a subcarrier and decoding leaves cross-colour and dot crawl by itself; a reflection is a copy to the right |
+| `OnScreenOverlay` | None: it is in the footage | Lettering in whole dots, legible and inside the frame at any size; a box under a privacy mask is dropped; where it sorts depends on who draws it |
+| `GroundFog` | Fog on the ground is a layer, thinning exponentially with height | Optical depth is a closed-form integral along each ray, checked against the sum; a ray that dips into the layer meets more fog than a level one of the same length; the sky is clear overhead and closed at the horizon |
+| `LocalPlumes` | A plume is somewhere, and lit from above | Sized by metres at its distance; hides only what is behind it; widens and thins as it rises; brightest on top and greyer underneath |
+| `HeatShimmer` | Turbulence tilts and blurs by amounts the theory of seeing gives | Displacement as the square root of the path, blur only where the air is worse than the lens; over a street's length, nothing |
 
 ### Night IR
 

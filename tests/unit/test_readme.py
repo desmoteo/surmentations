@@ -17,7 +17,11 @@ from pathlib import Path
 import pytest
 
 from weathermentations.atmosphere import (
+    GroundFog,
+    HeatShimmer,
+    LocalPlumes,
     NightFog,
+    NightInsects,
     NightRain,
     NightSnow,
     RandomFog,
@@ -26,8 +30,13 @@ from weathermentations.atmosphere import (
 )
 from weathermentations.camera import (
     AcFlicker,
+    AnalogVideoArtifacts,
+    CameraVibration,
+    DemosaicArtifacts,
     ExposureTransient,
+    IrCutFilterFault,
     NightIrMode,
+    OnScreenOverlay,
     RollingShutter,
     SensorNoise,
     TemporalDenoiseArtifacts,
@@ -37,7 +46,13 @@ from weathermentations.camera import (
 )
 from weathermentations.lens import (
     DirtSoil,
+    FocusShift,
+    FoliageIntrusion,
+    FrostOnGlass,
     HousingOccluders,
+    IrDomeGlare,
+    LensTamper,
+    SnowOnHousing,
     SourceGlare,
     SpiderWeb,
     SunFlare,
@@ -55,6 +70,9 @@ TRANSFORMS = {
         CastShadows, NightIrMode, AcFlicker, RollingShutter, SensorNoise,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,
         VideoCodecArtifacts, TransmissionFaults,
+        NightInsects, GroundFog, LocalPlumes, HeatShimmer, IrDomeGlare, FrostOnGlass,
+        SnowOnHousing, LensTamper, FoliageIntrusion, FocusShift, IrCutFilterFault,
+        DemosaicArtifacts, CameraVibration, AnalogVideoArtifacts, OnScreenOverlay,
     )
 }
 
@@ -112,11 +130,14 @@ def test_effect_tables_mark_the_depth_requirement_correctly(name: str) -> None:
     """A reader assembling a CPU-only pipeline relies on the "Needs depth"
     column, and a GPU requirement discovered at runtime is a bad surprise."""
     text = README.read_text()
-    row = re.search(rf"^\|\s*`{name}`\s*\|.*\|\s*(yes|no)\s*\|\s*$", text, re.M)
+    row = re.search(rf"^\|\s*`{name}`\s*\|.*\|\s*(yes|no|optional)\s*\|\s*$", text, re.M)
     assert row, f"{name} has no row in the effect tables, or no depth column"
-    needs_depth = "depth_provider" in inspect.signature(TRANSFORMS[name].__init__).parameters
-    assert (row.group(1) == "yes") == needs_depth, (
-        f"{name} {'needs' if needs_depth else 'does not need'} a depth provider, "
+    provider = inspect.signature(TRANSFORMS[name].__init__).parameters.get("depth_provider")
+    # A provider that may be left out is neither: the transform runs without
+    # one and does more with one.
+    expected = "no" if provider is None else ("optional" if provider.default is None else "yes")
+    assert row.group(1) == expected, (
+        f"{name} takes a depth provider as {expected!r} by its signature, "
         f"but the effect table says {row.group(1)!r}"
     )
 
