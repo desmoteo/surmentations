@@ -121,10 +121,10 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Zschokke, S. (1999). Nomenclature of the orb-web. *Journal of Arachnology* 27, 542-546.
-- Vollrath, F. and Edmonds, D. T. (1989). Modulation of the mechanical properties of spider silk by coating with water. *Nature* 340, 305-307.
-- Foelix, R. F. (2011). *Biology of Spiders*, 3rd edition. Oxford University Press.
-- Potmesil, M. and Chakravarty, I. (1981). A lens and aperture camera model for synthetic image generation. *ACM SIGGRAPH Computer Graphics* 15(3), 297-305.
+- Zschokke, S. (1999). Nomenclature of the orb-web. *Journal of Arachnology* 27, 542-546. [link](https://conservation.unibas.ch/team/zschokke/pdf/zschokke1999joa.pdf)
+- Vollrath, F. and Edmonds, D. T. (1989). Modulation of the mechanical properties of spider silk by coating with water. *Nature* 340, 305-307. [doi:10.1038/340305a0](https://doi.org/10.1038/340305a0)
+- Foelix, R. F. (2011). *Biology of Spiders*, 3rd edition. Oxford University Press. [link](https://openlibrary.org/works/OL19831331W)
+- Potmesil, M. and Chakravarty, I. (1981). A lens and aperture camera model for synthetic image generation. *ACM SIGGRAPH Computer Graphics* 15(3), 297-305. [doi:10.1145/965161.806818](https://doi.org/10.1145/965161.806818)
 
 ---
 

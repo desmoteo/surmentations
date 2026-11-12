@@ -88,10 +88,10 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Gates, D. M., Keegan, H. J., Schleter, J. C. and Weidner, V. R. (1965). Spectral properties of plants. *Applied Optics* 4(1), 11-20.
-- Brown, M. and Süsstrunk, S. (2011). Multi-spectral SIFT for scene category recognition. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*.
-- European Machine Vision Association. *EMVA Standard 1288: Standard for Characterization of Image Sensors and Cameras*.
-- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. (2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*.
+- Gates, D. M., Keegan, H. J., Schleter, J. C. and Weidner, V. R. (1965). Spectral properties of plants. *Applied Optics* 4(1), 11. [doi:10.1364/AO.4.000011](https://doi.org/10.1364/AO.4.000011)
+- Brown, M. and Süsstrunk, S. (2011). Multi-spectral SIFT for scene category recognition. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*. [doi:10.1109/CVPR.2011.5995637](https://doi.org/10.1109/CVPR.2011.5995637)
+- European Machine Vision Association. *EMVA Standard 1288: Standard for Characterization of Image Sensors and Cameras*. [link](https://www.emva.org/standards-technology/emva-1288/)
+- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. (2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*. [link](https://arxiv.org/abs/2406.09414)
 
 ---
 

@@ -78,8 +78,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Gastal, E. S. L. and Oliveira, M. M. (2011). Domain transform for edge-aware image and video processing. *ACM Transactions on Graphics* 30(4) (SIGGRAPH).
-- Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *IEEE International Conference on Computer Vision (ICCV)*.
+- Gastal, E. S. L. and Oliveira, M. M. (2011). Domain transform for edge-aware image and video processing. *ACM Transactions on Graphics* 30(4) (SIGGRAPH). [doi:10.1145/1964921.1964964](https://doi.org/10.1145/1964921.1964964)
+- Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *IEEE International Conference on Computer Vision (ICCV)*. [doi:10.1109/ICCV.1998.710815](https://doi.org/10.1109/ICCV.1998.710815)
 
 ---
 

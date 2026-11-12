@@ -75,8 +75,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Bayer, B. E. (1976). Color imaging array. US Patent 3,971,065.
-- Gunturk, B. K., Glotzbach, J., Altunbasak, Y., Schafer, R. W. and Mersereau, R. M. (2005). Demosaicking: color filter array interpolation. *IEEE Signal Processing Magazine* 22(1), 44-54.
+- Bayer, B. E. (1976). Color imaging array. US Patent 3,971,065. [link](https://patents.google.com/patent/US3971065A/en)
+- Gunturk, B. K., Glotzbach, J., Altunbasak, Y., Schafer, R. W. and Mersereau, R. M. (2005). Demosaicking: color filter array interpolation. *IEEE Signal Processing Magazine* 22(1), 44-54. [doi:10.1109/MSP.2005.1407714](https://doi.org/10.1109/MSP.2005.1407714)
 
 ---
 

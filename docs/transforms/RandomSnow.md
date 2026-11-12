@@ -168,9 +168,9 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Gunn, K. L. S. and Marshall, J. S. (1958). The distribution with size of aggregate snowflakes. *Journal of Meteorology* 15, 452-461.
-- Locatelli, J. D. and Hobbs, P. V. (1974). Fall speeds and masses of solid precipitation particles. *Journal of Geophysical Research* 79(15), 2185-2197.
-- Warren, S. G. (1982). Optical properties of snow. *Reviews of Geophysics* 20(1), 67-89.
+- Gunn, K. L. S. and Marshall, J. S. (1958). The distribution with size of aggregate snowflakes. *Journal of Meteorology* 15, 452-461. [doi:10.1175/1520-0469(1958)015&lt;0452:TDWSOA&gt;2.0.CO;2](https://doi.org/10.1175/1520-0469%281958%29015%3C0452:TDWSOA%3E2.0.CO;2)
+- Locatelli, J. D. and Hobbs, P. V. (1974). Fall speeds and masses of solid precipitation particles. *Journal of Geophysical Research* 79(15), 2185-2197. [doi:10.1029/JC079i015p02185](https://doi.org/10.1029/JC079i015p02185)
+- Warren, S. G. (1982). Optical properties of snow. *Reviews of Geophysics* 20(1), 67-89. [doi:10.1029/RG020i001p00067](https://doi.org/10.1029/RG020i001p00067)
 
 ---
 

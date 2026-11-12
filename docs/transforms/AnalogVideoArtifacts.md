@@ -107,9 +107,9 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Poynton, C. (2012). *Digital Video and HD: Algorithms and Interfaces*, 2nd edition. Morgan Kaufmann.
-- ITU-R Recommendation BT.601. *Studio encoding parameters of digital television for standard 4:3 and wide-screen 16:9 aspect ratios*.
-- ITU-R Recommendation BT.1700. *Characteristics of composite video signals for conventional analogue television systems*.
+- Poynton, C. (2012). *Digital Video and HD: Algorithms and Interfaces*, 2nd edition. Morgan Kaufmann. [doi:10.1016/C2010-0-68987-5](https://doi.org/10.1016/C2010-0-68987-5)
+- ITU-R Recommendation BT.601. *Studio encoding parameters of digital television for standard 4:3 and wide screen 16:9 aspect ratios*. [link](https://www.itu.int/rec/R-REC-BT.601)
+- ITU-R Recommendation BT.1700. *Characteristics of composite video signals for conventional analogue television systems*. [link](https://www.itu.int/rec/R-REC-BT.1700)
 
 ---
 

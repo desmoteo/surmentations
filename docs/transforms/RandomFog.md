@@ -93,10 +93,13 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beiträge zur Physik der freien Atmosphäre* 12, 33-53.
-- Middleton, W. E. K. (1952). *Vision through the Atmosphere*. University of Toronto Press.
-- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254.
-- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. (2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*.
+- Koschmieder, H. (1924). Theorie der horizontalen Sichtweite. *Beiträge zur Physik der freien Atmosphäre* 12, 33-53. [link](https://library.metoffice.gov.uk/portal/Default/en-GB/RecordView/Index/457195)
+- Middleton, W. E. K. (1952). *Vision through the Atmosphere*. University of Toronto Press. [doi:10.3138/9781487586140](https://doi.org/10.3138/9781487586140)
+- Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. *International Journal of Computer Vision* 48(3), 233-254. [doi:10.1023/A:1016328200723](https://doi.org/10.1023/A:1016328200723)
+- He, K., Sun, J. and Tang, X. (2011). Single image haze removal using dark channel prior. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 33(12), 2341-2353. [doi:10.1109/TPAMI.2010.168](https://doi.org/10.1109/TPAMI.2010.168)
+- Sakaridis, C., Dai, D. and Van Gool, L. (2018). Semantic foggy scene understanding with synthetic data. *International Journal of Computer Vision* 126(9), 973-992. [doi:10.1007/s11263-018-1072-8](https://doi.org/10.1007/s11263-018-1072-8)
+- Quilez, I. Better fog. Article, iquilezles.org. [link](https://iquilezles.org/articles/fog/)
+- Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. (2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*. [link](https://arxiv.org/abs/2406.09414)
 
 ---
 

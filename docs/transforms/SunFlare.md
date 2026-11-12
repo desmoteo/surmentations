@@ -123,8 +123,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Hullin, M., Eisemann, E., Seidel, H.-P. and Lee, S. (2011). Physically-based real-time lens flare rendering. *ACM Transactions on Graphics* 30(4) (SIGGRAPH).
-- Talvala, E.-V., Adams, A., Horowitz, M. and Levoy, M. (2007). Veiling glare in high dynamic range imaging. *ACM Transactions on Graphics* 26(3) (SIGGRAPH).
+- Hullin, M., Eisemann, E., Seidel, H.-P. and Lee, S. (2011). Physically-based real-time lens flare rendering. *ACM Transactions on Graphics* 30(4) (SIGGRAPH). [doi:10.1145/1964921.1965003](https://doi.org/10.1145/1964921.1965003)
+- Talvala, E.-V., Adams, A., Horowitz, M. and Levoy, M. (2007). Veiling glare in high dynamic range imaging. *ACM Transactions on Graphics* 26(3) (SIGGRAPH). [doi:10.1145/1275808.1276424](https://doi.org/10.1145/1275808.1276424)
 
 ---
 

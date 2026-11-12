@@ -76,8 +76,8 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Durand, F. and Dorsey, J. (2002). Fast bilateral filtering for the display of high-dynamic-range images. *ACM Transactions on Graphics* 21(3) (SIGGRAPH).
-- Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *IEEE International Conference on Computer Vision (ICCV)*.
+- Durand, F. and Dorsey, J. (2002). Fast bilateral filtering for the display of high-dynamic-range images. *ACM Transactions on Graphics* 21(3) (SIGGRAPH). [doi:10.1145/566654.566574](https://doi.org/10.1145/566654.566574)
+- Tomasi, C. and Manduchi, R. (1998). Bilateral filtering for gray and color images. *IEEE International Conference on Computer Vision (ICCV)*. [doi:10.1109/ICCV.1998.710815](https://doi.org/10.1109/ICCV.1998.710815)
 
 ---
 

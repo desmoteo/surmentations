@@ -79,7 +79,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Wyszecki, G. and Stiles, W. S. (1982). *Color Science: Concepts and Methods, Quantitative Data and Formulae*, 2nd edition. Wiley.
+- Wyszecki, G. and Stiles, W. S. (1982). *Color Science: Concepts and Methods, Quantitative Data and Formulae*, 2nd edition. Wiley. [link](https://openlibrary.org/works/OL5897216W)
 
 ---
 

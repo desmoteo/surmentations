@@ -74,7 +74,7 @@ SOURCES = {
     "narasimhan2002": "Narasimhan, S. G. and Nayar, S. K. (2002). Vision and the atmosphere. "
     "*International Journal of Computer Vision* 48(3), 233-254.",
     "narasimhan2003": "Narasimhan, S. G. and Nayar, S. K. (2003). Shedding light on the weather. "
-    "*IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*.",
+    "*IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*, I-665-I-672.",
     "marshall": "Marshall, J. S. and Palmer, W. McK. (1948). The distribution of raindrops with "
     "size. *Journal of Meteorology* 5, 165-166.",
     "ulbrich": "Ulbrich, C. W. (1983). Natural variations in the analytical form of the raindrop "
@@ -92,18 +92,19 @@ SOURCES = {
     "warren": "Warren, S. G. (1982). Optical properties of snow. *Reviews of Geophysics* 20(1), "
     "67-89.",
     "bohren": "Bohren, C. F. (1983). Colors of snow, frozen waterfalls, and icebergs. *Journal of "
-    "the Optical Society of America* 73(12), 1646-1652.",
+    "the Optical Society of America* 73(12), 1646.",
     "gultepe": "Gultepe, I. et al. (2007). Fog research: a review of past achievements and future "
     "perspectives. *Pure and Applied Geophysics* 164, 1121-1159.",
     "morton": "Morton, B. R., Taylor, G. I. and Turner, J. S. (1956). Turbulent gravitational "
     "convection from maintained and instantaneous sources. *Proceedings of the Royal Society A* "
     "234, 1-23.",
     "kolmogorov": "Kolmogorov, A. N. (1941). The local structure of turbulence in incompressible "
-    "viscous fluid for very large Reynolds numbers. *Doklady Akademii Nauk SSSR* 30, 301-305.",
+    "viscous fluid for very large Reynolds numbers. *Doklady Akademii Nauk SSSR* 30(4). "
+    "English translation: *Proceedings of the Royal Society A* 434, 9-13 (1991).",
     "tatarskii": "Tatarskii, V. I. (1961). *Wave Propagation in a Turbulent Medium*. McGraw-Hill.",
     "fried": "Fried, D. L. (1966). Optical resolution through a randomly inhomogeneous medium for "
-    "very long and very short exposures. *Journal of the Optical Society of America* 56(10), "
-    "1372-1379.",
+    "very long and very short exposures. *Journal of the Optical Society of America* "
+    "56(10), 1372.",
     "roggemann": "Roggemann, M. C. and Welsh, B. M. (1996). *Imaging Through Turbulence*. CRC "
     "Press.",
     "greenewalt": "Greenewalt, C. H. (1962). Dimensional relationships for flying animals. "
@@ -143,13 +144,13 @@ SOURCES = {
     "libbrecht": "Libbrecht, K. G. (2005). The physics of snow crystals. *Reports on Progress in "
     "Physics* 68, 855-895.",
     "ribnick": "Ribnick, E., Atev, S., Masoud, O., Papanikolopoulos, N. and Voyles, R. (2006). "
-    "Real-time detection of camera tampering. *IEEE International Conference on Advanced Video "
-    "and Signal Based Surveillance (AVSS)*.",
+    "Real-time detection of camera tampering. *IEEE International Conference on Video and "
+    "Signal Based Surveillance (AVSS)*.",
     "saglam": "Saglam, A. and Temizel, A. (2009). Real-time adaptive camera tamper detection for "
     "video surveillance. *IEEE International Conference on Advanced Video and Signal Based "
     "Surveillance (AVSS)*.",
     "gates": "Gates, D. M., Keegan, H. J., Schleter, J. C. and Weidner, V. R. (1965). Spectral "
-    "properties of plants. *Applied Optics* 4(1), 11-20.",
+    "properties of plants. *Applied Optics* 4(1), 11.",
     "brown": "Brown, M. and Süsstrunk, S. (2011). Multi-spectral SIFT for scene category "
     "recognition. *IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*.",
     "emva": "European Machine Vision Association. *EMVA Standard 1288: Standard for "
@@ -191,12 +192,119 @@ SOURCES = {
     "poynton": "Poynton, C. (2012). *Digital Video and HD: Algorithms and Interfaces*, 2nd "
     "edition. Morgan Kaufmann.",
     "bt601": "ITU-R Recommendation BT.601. *Studio encoding parameters of digital television for "
-    "standard 4:3 and wide-screen 16:9 aspect ratios*.",
+    "standard 4:3 and wide screen 16:9 aspect ratios*.",
     "bt1700": "ITU-R Recommendation BT.1700. *Characteristics of composite video signals for "
     "conventional analogue television systems*.",
+    "he": "He, K., Sun, J. and Tang, X. (2011). Single image haze removal using dark channel "
+    "prior. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 33(12), 2341-2353.",
+    "sakaridis": "Sakaridis, C., Dai, D. and Van Gool, L. (2018). Semantic foggy scene "
+    "understanding with synthetic data. *International Journal of Computer Vision* 126(9), "
+    "973-992.",
+    "quilez": "Quilez, I. Better fog. Article, iquilezles.org.",
+    "garg2006": "Garg, K. and Nayar, S. K. (2006). Photorealistic rendering of rain streaks. "
+    "*ACM Transactions on Graphics* 25(3), 996-1002 (SIGGRAPH).",
+    "schlick": "Schlick, C. (1994). An inexpensive BRDF model for physically-based rendering. "
+    "*Computer Graphics Forum* 13(3), 233-246.",
+    "you2013": "You, S., Tan, R. T., Kawakami, R. and Ikeuchi, K. (2013). Adherent raindrop "
+    "detection and removal in video. *IEEE Conference on Computer Vision and Pattern "
+    "Recognition (CVPR)*, 1035-1042.",
+    "qian": "Qian, R., Tan, R. T., Yang, W., Su, J. and Liu, J. (2018). Attentive generative "
+    "adversarial network for raindrop removal from a single image. *IEEE/CVF Conference on "
+    "Computer Vision and Pattern Recognition (CVPR)*, 2482-2491.",
+    "bebber": "Bebber, L. (2015). Rain & water effect experiments. Article, Codrops, "
+    "4 November 2015.",
     "depth_anything": "Yang, L., Kang, B., Huang, Z., Zhao, Z., Xu, X., Feng, J. and Zhao, H. "
     "(2024). Depth Anything V2. *Advances in Neural Information Processing Systems (NeurIPS)*.",
 }
+
+# Where each source can be found: a DOI where it has one, otherwise its
+# publisher's or a library catalogue's page. Each record was looked up and
+# compared with the citation above on 2026-11-12: papers on Crossref,
+# books in Open Library, the rest on the page linked.
+DOI = "https://doi.org/"
+LINKS = {
+    "koschmieder": "https://library.metoffice.gov.uk/portal/Default/en-GB/RecordView/Index/457195",
+    "middleton": DOI + "10.3138/9781487586140",
+    "narasimhan2002": DOI + "10.1023/A:1016328200723",
+    "narasimhan2003": DOI + "10.1109/CVPR.2003.1211417",
+    "marshall": DOI + "10.1175/1520-0469%281948%29005%3C0165:TDORWS%3E2.0.CO;2",
+    "ulbrich": DOI + "10.1175/1520-0450%281983%29022%3C1764:NVITAF%3E2.0.CO;2",
+    "gunn_kinzer": DOI + "10.1175/1520-0469%281949%29006%3C0243:TTVOFF%3E2.0.CO;2",
+    "atlas": DOI + "10.1175/1520-0469%281953%29010%3C0486:OEBR%3E2.0.CO;2",
+    "garg": DOI + "10.1007/s11263-006-0028-6",
+    "gunn_marshall": DOI + "10.1175/1520-0469%281958%29015%3C0452:TDWSOA%3E2.0.CO;2",
+    "locatelli": DOI + "10.1029/JC079i015p02185",
+    "warren": DOI + "10.1029/RG020i001p00067",
+    "bohren": DOI + "10.1364/JOSA.73.001646",
+    "gultepe": DOI + "10.1007/s00024-007-0211-x",
+    "morton": DOI + "10.1098/rspa.1956.0011",
+    "kolmogorov": DOI + "10.1098/rspa.1991.0075",
+    "tatarskii": "https://openlibrary.org/works/OL187452W",
+    "fried": DOI + "10.1364/JOSA.56.001372",
+    "roggemann": DOI + "10.1201/9780203751282",
+    "greenewalt": "https://librarycatalog.ecu.edu/catalog/62078",
+    "fabian": DOI + "10.1038/s41467-024-44785-3",
+    "prati": DOI + "10.1109/TPAMI.2003.1206520",
+    "roser": DOI + "10.1109/ICCVW.2009.5457650",
+    "halimeh": DOI + "10.1109/IVS.2009.5164347",
+    "you": DOI + "10.1109/TPAMI.2015.2491937",
+    "born": DOI + "10.1017/CBO9781139644181",
+    "hecht": "https://openlibrary.org/works/OL17604034W",
+    "gu": DOI + "10.1145/1661412.1618490",
+    "hullin": DOI + "10.1145/1964921.1965003",
+    "talvala": DOI + "10.1145/1275808.1276424",
+    "mccann": DOI + "10.1117/12.703042",
+    "potmesil": DOI + "10.1145/965161.806818",
+    "zschokke": "https://conservation.unibas.ch/team/zschokke/pdf/zschokke1999joa.pdf",
+    "vollrath": DOI + "10.1038/340305a0",
+    "foelix": "https://openlibrary.org/works/OL19831331W",
+    "libbrecht": DOI + "10.1088/0034-4885/68/4/R03",
+    "ribnick": DOI + "10.1109/AVSS.2006.94",
+    "saglam": DOI + "10.1109/AVSS.2009.29",
+    "gates": DOI + "10.1364/AO.4.000011",
+    "brown": DOI + "10.1109/CVPR.2011.5995637",
+    "emva": "https://www.emva.org/standards-technology/emva-1288/",
+    "healey": DOI + "10.1109/34.276126",
+    "janesick": DOI + "10.1117/3.725073",
+    "bayer": "https://patents.google.com/patent/US3971065A/en",
+    "gunturk": DOI + "10.1109/MSP.2005.1407714",
+    "poplin": DOI + "10.1109/TCE.2006.1649642",
+    "liang": DOI + "10.1109/TIP.2008.925384",
+    "fergus": DOI + "10.1145/1179352.1141956",
+    "wyszecki": "https://openlibrary.org/works/OL5897216W",
+    "durand": DOI + "10.1145/566654.566574",
+    "tomasi": DOI + "10.1109/ICCV.1998.710815",
+    "gastal": DOI + "10.1145/1964921.1964964",
+    "wiegand": DOI + "10.1109/TCSVT.2003.815165",
+    "sullivan": DOI + "10.1109/TCSVT.2012.2221191",
+    "list": DOI + "10.1109/TCSVT.2003.815175",
+    "wang": DOI + "10.1109/5.664283",
+    "poynton": DOI + "10.1016/C2010-0-68987-5",
+    "bt601": "https://www.itu.int/rec/R-REC-BT.601",
+    "bt1700": "https://www.itu.int/rec/R-REC-BT.1700",
+    "depth_anything": "https://arxiv.org/abs/2406.09414",
+    "he": DOI + "10.1109/TPAMI.2010.168",
+    "sakaridis": DOI + "10.1007/s11263-018-1072-8",
+    "quilez": "https://iquilezles.org/articles/fog/",
+    "garg2006": DOI + "10.1145/1141911.1141985",
+    "schlick": DOI + "10.1111/1467-8659.1330233",
+    "you2013": DOI + "10.1109/CVPR.2013.138",
+    "qian": DOI + "10.1109/CVPR.2018.00263",
+    "bebber": "https://tympanus.net/codrops/2015/11/04/rain-water-effect-experiments/",
+}
+
+
+def cite(key: str) -> str:
+    """A source as a line of a reference list: the citation, then where to find it."""
+    link = LINKS[key]
+    label = "link"
+    if link.startswith(DOI):
+        # The DOI as it is written, with the angle brackets some old ones
+        # hold spelt so that Markdown does not take them for a tag.
+        label = "doi:" + link[len(DOI) :].replace("%28", "(").replace("%29", ")")
+        label = label.replace("%3C", "&lt;").replace("%3E", "&gt;")
+    return f"{SOURCES[key]} [{label}]({link})"
+
 
 # A diagram read from docs/how_it_works.md, by the heading it stands under.
 _FROM_GUIDE = "guide:"
@@ -211,11 +319,19 @@ def _flow(*lines: str) -> str:
 PAGES: dict[str, tuple[str, list[str]]] = {
     "RandomFog": (
         _FROM_GUIDE + "Fog — Koschmieder",
-        ["koschmieder", "middleton", "narasimhan2002", "depth_anything"],
+        [
+            "koschmieder",
+            "middleton",
+            "narasimhan2002",
+            "he",
+            "sakaridis",
+            "quilez",
+            "depth_anything",
+        ],
     ),
     "RandomRain": (
         _FROM_GUIDE + "Rain — a volume of drops",
-        ["marshall", "ulbrich", "gunn_kinzer", "garg", "atlas"],
+        ["marshall", "ulbrich", "gunn_kinzer", "garg", "garg2006", "atlas", "schlick"],
     ),
     "RandomSnow": (
         _FROM_GUIDE + "Snow — the same skeleton",
@@ -235,7 +351,7 @@ PAGES: dict[str, tuple[str, list[str]]] = {
             'SPRITE --> GLARE["veiling glare, before clipping"]',
             'GLARE --> OUT(["added to the frame, times the beam, plus backscatter"])',
         ),
-        ["gunn_marshall", "locatelli", "warren", "potmesil"],
+        ["garg", "garg2006", "marshall", "gunn_kinzer"],
     ),
     "NightFog": (
         _flow(
@@ -269,7 +385,7 @@ PAGES: dict[str, tuple[str, list[str]]] = {
             'T --> SOFT["forward scatter: blur by 1 - t"]',
             'SOFT --> OUT(["frame * t + airlight * (1 - t)"])',
         ),
-        ["koschmieder", "gultepe", "narasimhan2002"],
+        ["koschmieder", "gultepe", "narasimhan2002", "quilez"],
     ),
     "LocalPlumes": (
         _flow(
@@ -333,7 +449,7 @@ PAGES: dict[str, tuple[str, list[str]]] = {
     ),
     "WaterDroplets": (
         _FROM_GUIDE + "Water droplets",
-        ["roser", "halimeh", "you", "born"],
+        ["you2013", "you", "halimeh", "roser", "qian", "bebber", "born"],
     ),
     "DirtSoil": (_FROM_GUIDE + "Dirt: scattering", ["gu"]),
     "SunFlare": (_FROM_GUIDE + "Sun flare", ["hullin", "talvala"]),
@@ -759,7 +875,7 @@ def page(name: str) -> str:
 
     parts += ["## References", ""]
     if references:
-        parts += [f"- {SOURCES[key]}" for key in references]
+        parts += [f"- {cite(key)}" for key in references]
     else:
         parts.append("None: this transform models a convention, not a physical process.")
     parts += [

@@ -93,9 +93,9 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 ## References
 
-- Healey, G. E. and Kondepudy, R. (1994). Radiometric CCD camera calibration and noise estimation. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 16(3), 267-276.
-- European Machine Vision Association. *EMVA Standard 1288: Standard for Characterization of Image Sensors and Cameras*.
-- Janesick, J. R. (2007). *Photon Transfer*. SPIE Press.
+- Healey, G. E. and Kondepudy, R. (1994). Radiometric CCD camera calibration and noise estimation. *IEEE Transactions on Pattern Analysis and Machine Intelligence* 16(3), 267-276. [doi:10.1109/34.276126](https://doi.org/10.1109/34.276126)
+- European Machine Vision Association. *EMVA Standard 1288: Standard for Characterization of Image Sensors and Cameras*. [link](https://www.emva.org/standards-technology/emva-1288/)
+- Janesick, J. R. (2007). *Photon Transfer*. SPIE Press. [doi:10.1117/3.725073](https://doi.org/10.1117/3.725073)
 
 ---
 
