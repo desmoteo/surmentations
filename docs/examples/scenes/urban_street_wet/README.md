@@ -49,9 +49,9 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![wet_ground](effects/wet_ground.jpg) |
 
-| snow_cover |  |  |
+| snow_cover | spider_web |  |
 | --- | --- | --- |
-| ![snow_cover](effects/snow_cover.jpg) |  |  |
+| ![snow_cover](effects/snow_cover.jpg) | ![spider_web](effects/spider_web.jpg) |  |
 
 Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
 

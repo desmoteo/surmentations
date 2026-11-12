@@ -348,7 +348,9 @@ all three. What remains is listed under [Not done](#not-done).
   tabled filter. The SSE2 and AVX2 builds (glibc, GCC 13.3), an arm64
   build under QEMU (musl, GCC 13.2) and two on a Jetson Orin NX (glibc, GCC
   11.4 and 14.2) print the same fourteen, the denoise filter's among them,
-  which also holds one C library's `powf` to the other's.
+  which also holds one C library's `powf` to the other's. A fifteenth line,
+  for the discs of `SpiderWeb`, was added later and is the same from SSE2,
+  AVX2 and the Jetson's GCC 11.4; it was not run under QEMU or GCC 14.2.
 - **Against OpenCV and against ffmpeg**, where a kernel or PyAV stands in
   for one of them: tried once on each installation and relied on in exact
   mode only where it gave the same bytes
@@ -828,6 +830,34 @@ One pinned core, fast mode, against the commit before, twelve frames each
   separable approximation of the bilateral filter, closer to exact mode
   than the coarser copy is; that was not tried.
 
+## A transform written with its kernel: `SpiderWeb`
+
+Added after the rounds above, and the first transform here designed with
+both halves at once. A web in front of the lens is drawn as discs of light,
+one for each bead on a thread and a row of them for the thread between:
+eleven thousand discs for a typical frame at 1024 pixels and fifty thousand
+for a web against the glass, from under a pixel to forty across, added and
+not maximised, because light adds.
+
+- **The numpy code is the definition and was written to be followed.**
+  Discs in order of size, a batch of one patch size at a time, a pixel's
+  share worked out in float32 and summed into a float64 field one disc
+  after another (`np.add.at`, which adds in order; `bincount` sums a batch
+  first and differs in the last bit). The kernel (`splat_discs`) does the
+  same arithmetic in the same order, so the field is the same to the last
+  bit and the kernel runs in both modes: a frame does not depend on it, in
+  either mode, on any tier.
+- **What it costs**, on one core, as in the table at the top: 9.7 ms at 512
+  pixels and 35 at 1024 with the kernel, 20 and 69 without. The kernel is a
+  seventh of what is left; the rest is building the web, the frame's
+  conversion out of and into code values, the beam, and two blurs for the
+  glare.
+- **Fast mode differs by the glare alone**: its two blurs run on a reduced
+  copy, as everywhere else. One level at most, in twelve frames at 1280 by
+  960; with no glare the two modes give the same bytes.
+- **ABI 12.** The table gained a member, so a library built before this is
+  ignored until it is rebuilt.
+
 ## arm64, on a Jetson Orin NX
 
 The arm64 half of the second question, answered on the hardware it is for:
@@ -858,7 +888,8 @@ loops, plain C against NEON intrinsics, nanoseconds per value:
   pixels.
 
 **The same pixels.** The hash check prints the same fourteen lines on the
-board, from both compilers, as on x86-64 with SSE2 and AVX2. The kernel and
+board, from both compilers, as on x86-64 with SSE2 and AVX2 (and the
+fifteenth, added with `SpiderWeb`, from the board's own compiler). The kernel and
 mode tests pass on it in both modes. The denoise kernel gives OpenCV's
 bytes there too, so exact mode uses it on arm64 as it does on x86-64.
 
@@ -1303,5 +1334,5 @@ python scripts/benchmark_single_core.py save-depth depth.npz      # where the GP
 # on the board, its core 2 to itself:
 taskset -c 2 python scripts/benchmark_single_core.py run --load-depth depth.npz --out now.json
 taskset -c 2 sh native/experiments/run.sh                         # plain C against NEON
-sh native/check/run.sh                                            # the same fourteen hashes
+sh native/check/run.sh                                            # the same fifteen hashes
 ```

@@ -37,9 +37,9 @@ One representative draw each: the median of seven by how much the frame changed.
 | --- | --- | --- |
 | ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) | ![night_droplets](effects/night_droplets.jpg) |
 
-| sensor_noise | transmission_faults |  |
+| sensor_noise | transmission_faults | spider_web |
 | --- | --- | --- |
-| ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) |  |
+| ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) |
 
 Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow`, `wet_ground`, `snow_cover` — the scene is under a roof.
 

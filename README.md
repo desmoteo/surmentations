@@ -155,6 +155,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | `SunFlare` | Veiling glare, halo, coating-tinted ghost chain, diffraction starburst, dispersion corona, plus CCTV-specific dome scratches, smear and IR leak | no |
 | `SourceGlare` | The same optics on each compact light found in the frame (street lamps, headlights), with strength from the clipped area. Leaves a frame with no lights unchanged | no |
 | `HousingOccluders` | Insects and webs on the dome — hugely magnified and defocused, silhouetted by day, glowing under the IR ring | no |
+| `SpiderWeb` | An orb web a hand's width in front of the lens, lit by the infrared ring: frame, radii and capture spiral in a tilted plane, every thread drawn as the aperture's disc at its own distance, so the near side is bright and blurred wide and the beads of glue and dew read as strings of pearls; loose threads, and the spider at the hub, clipped white. Adds light and hides nothing, which is why a web is invisible by day | no |
 
 ### Sensor, ISP and transmission
 
@@ -215,6 +216,7 @@ and the physics behind it.
 | `SunFlare` | `flare_position`, `intensity_range`, `ghost_count_range`, `aperture_blades_range`, `dispersion_ring_probability`, `scratch_count_range` |
 | `SourceGlare` | `intensity_range` (stands for how far past full scale the lights were), `max_sources_range`, `ghost_count_range`, `streak_probability` |
 | `HousingOccluders` | `insect_count_range`, `insect_size_range`, `web_count_range`, `defocus_range`, `glow_range` (0 by day, >0 under the IR ring) |
+| `SpiderWeb` | `distance_range_m` (hub to lens: nearer is larger, wider-blurred and brighter), `web_radius_range_m`, `tilt_range_deg`, `mesh_spacing_range_mm`, `bead_spacing_range_mm` (against `aperture_diameter_range_mm`: band or pearls), `bead_share_range`, `damage_range`, `illuminator_gain_range`, `stray_thread_count_range`, `spider_probability` |
 | `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range` |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
 | `RollingShutter` | `pan_shift_range_px`, `wobble_amplitude_range_px`, `wobble_cycles_range` |
@@ -373,6 +375,7 @@ Orin NX, and what exact mode costs.
 | `DirtSoil` | 6.4 | 22.9 |
 | `SunFlare` | 6.7 | 21.0 |
 | `VideoCodecArtifacts`, with PyAV | 9.2 | 29.5 |
+| `SpiderWeb` | 9.7 | 35.2 |
 | `SourceGlare` | 11.6 | 38.4 |
 | `TemporalDenoiseArtifacts` | 14.8 | 46.0 |
 | `NightRain` | 20.7 | 53.2 |
@@ -427,7 +430,7 @@ A `DataLoader` worker must keep ahead of the GPU. Rough guidance, at 512 px:
 
 - **Cheap enough to apply liberally** (under ~10 ms): `AcFlicker`,
   `RollingShutter`, `ExposureTransient`, `HousingOccluders`, `SensorNoise`,
-  `NightSnow`, `DirtSoil`, `SunFlare`, `NightIrMode`, and
+  `NightSnow`, `DirtSoil`, `SunFlare`, `SpiderWeb`, `NightIrMode`, and
   `VideoCodecArtifacts` with PyAV.
 - **Moderate** (10-30 ms): `SourceGlare`, `TemporalDenoiseArtifacts`,
   `NightRain`, `WaterDroplets`, `WdrToneMapping`, `TransmissionFaults` with
@@ -582,15 +585,19 @@ full sweep.
 | --- | --- | --- |
 | ![transmission faults](docs/examples/transmission_faults_3.png) | ![wet ground](docs/examples/wet_ground_4.png) | ![snow cover](docs/examples/snow_cover_4.png) |
 
+| A spider's web, far | nearer | against the housing |
+| --- | --- | --- |
+| ![spider web 1](docs/examples/spider_web_0.png) | ![spider web 3](docs/examples/spider_web_2.png) | ![spider web 5](docs/examples/spider_web_4.png) |
+
 The `rain` and `snow` rows raise the ground with the weather, level for
 level, because a row has one axis. `wet_ground` and `snow_cover` hold the
 weather at level 1 and climb `GROUND_SEVERITY` alone: the two are separate
 ladders, and `snow_cover_4` is a light fall over deep snow.
 
-`night_rain` and `night_snow` are rendered over an IR night frame rather than
-the daylit base scene, because their particles are lit by the camera: on a
-sunny road they would be as invisible as `RandomRain`'s streaks, which is the
-finding the transforms exist to answer. `night_droplets` is `WaterDroplets`
+`night_rain`, `night_snow` and `spider_web` are rendered over an IR night
+frame rather than the daylit base scene, because what they draw is lit by the
+camera: on a sunny road it would be as invisible as `RandomRain`'s streaks,
+which is the finding the transforms exist to answer. `night_droplets` is `WaterDroplets`
 over the same frame with `illuminator_glow_range` set, which is how the
 pipelines build it at night. `night_fog` and `source_glare` act on the lights
 in a frame, which the daylit reference does not have, so they are rendered
