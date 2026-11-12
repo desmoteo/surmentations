@@ -11,8 +11,11 @@ this library were found.
 Output goes to ``docs/examples/scenes/<scene>/``::
 
     original.jpg             the scene as rendered from, 800 px wide
+    reading.jpg              its labels and horizon, as a provider reads them
     effects/<effect>.jpg     one representative draw per effect
+    aware/<effect>.jpg       the same draw with scene labels and geometry
     pipelines/<name>_<n>.jpg draws of the pipeline that fits the scene
+    pipelines_aware/...      the same draws with scene labels and geometry
     README.md                the same images as a browsable page
 
 Run from the repo root with ``python docs/generate_scene_examples.py``.
@@ -33,6 +36,16 @@ transforms, which is the point of showing it done:
   night scene, the two effects that act on lamps on the daylit ones, and
   rain and snow under a roof. Nothing in the library works
   that out for itself.
+
+Some of that a provider can now read off the picture for itself
+(:mod:`surmentations.perception`): what each pixel is, where the horizon
+is, and where there are vehicles to judge it by, how high the camera hangs
+and so how many metres the scene is deep. So every effect that depends on
+what the provider knows is rendered twice, from the same parameters and the
+same seed: once with the plain provider and the by-eye values above, and
+once with a provider that also carries scene labels and an estimated
+geometry. Each scene's page shows the pairs side by side, under what the
+second provider read.
 """
 
 from __future__ import annotations
@@ -53,6 +66,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from docs.generate_examples import (  # noqa: E402
+    _GALLERY_DRAWS,
     _NEEDS_FFMPEG,
     EFFECTS,
     GROUND_ROW_WEATHER_LEVEL,
@@ -60,11 +74,15 @@ from docs.generate_examples import (  # noqa: E402
     LAMP_LIT,
     _build,
     _night_base,
-    _render_representative,
     _snowy_night_base,
 )
 from surmentations.camera.codec import ffmpeg_path  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
+from surmentations.perception import (  # noqa: E402
+    GroundPlaneGeometryEstimator,
+    SceneClass,
+    SegmentationLabelEstimator,
+)
 from surmentations.presets import surveillance, surveillance_lite  # noqa: E402
 from surmentations.presets.severity import SEVERITY  # noqa: E402
 from surmentations.utils.precipitation import (  # noqa: E402
@@ -124,6 +142,33 @@ WHY_NOT = {
         "it is turbulence over sunlit ground, which shows over a kilometre or so by day: "
         "this scene is too short, under a roof or at night"
     ),
+}
+
+# The effects whose picture depends on what the provider knows of the scene,
+# and so are rendered a second time with scene labels and geometry: the
+# ones that read the ground, the sky, the camera or the distances. The rest
+# of the lamp-lit rows differ only in the infrared frame under them, which
+# `night_ir` shows.
+COMPARED = (
+    "fog", "rain", "snow", "wet_ground", "snow_cover", "ground_fog", "local_plumes",
+    "heat_shimmer", "cast_shadows", "night_ir", "night_fog", "night_snow",
+)  # fmt: skip
+
+# One colour per scene class, for the label maps.
+LABEL_COLOURS: dict[SceneClass, tuple[int, int, int]] = {
+    SceneClass.OTHER: (40, 40, 40),
+    SceneClass.SKY: (135, 190, 235),
+    SceneClass.ROAD: (105, 105, 110),
+    SceneClass.PAVEMENT: (175, 145, 175),
+    SceneClass.TERRAIN: (150, 120, 70),
+    SceneClass.GRASS: (125, 215, 85),
+    SceneClass.FOLIAGE: (35, 125, 40),
+    SceneClass.STRUCTURE: (150, 85, 65),
+    SceneClass.VEHICLE: (225, 40, 40),
+    SceneClass.PERSON: (250, 215, 40),
+    SceneClass.WATER: (40, 70, 215),
+    SceneClass.POLE: (235, 235, 235),
+    SceneClass.LAMP: (255, 150, 30),
 }
 
 # An open iris, and rain metered for street lighting: see presets/pipelines.py.
@@ -260,6 +305,130 @@ def _pipeline(scene: Scene, provider: SharedDepthProvider) -> tuple[str, Any]:
     )
 
 
+def label_picture(labels: np.ndarray) -> np.ndarray:
+    """A label map as a picture, one colour per scene class."""
+    table = np.zeros((256, 3), dtype=np.uint8)
+    for scene_class, colour in LABEL_COLOURS.items():
+        table[int(scene_class)] = colour
+    return table[labels]
+
+
+def label_legend(width: int) -> np.ndarray:
+    """A strip ``width`` pixels across naming the colours of :func:`label_picture`."""
+    strip = np.full((34, width, 3), 255, dtype=np.uint8)
+    step = width // len(LABEL_COLOURS)
+    for index, (scene_class, colour) in enumerate(LABEL_COLOURS.items()):
+        left = index * step
+        cv2.rectangle(strip, (left + 6, 9), (left + 22, 25), colour, -1)
+        cv2.rectangle(strip, (left + 6, 9), (left + 22, 25), (0, 0, 0), 1)
+        name = scene_class.name.lower()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(strip, name, (left + 27, 23), font, 0.42, (0, 0, 0), 1, cv2.LINE_AA)
+    return strip
+
+
+def draw_horizon(picture: np.ndarray, horizon: float, roll_deg: float) -> None:
+    """Draw a horizon across ``picture``, in place: yellow on black.
+
+    ``horizon`` is its row at the middle column as a fraction of the
+    picture's height, and ``roll_deg`` how far it runs downhill to the right.
+    """
+    height, width = picture.shape[:2]
+    slope = float(np.tan(np.radians(roll_deg)))
+    left = (0, round(horizon * height - 0.5 * width * slope))
+    right = (width - 1, round(horizon * height + 0.5 * width * slope))
+    cv2.line(picture, left, right, (0, 0, 0), 5, cv2.LINE_AA)
+    cv2.line(picture, left, right, (255, 235, 0), 2, cv2.LINE_AA)
+
+
+def _reading(
+    image: np.ndarray, provider: SharedDepthProvider, scene: Scene
+) -> tuple[np.ndarray, list[tuple[str, str]]]:
+    """What a provider with labels and geometry read off a scene: a picture, and a table's rows.
+
+    The picture is the photograph beside its label map, the horizon drawn
+    across both. The rows say what the camera was taken to be, beside the
+    by-eye values the plain provider is given, and what could not be told.
+    """
+    height, width = image.shape[:2]
+    told = provider.describe(image)
+    geometry, camera, metric = told["geometry"], told["camera"], told["metric"]
+    labels = provider.get_labels(image)
+    photograph, named = image.copy(), label_picture(labels)
+    by_eye = f"{scene.camera_pitch_deg:g}°"
+
+    horizon = "not found: no level ground was labelled"
+    pitch = f"not found; the by-eye {by_eye} is used"
+    if geometry.horizon is not None:
+        for picture in (photograph, named):
+            draw_horizon(picture, geometry.horizon, geometry.roll_deg)
+        horizon = f"{geometry.horizon:.2f} of the frame's height from the top"
+        if geometry.horizon_is_bound:
+            horizon += ", or above: there is no sky in the frame to mark it"
+            least = geometry.view(width, height, pitch_deg=-90.0).pitch_deg
+            pitch = f"at least {least:+.0f}°, so the by-eye {by_eye} stands"
+        else:
+            pitch = f"{camera.pitch_deg:+.0f}° (by eye: {by_eye})"
+    tall = "not found: fewer than three usable vehicles or people in view"
+    if geometry.height_m is not None:
+        tall = f"{geometry.height_m:.0f} m, from the vehicles and people in view"
+    depth = "the by-eye range above: there is no height to measure from"
+    if metric is not None:
+        metres = provider.get_metric_depth(image)[labels != int(SceneClass.SKY)]
+        near, far = np.percentile(metres, [1.0, 99.0])
+        depth = f"in metres from the camera's height: {near:.0f} m to {far:.0f} m"
+    elif geometry.height_m is not None:
+        depth = "the by-eye range above: the height needs a pitch to measure with"
+    shares = sorted(told["label_shares"].items(), key=lambda item: -item[1])
+    named_shares = ", ".join(f"{name.lower()} {share:.0%}" for name, share in shares[:6])
+
+    rows = [
+        ("Field of view", f"{camera.horizontal_fov_deg:.0f}°, assumed: a picture does not tell it"),
+        ("Horizon", horizon),
+        ("Camera pitch below level", pitch),
+        ("Roll", f"{geometry.roll_deg:+.1f}°"),
+        ("Camera height", tall),
+        ("Depth", depth),
+        ("Labels", named_shares),
+    ]
+    pair = np.hstack([photograph, named])
+    return np.vstack([pair, label_legend(pair.shape[1])]), rows
+
+
+def _representative(
+    transform: Any, base: np.ndarray, rng: np.random.Generator
+) -> tuple[np.ndarray, int]:
+    """One representative draw of a transform, and the seed it was drawn with.
+
+    As ``generate_examples._render_representative``: seven seeds from
+    ``rng``, and the draw kept is the median by how much it changed the
+    frame. The seed is returned so that the same draw can be made again
+    over a provider that knows more, and what differs between the two is
+    then what the provider knew.
+    """
+    reference = base.astype(np.float32)
+    candidates = []
+    for _ in range(_GALLERY_DRAWS):
+        seed = int(rng.integers(0, 2**31 - 1))
+        transform.set_random_seed(seed)
+        out = transform(image=base)["image"]
+        candidates.append((float(np.abs(out.astype(np.float32) - reference).mean()), seed, out))
+    candidates.sort(key=lambda entry: entry[0])
+    _change, seed, out = candidates[len(candidates) // 2]
+    return out, seed
+
+
+def _base(effect: str, image: np.ndarray, provider: SharedDepthProvider, scene: Scene) -> Any:
+    """The frame an effect is drawn over: the scene, or its infrared night for a lamp-lit one."""
+    if effect == "night_snow":
+        # Over the snow that has settled, as the pipelines draw it.
+        pitch = scene.camera_pitch_deg
+        return _snowy_night_base(image, provider, SEVERITY_LEVEL, (pitch, pitch))
+    if effect in LAMP_LIT:
+        return _night_base(image, provider, SEVERITY_LEVEL)
+    return image
+
+
 def _load(path: Path) -> np.ndarray:
     """A sample scene as RGB, :data:`WIDTH_PX` across."""
     image = cv2.imread(str(path))
@@ -314,12 +483,17 @@ def _scene_readme(
     effects: list[str],
     skipped: dict[str, list[str]],
     pipeline_name: str,
+    reading: list[tuple[str, str]],
+    pipeline_compared: bool,
 ) -> str:
     """The page for one scene: its source, how it was described to the transforms, and its images.
 
     The distances, the fog and veil limits, and which effects were left out
     and why, are stated with the images, since they decide how the effects
-    look.
+    look. ``reading`` is what a provider with labels and geometry read off
+    the scene, as rows of a table; the effects in :data:`COMPARED` are shown
+    as pairs, without it and with it, and so are the pipeline's draws when
+    ``pipeline_compared``.
     """
     near, far = scene.depth_range_m
     fog_m, rain_m, snow_m = (
@@ -349,28 +523,74 @@ def _scene_readme(
         f"| Fog | visibility {fog_m:g} m ({FOG_VISIBILITY:g} x the farthest point) |",
         f"| Rain and snow veils | capped so visibility stays above {rain_m:g} m and {snow_m:g} m |",
         "",
-        f"## Effects at severity {SEVERITY_LEVEL}",
+        "## What a provider with scene labels and geometry read off it",
+        "",
+        "The photograph and its label map, with the horizon the geometry estimator",
+        "found drawn across both. See",
+        "[scene understanding](../../../scene_understanding.md) for how each is made",
+        "and how far to trust it.",
+        "",
+        "![labels and horizon](reading.jpg)",
+        "",
+        "| | |",
+        "| --- | --- |",
+        *(f"| {name} | {value} |" for name, value in reading),
+        "",
+        "## Without and with it",
+        "",
+        "Every effect that depends on what the provider knows, twice: on the left with",
+        "the plain provider and the by-eye values above, on the right with the provider",
+        "that read the scene. The parameters and the seed are the same, so what differs",
+        "is what the labels and the geometry changed.",
+        "",
+    ]
+    compared = [effect for effect in effects if effect in COMPARED]
+    for effect in compared:
+        pair = [
+            (f"`{effect}` without", f"effects/{effect}.jpg"),
+            (f"`{effect}` with", f"aware/{effect}.jpg"),
+        ]
+        lines += _table(pair, columns=2)
+    others = [effect for effect in effects if effect not in COMPARED]
+    lines += [
+        f"## The other effects at severity {SEVERITY_LEVEL}",
         "",
         "One representative draw each: the median of seven by how much the frame changed.",
+        "These do not read the scene, and are the same with either provider.",
         "",
-        *_table([(effect, f"effects/{effect}.jpg") for effect in effects]),
+        *_table([(effect, f"effects/{effect}.jpg") for effect in others]),
     ]
     for reason, names in skipped.items():
         listed = ", ".join(f"`{name}`" for name in names)
         lines += [f"Not rendered: {listed} — {reason}.", ""]
-    lines += [
-        f"## `{pipeline_name}` pipeline",
-        "",
-        f"{PIPELINE_DRAWS} consecutive draws. Each is a different combination of effects.",
-        "",
-        *_table(
-            [
-                (f"draw {index}", f"pipelines/{pipeline_name}_{index}.jpg")
-                for index in range(PIPELINE_DRAWS)
-            ],
-            columns=2,
-        ),
-    ]
+    lines += [f"## `{pipeline_name}` pipeline", ""]
+    if pipeline_compared:
+        lines += [
+            f"{PIPELINE_DRAWS} consecutive draws, each a different combination of effects:",
+            "on the left with the plain provider, on the right the same draw with the",
+            "provider that read the scene.",
+            "",
+        ]
+        for index in range(PIPELINE_DRAWS):
+            name_ = f"{pipeline_name}_{index}.jpg"
+            pair = [
+                (f"draw {index} without", f"pipelines/{name_}"),
+                (f"draw {index} with", f"pipelines_aware/{name_}"),
+            ]
+            lines += _table(pair, columns=2)
+    else:
+        lines += [
+            f"{PIPELINE_DRAWS} consecutive draws. Each is a different combination of effects.",
+            "This pipeline takes no depth provider, so there is nothing to compare.",
+            "",
+            *_table(
+                [
+                    (f"draw {index}", f"pipelines/{pipeline_name}_{index}.jpg")
+                    for index in range(PIPELINE_DRAWS)
+                ],
+                columns=2,
+            ),
+        ]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -390,6 +610,11 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "street and blanks a landscape, so fog is set by visibility as a fraction of the",
         "scene's depth and the veils of rain and snow are capped the same way.",
         "",
+        "Each page then shows what a provider with",
+        "[scene labels and geometry](../../scene_understanding.md) read off the scene",
+        "for itself, and every effect that depends on it twice, side by side: without",
+        "it and with it, from the same parameters and the same seed.",
+        "",
         "Regenerate with `python docs/generate_scene_examples.py` (needs a CUDA GPU).",
         "The inputs are in [`sample_scenes/`](../../../sample_scenes/), with their authors",
         "and licences in [`SOURCES.md`](../../../sample_scenes/SOURCES.md). The images here",
@@ -407,10 +632,14 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "",
         "## What these show that is not right",
         "",
-        "They are unretouched output, and some of it is wrong in ways worth knowing:",
+        "They are unretouched output, and some of it is wrong in ways worth knowing.",
+        "Where the provider's labels or geometry change the answer, the right-hand",
+        "picture of each pair shows it:",
         "",
         "- **Wet ground is level ground that is not green.** Vegetation is left dry;",
-        "  bare soil, gravel and roofs seen from above still get a film of water.",
+        "  bare soil, gravel and roofs seen from above still get a film of water. With",
+        "  labels it is also kept off what is named as a vehicle, a person, a tree or a",
+        "  lawn, and laid on what is named as paving.",
         "- **A car's reflection is drawn straight below it.** That is right for a",
         "  road running away from the camera and wrong looking across the traffic,",
         "  where the reflection lies to one side. Tall things, such as walls and",
@@ -431,9 +660,18 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "  shifted, never a car where it was two seconds ago.",
         "- **Depth is relative and stretched to the range it is given.** The facades in",
         "  `urban_street_wet` are placed further away than they are, so its fog is",
-        "  heavier than the stated visibility would make it.",
+        "  heavier than the stated visibility would make it. Where the estimator finds",
+        "  the camera's height, depth is in metres measured from it instead, and a",
+        "  veil set for the by-eye range can then be far too thick or too thin: the",
+        "  parameters of each pair are deliberately the same.",
         "- **Wet ground stops at a few hundred metres.** Beyond that, level ground is",
-        "  taken to be terrain; a distant wet road loses its sheen with it.",
+        "  taken to be terrain; a distant wet road loses its sheen with it, unless it",
+        "  is labelled as a road.",
+        "- **Labels are a network's opinion.** It names the crossing in `crosswalk_day`,",
+        "  seen from straight above, a building; nothing is dried or bared on its",
+        "  word alone, which is why that scene's pairs hardly differ.",
+        "- **The camera's height is a rough estimate**, from the sizes of the vehicles",
+        "  and people in view, and every distance scales with it.",
         "- **Flakes close to an infrared lamp are very large.** `night_snow` draws the",
         "  nearest ones as long white bars.",
     ]
@@ -453,6 +691,7 @@ def main() -> None:
         raise SystemExit(f"No entry in sample_scenes/SOURCES.md for: {missing}")
 
     estimator = DepthAnythingV2Estimator()
+    labeller = SegmentationLabelEstimator()
     names = [n for n in EFFECTS if n not in _NEEDS_FFMPEG or ffmpeg_path() is not None]
     if len(names) != len(EFFECTS):
         print("ffmpeg not found; skipping the video-codec examples")
@@ -466,37 +705,80 @@ def main() -> None:
         rng = np.random.default_rng(sum(scene_name.encode()))
         _save(out / "original.jpg", image)
 
+        # First everything with the plain provider, and only then the
+        # second one: a transform with no provider of its own asks whichever
+        # provider holds the frame, and must not be answered here by one
+        # these pictures are meant to be without.
         rendered: list[str] = []
         skipped: dict[str, list[str]] = {}
+        twins: list[tuple[str, dict[str, Any], dict[str, Any], int]] = []
         for effect in names:
             reason = _why_not(effect, scene)
             if reason is not None:
                 skipped.setdefault(reason, []).append(effect)
                 continue
-            transform = _build(
-                effect, SEVERITY_LEVEL, VARIANT, rng, provider, _overrides(effect, scene)
-            )
-            base = image
-            if effect in LAMP_LIT:
-                base = _night_base(image, provider, SEVERITY_LEVEL)
-            if effect == "night_snow":
-                # Over the snow that has settled, as the pipelines draw it.
-                pitch = scene.camera_pitch_deg
-                base = _snowy_night_base(image, provider, SEVERITY_LEVEL, (pitch, pitch))
-            _save(out / "effects" / f"{effect}.jpg", _render_representative(transform, base, rng))
+            overrides = _overrides(effect, scene)
+            # The generator as it stood, so that the twin can be built from
+            # it and draw the very parameters this one does.
+            before = rng.bit_generator.state
+            transform = _build(effect, SEVERITY_LEVEL, VARIANT, rng, provider, overrides)
+            drawn, seed = _representative(transform, _base(effect, image, provider, scene), rng)
+            _save(out / "effects" / f"{effect}.jpg", drawn)
             rendered.append(effect)
+            if effect in COMPARED:
+                twins.append((effect, overrides, before, seed))
 
         pipeline_name, pipeline = _pipeline(scene, provider)
         if not isinstance(pipeline, A.Compose):
             raise TypeError(f"{pipeline_name} did not return a Compose")
-        pipeline.set_random_seed(int(rng.integers(0, 2**31 - 1)))
+        pipeline_seed = int(rng.integers(0, 2**31 - 1))
+        pipeline.set_random_seed(pipeline_seed)
         for index in range(PIPELINE_DRAWS):
             _save(
                 out / "pipelines" / f"{pipeline_name}_{index}.jpg", pipeline(image=image)["image"]
             )
 
+        # Then the twin, which reads the scene's labels and geometry as
+        # well. It is given the same by-eye distances, and uses them
+        # wherever the camera's height cannot be found.
+        aware = SharedDepthProvider(
+            estimator,
+            depth_range_m=scene.depth_range_m,
+            labels=labeller,
+            geometry=GroundPlaneGeometryEstimator(),
+        )
+        picture, reading = _reading(image, aware, scene)
+        _save(out / "reading.jpg", picture)
+        for effect, overrides, before, seed in twins:
+            twin_rng = np.random.default_rng()
+            twin_rng.bit_generator.state = before
+            twin = _build(effect, SEVERITY_LEVEL, VARIANT, twin_rng, aware, overrides)
+            twin.set_random_seed(seed)
+            again = twin(image=_base(effect, image, aware, scene))["image"]
+            _save(out / "aware" / f"{effect}.jpg", again)
+
+        # The pipeline that takes a provider is drawn again over the twin.
+        pipeline_compared = pipeline_name == "surveillance"
+        if pipeline_compared:
+            _name, twin_pipeline = _pipeline(scene, aware)
+            twin_pipeline.set_random_seed(pipeline_seed)
+            for index in range(PIPELINE_DRAWS):
+                _save(
+                    out / "pipelines_aware" / f"{pipeline_name}_{index}.jpg",
+                    twin_pipeline(image=image)["image"],
+                )
+
         (out / "README.md").write_text(
-            _scene_readme(scene_name, scene, sources[scene_name], rendered, skipped, pipeline_name)
+            _scene_readme(
+                scene_name,
+                scene,
+                sources[scene_name],
+                rendered,
+                skipped,
+                pipeline_name,
+                reading,
+                pipeline_compared,
+            )
         )
 
     (OUT_DIR / "README.md").write_text(_index_readme(sources))

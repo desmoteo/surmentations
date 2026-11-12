@@ -14,6 +14,7 @@ import pytest
 
 from docs.generate_examples import EFFECTS
 from docs.generate_scene_examples import (
+    COMPARED,
     FOG_VISIBILITY,
     KOSCHMIEDER,
     PIPELINE_DRAWS,
@@ -71,9 +72,36 @@ def test_a_scene_page_shows_what_was_rendered(name: str) -> None:
             assert not image.exists(), f"{name}: {effect} does not apply but has an image"
             assert f"`{effect}`" in page, f"{name}: {effect} was skipped without saying so"
     assert len(list((folder / "pipelines").glob("*.jpg"))) == PIPELINE_DRAWS
+    # The pipeline that takes a depth provider is drawn a second time over
+    # one that read the scene; the other has nothing to compare.
+    twice = "surveillance" if not (scene.night or scene.sheltered) else None
+    again = list((folder / "pipelines_aware").glob("*.jpg"))
+    assert len(again) == (PIPELINE_DRAWS if twice else 0)
+    for path in again:
+        assert f"pipelines_aware/{path.name}" in page
     assert not [path for path in folder.rglob("*.jpg") if path.name not in page], (
         f"{name}: an image on disk is not shown on the page"
     )
+
+
+@pytest.mark.parametrize("name", sorted(SCENES))
+def test_a_scene_page_compares_what_the_provider_s_reading_changes(name: str) -> None:
+    """What a provider with labels and geometry read off the scene is shown,
+    and every effect that depends on it is there twice: an effect's second
+    picture exists exactly when the effect applies and reads the scene."""
+    scene, folder = SCENES[name], SCENES_OUT / name
+    page = (folder / "README.md").read_text()
+    assert (folder / "reading.jpg").is_file() and "(reading.jpg)" in page
+    for row in ("Field of view", "Horizon", "Camera pitch below level", "Camera height", "Depth"):
+        assert f"| {row} |" in page, f"{name}: the page does not say what was read for {row!r}"
+    for effect in EFFECTS:
+        image = folder / "aware" / f"{effect}.jpg"
+        if effect in COMPARED and _why_not(effect, scene) is None:
+            assert image.is_file(), f"{name}: {effect} was not rendered a second time"
+            assert f"aware/{effect}.jpg" in page and f"`{effect}` without" in page
+        else:
+            assert not image.exists(), f"{name}: {effect} has a second picture it should not"
+    assert set(COMPARED) <= set(EFFECTS)
 
 
 @pytest.mark.parametrize("page", PAGES, ids=lambda path: str(path.relative_to(REPO)))

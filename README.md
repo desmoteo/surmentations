@@ -55,7 +55,9 @@ than exposed.
   source: every module, class, function and C declaration. See
   [Development](#development) for building it.
 - **[`docs/examples/scenes/`](docs/examples/scenes/README.md)** — every
-  effect over eight photographs of different scenes, one page each.
+  effect over eight photographs of different scenes, one page each, with
+  the effects that read the scene shown side by side without and with scene
+  labels and geometry.
 - **[`plan.md`](plan.md)** — design record and roadmap.
 
 ---
@@ -718,7 +720,11 @@ covered car park, a real night street, mountains across a valley — are in
 [`docs/examples/scenes/`](docs/examples/scenes/README.md), one page per scene,
 with the shipped pipelines run over each. That set is the place to look for
 where the models stop fitting, and each page says what the transforms had to
-be told about the scene to get there.
+be told about the scene to get there. Each page also shows what a provider
+with [scene labels and geometry](docs/scene_understanding.md) read off the
+scene for itself, its labels with the horizon drawn across them, and every
+effect that depends on that reading twice: without it and with it, from the
+same parameters and the same seed.
 
 Each cell shows the **median of seven draws**, not the first: effects that can
 legitimately draw themselves out of existence otherwise produce a cell the
