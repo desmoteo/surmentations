@@ -34,6 +34,22 @@ _EDGE_FILL_TOLERANCE = 0.08
 # to be right to the tolerance above. See `wide_blur`.
 _EDGE_FILL_WORK_SIGMA = 4.0
 
+# What stands on the ground. The ground around a pixel is averaged over a
+# window this fraction of the diagonal in sigma; a pixel nearer than that
+# average by the first share is the start of something standing there and by
+# the second all of it, and by the next pair is one whatever it looks like.
+_OBJECT_WINDOW = 0.03
+_OBJECT_NEARER = (0.02, 0.06)
+_OBJECT_FOR_CERTAIN = (0.08, 0.14)
+# How far round such a pixel the object is looked for, as a fraction of the
+# diagonal, and how unlike the road there a pixel has to be to belong to it:
+# the largest difference between the logarithms of its channels and the
+# road's, where it starts to count and where it counts in full.
+_OBJECT_REACH = 0.02
+_OBJECT_UNLIKE = (0.35, 0.6)
+# The shorter side, in pixels, below which the frame is not reduced first.
+_OBJECT_FULL_SIZE = 320
+
 # Noise tile that ground patterns are cut from, in pixels and in cells.
 _TILE_PX = 256
 _TILE_CELLS = 8
@@ -100,6 +116,81 @@ def fill_to_edges(ground: np.ndarray, linear_rgb: np.ndarray) -> np.ndarray:
     distance = channel_max(np.abs(linear_rgb - colour))
     alike = np.clip(2.0 - distance / _EDGE_FILL_TOLERANCE, 0.0, 1.0)
     return np.maximum(ground, grown * alike * (weight > 0.02)).astype(np.float32)
+
+
+def _ground_average(values: np.ndarray, ground: np.ndarray, sigma: float) -> np.ndarray:
+    """The average of ``values`` over the ground near each pixel, by ``ground``'s weight."""
+    # An average that only has to be right to a few per cent: blurred coarsely.
+    coarse = _EDGE_FILL_WORK_SIGMA
+    weight = wide_blur(ground, sigma, work_sigma=coarse)
+    if values.ndim == 3:
+        total = wide_blur(values * ground[..., None], sigma, work_sigma=coarse)
+        return (total / np.maximum(weight, 1e-3)[..., None]).astype(np.float32)
+    total = wide_blur(values * ground, sigma, work_sigma=coarse)
+    return (total / np.maximum(weight, 1e-3)).astype(np.float32)
+
+
+def standing_objects(depth_m: np.ndarray, linear_rgb: np.ndarray, ground: np.ndarray) -> np.ndarray:
+    """``[0, 1]`` weight of what stands on the ground and was read as part of it.
+
+    A car a hundred metres off is forty pixels of a depth map that was
+    estimated at five hundred, and its roof, bonnet and sides come out as
+    one smooth bump with the orientation of the road it stands on. Nothing
+    in a surface normal tells it from road, and a wet road then darkened
+    every vehicle on it and laid reflections over them.
+
+    Two things do tell it, and neither alone. The bump itself: the car is
+    **nearer than the ground around it**, by a few per cent, where a lamp's
+    pool of light, a shadow or a reflection already in the road is not. And
+    its look: within reach of such a bump, what is **unlike the road beside
+    it** is the object, and what is like it is the road at its foot, which
+    the depth map's soft edges would otherwise take with it and leave as a
+    dry rim round every wheel. The look alone was tried: it also took out
+    the dark half of a road lit by one lamp, and the reflections on a road
+    that was wet to begin with.
+
+    ``ground`` is the weight of level ground as found so far. The ground's
+    distance is taken out row by row before anything is compared, because
+    ground a row down the frame is nearer by nature, and an average taken at
+    the frame's bottom edge has only further ground to draw on.
+    """
+    height, width = ground.shape
+    # Every step below is an average over a few per cent of the frame, of
+    # things a car's size or more: in fast mode it is all done on a copy
+    # half the size, and the weight is enlarged.
+    if mode.fast() and min(height, width) >= _OBJECT_FULL_SIZE:
+        half = (width // 2, height // 2)
+        small = standing_objects(
+            cv2.resize(depth_m.astype(np.float32), half, interpolation=cv2.INTER_AREA),
+            cv2.resize(linear_rgb, half, interpolation=cv2.INTER_AREA),
+            cv2.resize(ground, half, interpolation=cv2.INTER_AREA),
+        )
+        enlarged = cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
+        return np.clip(enlarged, 0.0, 1.0).astype(np.float32)
+    diagonal = float(np.hypot(height, width))
+    weight = np.maximum(ground, 1e-3).astype(np.float32)
+    log_depth = np.log(np.maximum(depth_m, 1e-6)).astype(np.float32)
+    by_row = (log_depth * weight).sum(axis=1) / weight.sum(axis=1)
+    relief = log_depth - by_row.reshape(height, 1).astype(np.float32)
+    nearer = _ground_average(relief, weight, _OBJECT_WINDOW * diagonal) - relief
+
+    def ramp(value: np.ndarray, bounds: tuple[float, float]) -> np.ndarray:
+        """0 below the first bound, 1 above the second."""
+        return np.clip((value - bounds[0]) / (bounds[1] - bounds[0]), 0.0, 1.0).astype(np.float32)
+
+    reach = max(3, round(_OBJECT_REACH * diagonal) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
+    near = cv2.dilate(ramp(nearer, _OBJECT_NEARER), kernel)
+    near = cv2.GaussianBlur(near, (0, 0), sigmaX=0.25 * reach)
+
+    # Compared a little out of focus, so that the grain of a road is not
+    # taken for a difference, and with a floor under the logarithm, so that
+    # the noise in a night frame's blacks is not either.
+    soft = cv2.GaussianBlur(linear_rgb, (0, 0), sigmaX=1.0)
+    floor = np.float32(0.02 * float(soft.mean()) + 1e-4)
+    road = _ground_average(soft, weight * (1.0 - near), 0.04 * diagonal)
+    unlike = ramp(channel_max(np.abs(np.log((soft + floor) / (road + floor)))), _OBJECT_UNLIKE)
+    return np.maximum(ramp(nearer, _OBJECT_FOR_CERTAIN), near * unlike).astype(np.float32)
 
 
 def ground_noise(
