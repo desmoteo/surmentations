@@ -417,9 +417,14 @@ def _infrared_night(
     streaks are already in infrared terms. Fog still goes before it: it veils
     the *scene*, and the sensor then sees the veiled scene.
 
-    Snow is split in two for the same reason. Its veil and whatever has
-    settled belong to the scene and go before the conversion; the falling
-    flakes are lit by the lamp and come after it, as `NightSnow`. Left to
+    Rain and snow are each split in two for the same reason. The veil, and
+    the road that is wet or the snow that has settled, belong to the scene
+    and go before the conversion, drawn by `RandomRain` and `RandomSnow`
+    with no streaks and no flakes; what is falling is lit by the lamp and
+    comes after it, as `NightRain` and `NightSnow`. The rain arm used to be
+    `NightRain` alone, over a road as dry as the photograph's: a wet road
+    is darker to an infrared camera than a dry one, its film throwing the
+    lamp's light on down the road and away from the lens. Left to
     `RandomSnow` alone they went through the conversion with everything else
     and were lit by the depth of whatever was *behind* them, which made a
     flake in front of the sky as dark as the sky.
@@ -452,6 +457,13 @@ def _infrared_night(
         [
             A.Sequential(
                 _with(
+                    _at(
+                        RandomRain, "RandomRain", 1.0, weather_severity,
+                        # Veil and wet road only; the streaks are NightRain's.
+                        depth_provider=depth_provider, max_streaks=0,
+                        overcast_range=(0.0, 0.0),
+                        **_ground("RandomRain", ground_severity),
+                    ),
                     ir,
                     _at(NightRain, "NightRain", 1.0, weather_severity),
                     _droplets(wet_rain),

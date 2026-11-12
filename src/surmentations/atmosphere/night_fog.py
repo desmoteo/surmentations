@@ -59,7 +59,7 @@ from surmentations.lens.dirt import scatter_psf
 from surmentations.utils.channels import channel_sum
 from surmentations.utils.color import TYPICAL_SCENE_ALBEDO
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
-from surmentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
+from surmentations.utils.sky import lift_sky, scene_extent_m, sky_to_depth_edge, sky_weight
 from surmentations.utils.sources import light_field, source_mask
 
 # Koschmieder: visibility is the distance at which contrast falls to 2%.
@@ -91,6 +91,10 @@ class NightFog(CameraTransform):
 
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
+        visibility_range_scene: visibility as a multiple of the scene's
+            depth, in place of ``visibility_range_m``: the same fog on a
+            courtyard and on a long street. See ``RandomFog``. ``None``, the
+            default, uses ``visibility_range_m``.
         visibility_range_m: meteorological visibility, drawn per call on a
             log scale. 1000 m is mist, 200 m fog, 50 m dense fog. It has to
             be read against the provider's ``depth_range_m``: 200 m of
@@ -122,6 +126,14 @@ class NightFog(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(5.0, 50000.0)),
         ]
+        visibility_range_scene: (
+            Annotated[
+                tuple[float, float],
+                AfterValidator(nondecreasing),
+                AfterValidator(check_range_bounds(0.01, 100.0)),
+            ]
+            | None
+        )
         glow_radius_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -145,6 +157,7 @@ class NightFog(CameraTransform):
         glow_radius_range: tuple[float, float] = (0.02, 0.06),
         illuminator_backscatter_range: tuple[float, float] = (0.0, 0.0),
         beam_falloff_range: tuple[float, float] = (0.6, 2.2),
+        visibility_range_scene: tuple[float, float] | None = None,
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -156,6 +169,7 @@ class NightFog(CameraTransform):
         super().__init__(p=p)
         self.depth_provider = require_depth_provider(depth_provider, cls_name=type(self).__name__)
         self.visibility_range_m = visibility_range_m
+        self.visibility_range_scene = visibility_range_scene
         self.glow_radius_range = glow_radius_range
         self.illuminator_backscatter_range = illuminator_backscatter_range
         self.beam_falloff_range = beam_falloff_range
@@ -182,6 +196,10 @@ class NightFog(CameraTransform):
         depth_m = lift_sky(self.depth_provider.to_metric(relative_depth), sky)
 
         low, high = self.visibility_range_m
+        if self.visibility_range_scene is not None:
+            # Against the scene and not in metres; see `RandomFog`.
+            extent = scene_extent_m(depth_m, sky)
+            low, high = (factor * extent for factor in self.visibility_range_scene)
         visibility = float(np.exp(self.py_random.uniform(np.log(low), np.log(high))))
         beta = _KOSCHMIEDER / visibility
         backscatter = self.py_random.uniform(*self.illuminator_backscatter_range)

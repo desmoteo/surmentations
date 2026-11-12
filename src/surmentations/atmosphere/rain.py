@@ -117,7 +117,13 @@ from surmentations.utils.precipitation import (
     sample_resolvable_particles,
     width_cut_for_budget,
 )
-from surmentations.utils.sky import lift_sky, sky_to_depth_edge, sky_weight
+from surmentations.utils.sky import (
+    extinction_for_visibility,
+    lift_sky,
+    scene_extent_m,
+    sky_to_depth_edge,
+    sky_weight,
+)
 from surmentations.utils.sources import lamp_mask, light_sources
 
 # Width of the sensor the field of view is taken across, for turning an
@@ -312,6 +318,13 @@ class RandomRain(CameraTransform):
             rain rate cannot make one call unboundedly slow.
         min_streak_width_px: drops projecting narrower than this are not drawn
             individually — they are what the veil represents.
+        min_visibility_scene: the least visibility the veil may leave, as a
+            multiple of the scene's depth, or ``None`` for no limit. The
+            veil follows from the precipitation rate, per metre, which is
+            right and which over a long view hides the far end of the
+            scene outright: 1.5 lets the veil thin the distance without
+            ever closing it. The scene's depth is the distance of the
+            farthest thing in it that is not sky.
         veil_beta_range: extinction coefficient for the distant rain veil.
             ``None`` (the default) derives it from ``rain_rate_mm_h`` via the
             Atlas (1953) visibility-in-rain relation, which is the physically
@@ -463,6 +476,7 @@ class RandomRain(CameraTransform):
             ]
             | None
         )
+        min_visibility_scene: float | None = Field(default=None, gt=0.0, le=100.0)
         wetness_probability: float = Field(ge=0.0, le=1.0)
         wetness_darkening_range: Annotated[
             tuple[float, float],
@@ -510,6 +524,7 @@ class RandomRain(CameraTransform):
         wobble_range: tuple[float, float] = (0.05, 0.2),
         definition_softness: float = 0.45,
         veil_beta_range: tuple[float, float] | None = None,
+        min_visibility_scene: float | None = None,
         wetness_probability: float = 0.4,
         wetness_darkening_range: tuple[float, float] = (0.4, 0.9),
         wetness_falloff_range: tuple[float, float] = (4.0, 9.0),
@@ -543,6 +558,7 @@ class RandomRain(CameraTransform):
         self.wobble_range = wobble_range
         self.definition_softness = definition_softness
         self.veil_beta_range = veil_beta_range
+        self.min_visibility_scene = min_visibility_scene
         self.wetness_probability = wetness_probability
         self.wetness_darkening_range = wetness_darkening_range
         self.wetness_falloff_range = wetness_falloff_range
@@ -626,6 +642,10 @@ class RandomRain(CameraTransform):
         )
 
         veil_beta = self.py_random.uniform(*self._veil_beta_bounds(rain_rate))
+        if self.min_visibility_scene is not None:
+            # Never thicker than leaves the far end of this scene in view.
+            floor = self.min_visibility_scene * scene_extent_m(depth_pm, sky)
+            veil_beta = min(veil_beta, extinction_for_visibility(floor))
         exposure, aperture_m, f_number, illuminance = self._exposure(horizontal_fov)
         wind_angle = self.py_random.uniform(*self.wind_angle_range)
         angle_jitter = self.py_random.uniform(*self.angle_jitter_range)

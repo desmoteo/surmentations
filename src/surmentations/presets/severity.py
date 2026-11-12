@@ -416,8 +416,10 @@ def _build_ground() -> dict[int, dict[str, dict[str, Any]]]:
                 # darker and nothing else, and a soaked one reflects.
                 "wetness_darkening_range": (_lerp(0.82, 0.4, t), _lerp(0.9, 0.55, t)),
                 # Standing water, which needs the film: none on a damp road
-                # whatever this says, and up to half of a soaked one.
-                "puddle_coverage_range": (_lerp(0.0, 0.3, t), _lerp(0.1, 0.55, t)),
+                # whatever this says, and up to a third of a soaked one.
+                # It went up to half, and a road half under water is a
+                # flood: at night its puddles were most of what was seen.
+                "puddle_coverage_range": (_lerp(0.0, 0.15, t), _lerp(0.1, 0.35, t)),
             },
             "RandomSnow": {
                 "accumulation_probability": 1.0,

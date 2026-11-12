@@ -170,19 +170,40 @@ def test_night_rain_replaces_daylight_rain_under_infrared() -> None:
 
     `NightRain` follows the reflectance-to-infrared conversion because its
     streaks are already in infrared terms; `RandomRain` precedes the sensor
-    because its streaks take the sky's radiance. A frame must get one or the
-    other, never both, and the night one only ever alongside `NightIrMode`.
+    because its streaks take the sky's radiance. A frame must get one set of
+    streaks or the other, never both, and the night one only ever alongside
+    `NightIrMode`.
+
+    Rain under infrared is split as snow is: `RandomRain` still comes first,
+    for the veil and the wet road, which belong to the scene, and is built
+    to draw no streaks of its own. It used to be left out altogether, and
+    the lamp-lit rain fell on a road as dry as the photograph's.
     """
-    drawn = _draws(surveillance(SharedDepthProvider(_GroundPlane()), rain=0.12), samples=900)
-    night_rain = [s for s in drawn if "NightRain" in s]
+    transform = surveillance(SharedDepthProvider(_GroundPlane()), rain=0.12)
+    transform.set_random_seed(5)
+    image = np.full((96, 96, 3), 120, dtype=np.uint8)
+    night_rain, day_rain = [], []
+    for _ in range(900):
+        with recording() as log:
+            transform(image=image)
+        fired = {record["t"]: record for record in log}
+        if "NightRain" in fired:
+            night_rain.append(fired)
+        elif "RandomRain" in fired:
+            day_rain.append(fired)
     assert night_rain, "NightRain never fired; the IR-night branch is not wired up"
-    assert all("NightIrMode" in s for s in night_rain), (
+    assert all("NightIrMode" in fired for fired in night_rain), (
         "NightRain fired on a frame with no infrared conversion, which is the "
         "one condition that makes it physically meaningful"
     )
-    assert not any("RandomRain" in s for s in night_rain), (
-        "a frame got both the daylight and the illuminated rain model"
+    assert all("RandomRain" in fired for fired in night_rain), (
+        "lamp-lit rain with no veil and no chance of a wet road under it"
     )
+    assert all(fired["RandomRain"]["init"]["max_streaks"] == 0 for fired in night_rain), (
+        "a frame got both the daylight and the illuminated rain model's streaks"
+    )
+    assert any(fired["RandomRain"]["drew"]["draw_wetness"] for fired in night_rain)
+    assert day_rain and all(fired["RandomRain"]["init"]["max_streaks"] > 0 for fired in day_rain)
 
 
 def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
