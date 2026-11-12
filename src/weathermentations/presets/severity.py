@@ -280,6 +280,14 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "web_count_range": (0, int(_lerp(1, 3, t))),
                 "opacity_range": (_lerp(0.3, 0.6, t), _lerp(0.6, 1.0, t)),
             },
+            "SpiderWeb": {
+                # Severity is how near the web is. Nearer, it takes more of
+                # the frame, its discs are wider and the lamp lights it
+                # harder, all at once; the gain climbs with it so that the
+                # bottom rung is a faint lace and the top one a white-out.
+                "distance_range_m": (_lerp(0.12, 0.04, t), _lerp(0.22, 0.09, t)),
+                "illuminator_gain_range": (_lerp(0.2, 0.5, t), _lerp(0.45, 1.5, t)),
+            },
             "CastShadows": {
                 # At least two. A figure's shadow covers a fifth of what a
                 # crown's does, so a single draw can be one thin figure on

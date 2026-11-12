@@ -9,6 +9,7 @@ weathermentations.lens
 weathermentations.lens.dirt
 weathermentations.lens.occluders
 weathermentations.lens.source_glare
+weathermentations.lens.spider_web
 weathermentations.lens.sun_flare
 weathermentations.lens.water_droplets
 ```

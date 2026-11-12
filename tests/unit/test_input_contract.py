@@ -49,7 +49,7 @@ from weathermentations.camera import (
 from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.scene import CastShadows
 
 
@@ -82,6 +82,7 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),
     "HousingOccluders": lambda: HousingOccluders(p=1.0),
+    "SpiderWeb": lambda: SpiderWeb(p=1.0),
     "AcFlicker": lambda: AcFlicker(p=1.0),
     "RollingShutter": lambda: RollingShutter(p=1.0),
     "SensorNoise": lambda: SensorNoise(p=1.0),

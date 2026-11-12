@@ -57,6 +57,7 @@ __all__ = [
     "render_streaks",
     "set_enabled",
     "set_tier",
+    "splat_discs",
     "mirror_rows",
     "tier",
     "tiers",
@@ -68,7 +69,7 @@ __all__ = [
 
 # Must match WM_ABI_VERSION in native/wm_kernels.h. A library left over from
 # an older checkout is ignored, not called with the wrong arguments.
-_ABI_VERSION = 11
+_ABI_VERSION = 12
 
 _pointer = ctypes.c_void_p
 _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
@@ -113,6 +114,10 @@ _SIGNATURES: dict[str, tuple[Any, list[Any]]] = {
         + [ctypes.c_double] * 2,
     ),
     "wm_droplet_composite": (None, [_pointer] * 5 + [ctypes.c_ssize_t]),
+    "wm_splat_discs": (
+        None,
+        [_pointer] + [ctypes.c_ssize_t] * 2 + [_pointer] * 5 + [ctypes.c_ssize_t],
+    ),
     "wm_mirror_rows": (
         ctypes.c_int,
         [_pointer, ctypes.c_ssize_t, ctypes.c_ssize_t, ctypes.c_double, _pointer, _pointer],
@@ -923,3 +928,41 @@ def droplet_composite(
         pixels,
     )
     return out
+
+
+def splat_discs(
+    total: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    radius: np.ndarray,
+    weight: np.ndarray,
+    order: np.ndarray,
+) -> bool:
+    """Add a field of discs of light into ``total``; ``False`` if not done.
+
+    ``total`` is ``(H, W)`` float64 and is added to in place. Disc ``i`` is
+    centred on ``(x[i], y[i])`` with ``radius[i]`` and holds ``weight[i]``,
+    all float32; the discs are taken in ``order``, int64. The arithmetic of
+    ``spider_web.splat_discs``, so the same field to the last bit.
+    """
+    if not _enabled:
+        return False
+    if total.dtype != np.float64 or total.ndim != 2 or not total.flags.c_contiguous:
+        return False
+    columns = [x, y, radius, weight]
+    if any(c.dtype != np.float32 or c.ndim != 1 or len(c) != len(x) for c in columns):
+        return False
+    if order.dtype != np.int64 or order.ndim != 1:
+        return False
+    assert _library is not None
+    columns = [np.ascontiguousarray(c) for c in columns]
+    taken = np.ascontiguousarray(order)
+    _library.wm_splat_discs(
+        total.ctypes.data,
+        total.shape[0],
+        total.shape[1],
+        *(c.ctypes.data for c in columns),
+        taken.ctypes.data,
+        len(taken),
+    )
+    return True

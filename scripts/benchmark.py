@@ -72,6 +72,7 @@ from weathermentations.lens import (  # noqa: E402
     DirtSoil,
     HousingOccluders,
     SourceGlare,
+    SpiderWeb,
     SunFlare,
     WaterDroplets,
 )
@@ -137,6 +138,7 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         # Lit by the camera rather than the scene, so it needs no depth.
         "night_rain": NightRain(p=1.0),
         "night_snow": NightSnow(p=1.0),
+        "spider_web": SpiderWeb(p=1.0),
     }
     # Two ffmpeg subprocesses per call, so it is both the slowest transform
     # here and the one whose cost is least about this library.
