@@ -414,7 +414,11 @@ def _build_ground() -> dict[int, dict[str, dict[str, Any]]]:
                 # Wet ground's albedo relative to dry: 0.9 is damp, 0.5
                 # soaked. The mirror follows from it, so a damp road is
                 # darker and nothing else, and a soaked one reflects.
-                "wetness_darkening_range": (_lerp(0.82, 0.4, t), _lerp(0.9, 0.55, t)),
+                # The top was 0.4-0.55, and a soaked road came out as a
+                # dry one a shade darker. Aged asphalt measures 0.12-0.18
+                # dry and 0.05-0.07 wet, a ratio of 0.35-0.45, and the road
+                # in a sunlit photograph has further to fall than that.
+                "wetness_darkening_range": (_lerp(0.82, 0.3, t), _lerp(0.9, 0.45, t)),
                 # Standing water, which needs the film: none on a damp road
                 # whatever this says, and up to a third of a soaked one.
                 # It went up to half, and a road half under water is a

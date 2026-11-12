@@ -47,6 +47,14 @@ _OBJECT_FOR_CERTAIN = (0.08, 0.14)
 # road's, where it starts to count and where it counts in full.
 _OBJECT_REACH = 0.02
 _OBJECT_UNLIKE = (0.35, 0.6)
+# What is too small for a depth map to show standing on the ground. The
+# road round a pixel is averaged over a window this fraction of the diagonal
+# in sigma, and a pixel whose channels differ from that average by more than
+# the first of these, as a logarithm, begins to count as a thing on the road
+# and by the second counts in full: a factor of about one and a half to two.
+_SMALL_THING_WINDOW = 0.015
+_SMALL_THING_UNLIKE = (0.4, 0.7)
+
 # The shorter side, in pixels, below which the frame is not reduced first.
 _OBJECT_FULL_SIZE = 320
 
@@ -191,6 +199,47 @@ def standing_objects(depth_m: np.ndarray, linear_rgb: np.ndarray, ground: np.nda
     road = _ground_average(soft, weight * (1.0 - near), 0.04 * diagonal)
     unlike = ramp(channel_max(np.abs(np.log((soft + floor) / (road + floor)))), _OBJECT_UNLIKE)
     return np.maximum(ramp(nearer, _OBJECT_FOR_CERTAIN), near * unlike).astype(np.float32)
+
+
+def small_things(linear_rgb: np.ndarray, ground: np.ndarray) -> np.ndarray:
+    """``[0, 1]`` weight of small things on the ground that are not the ground, ``(H, W)``.
+
+    A car four hundred metres off is a dozen pixels, and no depth map shows
+    it standing: :func:`standing_objects` needs a bump to start from. But
+    the far end of a wet road is where it is most nearly a mirror, and a
+    mirror laid over those dozen pixels takes the car out of the picture.
+    What a thing that small still is, is unlike the road *immediately* round
+    it: so this is every pixel that differs from the average of the ground
+    within a few of its own widths.
+
+    It is deliberately a test of small things. Told nothing about size, the
+    look of a pixel also takes out the dark half of a road lit by one lamp
+    and the reflections on a road that was wet to begin with; those are
+    broad, and an average taken this close goes with them. It does keep a
+    lane marking as it is, which under a film at a grazing angle really
+    fades into the sheen, and is kept here because a marking that has been
+    painted over is a worse fault in a training frame than one too clear.
+    """
+    height, width = ground.shape
+    # On a copy half the size in fast mode, as `standing_objects` is: a
+    # thing a dozen pixels across is still six, and the comparison is of
+    # averages.
+    if mode.fast() and min(height, width) >= _OBJECT_FULL_SIZE:
+        half = (width // 2, height // 2)
+        small = small_things(
+            cv2.resize(linear_rgb, half, interpolation=cv2.INTER_AREA),
+            cv2.resize(ground, half, interpolation=cv2.INTER_AREA),
+        )
+        enlarged = cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
+        return np.clip(enlarged, 0.0, 1.0).astype(np.float32)
+    diagonal = float(np.hypot(height, width))
+    soft = cv2.GaussianBlur(linear_rgb, (0, 0), sigmaX=1.0)
+    floor = np.float32(0.02 * float(soft.mean()) + 1e-4)
+    weight = np.maximum(ground, 1e-3).astype(np.float32)
+    road = _ground_average(soft, weight, max(2.0, _SMALL_THING_WINDOW * diagonal))
+    unlike = channel_max(np.abs(np.log((soft + floor) / (road + floor))))
+    low, high = _SMALL_THING_UNLIKE
+    return np.clip((unlike - low) / (high - low), 0.0, 1.0).astype(np.float32)
 
 
 def ground_noise(

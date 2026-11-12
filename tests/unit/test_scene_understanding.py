@@ -637,3 +637,18 @@ def test_night_fog_takes_its_visibility_against_the_scene_too() -> None:
         with recording() as log:
             fog(image=image)
         assert log[0]["drew"]["visibility_m"] == pytest.approx(0.6 * far_m, rel=1e-3)
+
+
+def test_a_real_lamp_s_ragged_outline_is_still_a_lamp() -> None:
+    """At the frame's own resolution a lamp is its fitting and the flare
+    round it, and fills a third of its bounding box. Asked to fill it as a
+    disc does, every lamp of a night street failed, and a wet road
+    reflected none of them."""
+    linear = np.full((200, 300, 3), 0.05, dtype=np.float32)
+    cv2.circle(linear, (100, 60), 5, (1.0, 1.0, 1.0), -1)
+    cv2.line(linear, (88, 48), (112, 72), (1.0, 1.0, 1.0), 2)  # flare across it
+    cv2.line(linear, (88, 72), (112, 48), (1.0, 1.0, 1.0), 2)
+    linear[150:156, 20:120] = 1.0  # a lit kerb, twenty times longer than wide
+    mask = lamp_mask(linear)
+    assert float(mask[60, 100]) == 1.0 and float(mask[50, 90]) == 1.0
+    assert float(mask[153, 70]) == 0.0
