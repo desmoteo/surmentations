@@ -38,6 +38,11 @@ _STAGE_ORDER: dict[str, int] = {
     "WaterDroplets": 2,
     "DirtSoil": 2,
     "HousingOccluders": 2,
+    # More that sits on the housing or hangs in front of it.
+    "FrostOnGlass": 2,
+    "SnowOnHousing": 2,
+    "LensTamper": 2,
+    "FoliageIntrusion": 2,
     "SunFlare": 3,
     # The same optics, on the lights that are in the frame.
     "SourceGlare": 3,

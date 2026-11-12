@@ -301,6 +301,27 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "intensity_range": (_lerp(0.03, 0.3, t), _lerp(0.1, 0.9, t)),
                 "veil_range": (_lerp(0.0, 0.02, t), _lerp(0.005, 0.08, t)),
             },
+            "FrostOnGlass": {
+                # Frost that has had longer to grow: further in from the rim
+                # and thicker where it is.
+                "coverage_range": (_lerp(0.15, 0.7, t), _lerp(0.35, 1.1, t)),
+                "thickness_range": (_lerp(0.3, 1.5, t), _lerp(0.8, 3.5, t)),
+            },
+            "SnowOnHousing": {
+                # A deeper cap, and more stuck to the glass.
+                "cap_depth_range": (_lerp(0.04, 0.3, t), _lerp(0.12, 0.6, t)),
+                "patch_count_range": (0, int(_lerp(1, 6, t))),
+            },
+            "LensTamper": {
+                # More of the lens covered, more thoroughly.
+                "coverage_range": (_lerp(0.05, 0.5, t), _lerp(0.2, 1.0, t)),
+                "opacity_range": (_lerp(0.6, 0.9, t), _lerp(0.9, 1.0, t)),
+            },
+            "FoliageIntrusion": {
+                # More branches, reaching further in.
+                "branch_count_range": (1, int(_lerp(1, 5, t))),
+                "reach_range": (_lerp(0.15, 0.5, t), _lerp(0.35, 1.0, t)),
+            },
             "CastShadows": {
                 # At least two. A figure's shadow covers a fifth of what a
                 # crown's does, so a single draw can be one thin figure on
