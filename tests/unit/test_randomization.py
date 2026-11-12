@@ -36,10 +36,13 @@ from weathermentations.camera import (
 from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.demosaic import DemosaicArtifacts
 from weathermentations.camera.ir_cut import IrCutFilterFault
+from weathermentations.camera.overlay import OnScreenOverlay
+from weathermentations.camera.vibration import CameraVibration
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.focus import FocusShift
 from weathermentations.lens.foliage import FoliageIntrusion
 from weathermentations.lens.frost import FrostOnGlass
 from weathermentations.lens.snow_cap import SnowOnHousing
@@ -60,6 +63,10 @@ ALLOWED_SCALARS = {
     "ir_leak_probability",
     "window_ghost_probability",
     "spider_probability",
+    "timestamp_probability",
+    "label_probability",
+    # A rule about annotations, not a quantity of the scene.
+    "hidden_box_coverage",
     # Render budget / quality, not physics. Varying these would make cost and
     # fidelity random rather than the weather.
     "max_streaks",
@@ -146,6 +153,9 @@ def _transforms() -> dict[str, Any]:
         "TemporalDenoiseArtifacts": TemporalDenoiseArtifacts(p=1.0),
         "NightIrMode": NightIrMode(depth_provider=provider, p=1.0),
         "HousingOccluders": HousingOccluders(p=1.0, insect_count_range=(2, 5)),
+        "OnScreenOverlay": OnScreenOverlay(p=1.0),
+        "CameraVibration": CameraVibration(p=1.0),
+        "FocusShift": FocusShift(p=1.0, focus_distance_range_m=(0.02, 0.2)),
         "AnalogVideoArtifacts": AnalogVideoArtifacts(p=1.0),
         "DemosaicArtifacts": DemosaicArtifacts(p=1.0),
         "IrCutFilterFault": IrCutFilterFault(p=1.0),

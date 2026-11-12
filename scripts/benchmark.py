@@ -68,6 +68,8 @@ from weathermentations.camera.analog import AnalogVideoArtifacts  # noqa: E402
 from weathermentations.camera.codec import ffmpeg_path  # noqa: E402
 from weathermentations.camera.demosaic import DemosaicArtifacts  # noqa: E402
 from weathermentations.camera.ir_cut import IrCutFilterFault  # noqa: E402
+from weathermentations.camera.overlay import OnScreenOverlay  # noqa: E402
+from weathermentations.camera.vibration import CameraVibration  # noqa: E402
 from weathermentations.depth import (  # noqa: E402
     DepthAnythingV2Estimator,
     SharedDepthProvider,
@@ -81,6 +83,7 @@ from weathermentations.lens import (  # noqa: E402
     WaterDroplets,
 )
 from weathermentations.lens.dome_glare import IrDomeGlare  # noqa: E402
+from weathermentations.lens.focus import FocusShift  # noqa: E402
 from weathermentations.lens.foliage import FoliageIntrusion  # noqa: E402
 from weathermentations.lens.frost import FrostOnGlass  # noqa: E402
 from weathermentations.lens.snow_cap import SnowOnHousing  # noqa: E402
@@ -148,6 +151,9 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
         "night_rain": NightRain(p=1.0),
         "night_snow": NightSnow(p=1.0),
         "spider_web": SpiderWeb(p=1.0),
+        "on_screen_overlay": OnScreenOverlay(p=1.0),
+        "camera_vibration": CameraVibration(p=1.0),
+        "focus_shift": FocusShift(p=1.0),
         "analog_video_artifacts": AnalogVideoArtifacts(p=1.0),
         "demosaic_artifacts": DemosaicArtifacts(p=1.0),
         "ir_cut_filter_fault": IrCutFilterFault(p=1.0),

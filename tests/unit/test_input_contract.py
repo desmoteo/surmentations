@@ -51,10 +51,13 @@ from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.camera.demosaic import DemosaicArtifacts
 from weathermentations.camera.ir_cut import IrCutFilterFault
+from weathermentations.camera.overlay import OnScreenOverlay
+from weathermentations.camera.vibration import CameraVibration
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
 from weathermentations.lens.dome_glare import IrDomeGlare
+from weathermentations.lens.focus import FocusShift
 from weathermentations.lens.foliage import FoliageIntrusion
 from weathermentations.lens.frost import FrostOnGlass
 from weathermentations.lens.snow_cap import SnowOnHousing
@@ -91,6 +94,10 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),
     "HousingOccluders": lambda: HousingOccluders(p=1.0),
+    "OnScreenOverlay": lambda: OnScreenOverlay(p=1.0),
+    "CameraVibration": lambda: CameraVibration(p=1.0),
+    # Focused very near: on a frame this small a milder error is under a pixel.
+    "FocusShift": lambda: FocusShift(p=1.0, focus_distance_range_m=(0.03, 0.06)),
     "AnalogVideoArtifacts": lambda: AnalogVideoArtifacts(p=1.0),
     "DemosaicArtifacts": lambda: DemosaicArtifacts(p=1.0),
     "IrCutFilterFault": lambda: IrCutFilterFault(p=1.0),

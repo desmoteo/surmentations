@@ -14,18 +14,22 @@ from weathermentations.camera.exposure import ExposureTransient
 from weathermentations.camera.flicker import AcFlicker
 from weathermentations.camera.ir_cut import IrCutFilterFault
 from weathermentations.camera.night_ir import NightIrMode
+from weathermentations.camera.overlay import OnScreenOverlay
 from weathermentations.camera.rolling_shutter import RollingShutter
 from weathermentations.camera.sensor_noise import SensorNoise
 from weathermentations.camera.tone_mapping import WdrToneMapping
 from weathermentations.camera.transmission import TransmissionFaults
+from weathermentations.camera.vibration import CameraVibration
 
 __all__ = [
     "AcFlicker",
     "AnalogVideoArtifacts",
+    "CameraVibration",
     "DemosaicArtifacts",
     "ExposureTransient",
     "IrCutFilterFault",
     "NightIrMode",
+    "OnScreenOverlay",
     "RollingShutter",
     "SensorNoise",
     "TemporalDenoiseArtifacts",
