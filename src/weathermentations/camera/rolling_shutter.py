@@ -67,10 +67,10 @@ class RollingShutter(WeatherTransform):
         any channel count and bit depth OpenCV can resample
     """
 
-    # The only transform in the library that moves pixels, so the only one
-    # whose annotations have to move with them. Left image-only — as it was —
-    # a 30 px shear moved the picture 29 px and left the mask and the boxes
-    # where they were.
+    # It moves pixels, so its annotations have to move with them; so does
+    # `CameraVibration`, and no other transform here. Left image-only — as
+    # it was — a 30 px shear moved the picture 29 px and left the mask and
+    # the boxes where they were.
     _targets = (Targets.IMAGE, Targets.MASK, Targets.BBOXES, Targets.KEYPOINTS)
 
     # Rows are displaced, so depth estimated before this no longer lines up

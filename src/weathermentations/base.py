@@ -1,10 +1,13 @@
 """Shared conventions for all weathermentations transforms.
 
-Every effect in this library is an appearance-only change (fog, rain, snow,
-lens dirt, water droplets, sun flare all leave scene geometry untouched), so
-every transform subclasses Albumentations' ``ImageOnlyTransform``: masks,
-bounding boxes and keypoints pass through ``Compose`` unmodified with no
-extra code here.
+Nearly every effect in this library is an appearance-only change (fog, rain,
+snow, lens dirt, water droplets, sun flare all leave scene geometry
+untouched), so the base class subclasses Albumentations'
+``ImageOnlyTransform``: masks, bounding boxes and keypoints pass through
+``Compose`` unmodified with no extra code here. The three that do more
+declare it themselves: ``RollingShutter`` and ``CameraVibration`` move
+pixels and their annotations with them, and ``OnScreenOverlay`` drops the
+boxes its privacy masks hide.
 
 Conventions used throughout this library (matching Albumentations 2.x):
 
@@ -64,7 +67,7 @@ class WeatherTransform(ImageOnlyTransform):
     is off. See ``diagnostics.py`` for why the draws are worth recording
     separately from the rendered image.
 
-    Two more things are handled here once rather than in sixteen places:
+    Two more things are handled here once rather than in every transform:
 
     * **Input is checked before anything is sampled.** Every effect is a
       statement about RGB radiance, so the image must be ``(H, W, 3)`` and

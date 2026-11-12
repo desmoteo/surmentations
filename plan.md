@@ -1734,3 +1734,16 @@ with the measurement and the unit test checks CRF monotonicity instead.
 
 The codec's cost is two process spawns and will not come down without a
 library binding (PyAV); keep its ``p`` low rather than paying it per sample.
+
+---
+
+## After this plan
+
+Everything above was built. What came after it is recorded where it was
+done: the compiled kernels and the fast and exact modes in
+[`docs/native_kernels.md`](docs/native_kernels.md), and the sixteen
+transforms added since (from `SpiderWeb` to `HeatShimmer`) in
+[`docs/proposed_augmentations.md`](docs/proposed_augmentations.md), with
+the one fact each is built on in [`docs/how_it_works.md`](docs/how_it_works.md).
+The module layout and the timings in this file are those of the plan's
+own time; the README has the current ones.

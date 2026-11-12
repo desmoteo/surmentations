@@ -1,10 +1,23 @@
 # weathermentations
 
+![weathermentations: physically grounded weather, lens and camera augmentations](docs/assets/social_banner.png)
+
 Albumentations-compatible, physically-grounded augmentations for training
-models that run on real camera feeds: weather (rain, snow, fog), lens
-artifacts (water droplets, dirt, flare, insects on the housing), and the
-sensor/ISP/codec chain that degrades a CCTV stream far more often than
-weather does.
+models that run on real camera feeds. Thirty-seven transforms, in four
+groups:
+
+- **weather and scene**: rain, snow and fog by day and under the camera's
+  own lamp, fog lying on the ground, steam, heat shimmer, cast shadows,
+  insects in the beam;
+- **lens and housing**: water, dirt, flare and glare, frost, snow, a
+  spider's web, a branch, a lens out of focus or tampered with;
+- **sensor and processor**: night infrared and its filter, noise, flicker,
+  rolling shutter, vibration, the mosaic, exposure, tone mapping,
+  denoising;
+- **the link**: a real codec, packet loss, an analog cable, and what the
+  recorder writes over the picture.
+
+The last three degrade a CCTV stream far more often than weather does.
 
 Effects are parameterised by **physical quantities** — a rain rate in mm/h, a
 drop diameter in millimetres, a shutter time in seconds — not opaque 0-1
@@ -27,8 +40,13 @@ than exposed.
   compiled kernels: what was moved to C and why, what it bought, and why
   there is no hand-written SIMD.
 - **[`docs/proposed_augmentations.md`](docs/proposed_augmentations.md)** —
-  effects not yet built, in the order to build them, each with its model,
-  its place in the chain and what would show it works.
+  the effects that were proposed and have since been built, each with its
+  model, what was done differently, and the checklist for adding another.
+- **[`docs/site/`](docs/site/)** — the code reference, generated from the
+  source: every module, class, function and C declaration. See
+  [Development](#development) for building it.
+- **[`docs/examples/scenes/`](docs/examples/scenes/README.md)** — every
+  effect over eight photographs of different scenes, one page each.
 - **[`plan.md`](plan.md)** — design record and roadmap.
 
 ---
@@ -173,7 +191,7 @@ falling back to a CPU path slow enough to blow a training-step budget.
 | --- | --- | --- |
 | `NightIrMode` | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise | yes |
 | `AcFlicker` | Mains banding. Cancels exactly when the exposure is a whole number of flicker periods — the basis of a camera's anti-flicker setting | no |
-| `RollingShutter` | Row-dependent shear and wobble from camera motion during readout. The one transform that moves pixels, so masks, boxes and keypoints move with it | no |
+| `RollingShutter` | Row-dependent shear and wobble from camera motion during readout. One of the two transforms that move pixels, with `CameraVibration`, so masks, boxes and keypoints move with it | no |
 | `SensorNoise` | Shot and read noise in photoelectrons, set by sensor gain, drawn on the Bayer mosaic and demosaiced, so the grain is coarse and coloured as in a real low-light frame | no |
 | `ExposureTransient` | AE/AWB caught mid-correction. White-balance error is the ratio of two blackbody colours, so it stays on the blue-orange axis real illuminants vary on | no |
 | `WdrToneMapping` | Local tone mapping, with the black halos a cheap edge-preserving filter leaves | no |
@@ -286,8 +304,17 @@ which span the whole physically plausible range — `RandomRain` reaches
 200 mm/h, a tropical cloudburst, where severity 1 is 2-12 mm/h. Those wide
 defaults are right for exploring one transform and wrong for stacking three.
 
-Measured at 512 px: `surveillance` 124 ms median, `surveillance_lite` 78 ms
-and no GPU. A typical frame keeps 75-81% of its high-frequency detail.
+Measured at 512 px on one core: `surveillance` 47 ms at the median and 219
+at the 90th percentile, `surveillance_lite` 20 and 175 with no GPU. The
+slow frames are the ones the codec fires on, through ffmpeg there; with
+PyAV installed they are not. A typical frame keeps 75-81% of its
+high-frequency detail.
+
+The pipelines hold the transforms they were designed with. The sixteen
+added since, from `SpiderWeb` to `HeatShimmer`, are not in them: each needs
+a probability that says how often it happens on *your* cameras, which is a
+fact about a deployment. Add the ones you want with
+[`physical_order`](#composition-order), which knows where each belongs.
 
 Two arguments are worth knowing beside `severity`. `ground_severity` (0-5)
 fixes how wet the road is under rain and how much snow has settled; left
@@ -361,6 +388,20 @@ transform = A.Compose(physical_order([
 It sorts a *list*; it does not build the `Compose`, so you keep control of
 probabilities and seeding. Sorting is stable, so transforms sharing a stage
 keep the order you gave them.
+
+Two things it knows that are easy to get wrong by hand. What the camera
+lights itself (`NightRain`, `NightSnow`, `NightFog`, `NightInsects`,
+`SpiderWeb`, `IrDomeGlare`) goes **after** `NightIrMode`: that light is
+already in the sensor's terms, and converted with the scene it would be
+lit by the depth of whatever is behind it. And `OnScreenOverlay` goes
+before the codec when the camera draws it and after the link when the
+recorder does, by its `drawn_by`.
+
+The transforms that sit on the housing and can be lit either way
+(`WaterDroplets`, `HousingOccluders`, `FrostOnGlass`, `SnowOnHousing`,
+`LensTamper`, `FoliageIntrusion`) sort with the optics. Under the infrared
+ring, give them their glow or illuminator gain and place them after
+`NightIrMode` yourself, as the pipelines do for water.
 
 ### Seeding
 
@@ -572,10 +613,19 @@ camera looking at one scene. Nothing *advances* between frames, though — rain
 streaks sit in the same place in each — so this gives consistent conditions
 across a clip, not motion.
 
-**Annotations.** Every effect but one changes appearance only, so masks,
-boxes and keypoints pass through untouched. `RollingShutter` moves pixels and
-moves its annotations with them: masks are resampled, boxes become the box
-enclosing the sheared original, keypoints follow.
+**Annotations.** Nearly every effect changes appearance only, so masks,
+boxes and keypoints pass through untouched. The exceptions:
+
+- `RollingShutter` and `CameraVibration` move pixels and move their
+  annotations with them: masks are resampled, boxes follow (for a shear,
+  the box enclosing the sheared original), keypoints follow.
+- `OnScreenOverlay` drops a box that its privacy masks cover by
+  `hidden_box_coverage` (0.9) of its area, since what was in it is gone.
+- `LensTamper`, `SnowOnHousing` and `FoliageIntrusion` hide part of the
+  scene and leave annotations alone: whether an object behind a branch is
+  still a positive is your decision.
+- `HeatShimmer` and `AnalogVideoArtifacts` displace pixels by a pixel or
+  two, a few at most, and do not move annotations.
 
 **Input is RGB, `uint8` or float in `[0, 1]`.** Anything else — greyscale,
 RGBA, 16-bit — is refused with an error before any parameter is sampled,

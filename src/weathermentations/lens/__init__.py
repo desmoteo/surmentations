@@ -1,8 +1,10 @@
 """What is on or in front of the lens, and what the lens does with bright light.
 
-Dirt, water, insects and webs on the housing; a web across it, lit by the
-illuminator; the flare of the sun and of the frame's own lamps. None of these
-needs a depth map.
+On the glass: water, dirt, frost, snow, paint or tape. On the housing or
+just in front of it: insects, a spider's web, a branch. In the lens: the
+flare of the sun and of the frame's own lamps, the illuminator's
+reflection in the dome, and a focus that has drifted. None of these needs
+a depth map; ``FocusShift`` uses one if it is given.
 """
 
 from weathermentations.lens.dirt import DirtSoil

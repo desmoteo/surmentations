@@ -13,8 +13,11 @@ is the honest counterweight, including the places where it did not.
 
 ## 1. The shape of the library
 
-Every effect is an Albumentations `ImageOnlyTransform`. They divide into
-those that need to know how far away things are, and those that do not.
+Every effect is an Albumentations transform, and all but three are
+image-only: `RollingShutter` and `CameraVibration` move pixels and carry
+masks, boxes and keypoints with them, and `OnScreenOverlay` drops the
+boxes its privacy masks hide. They divide into those that need to know
+how far away things are, and those that do not.
 
 ```mermaid
 flowchart TD
@@ -26,7 +29,7 @@ flowchart TD
         SW[SpiderWeb]
         ON["More on the housing<br/>IrDomeGlare, FrostOnGlass, SnowOnHousing,<br/>LensTamper, FoliageIntrusion, FocusShift"]
         LIT["Lit by the camera at night<br/>NightRain, NightSnow, NightInsects"]
-        CAM["Camera / ISP / link<br/>14 transforms"]
+        CAM["Camera / ISP / link<br/>13 transforms"]
     end
     subgraph depthful["Depth-conditioned — needs CUDA"]
         FOG[RandomFog]

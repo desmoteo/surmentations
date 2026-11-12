@@ -1,6 +1,6 @@
 # Atmosphere
 
-Fog, rain and snow, by day and under lamps.
+Fog, rain and snow, by day and under lamps; fog on the ground, steam, heat shimmer, and insects in the beam.
 
 ```{toctree}
 :maxdepth: 1
