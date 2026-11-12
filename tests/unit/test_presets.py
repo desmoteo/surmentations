@@ -7,6 +7,7 @@ import pytest
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_fog import NightFog
+from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
@@ -26,6 +27,7 @@ from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
+from weathermentations.lens.dome_glare import IrDomeGlare
 from weathermentations.lens.source_glare import SourceGlare
 from weathermentations.presets.severity import SEVERITY
 from weathermentations.scene import CastShadows
@@ -40,6 +42,8 @@ _DEPTH_FREE = {
     "SunFlare": SunFlare,
     "SourceGlare": SourceGlare,
     "HousingOccluders": HousingOccluders,
+    "IrDomeGlare": IrDomeGlare,
+    "NightInsects": NightInsects,
     "SpiderWeb": SpiderWeb,
     "AcFlicker": AcFlicker,
     "RollingShutter": RollingShutter,

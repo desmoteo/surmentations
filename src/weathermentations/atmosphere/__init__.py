@@ -9,9 +9,18 @@ the camera (:class:`NightRain`, :class:`NightSnow`) do not, and
 
 from weathermentations.atmosphere.fog import RandomFog
 from weathermentations.atmosphere.night_fog import NightFog
+from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.atmosphere.night_rain import NightRain
 from weathermentations.atmosphere.night_snow import NightSnow
 from weathermentations.atmosphere.rain import RandomRain
 from weathermentations.atmosphere.snow import RandomSnow
 
-__all__ = ["NightFog", "NightRain", "NightSnow", "RandomFog", "RandomRain", "RandomSnow"]
+__all__ = [
+    "NightFog",
+    "NightInsects",
+    "NightRain",
+    "NightSnow",
+    "RandomFog",
+    "RandomRain",
+    "RandomSnow",
+]

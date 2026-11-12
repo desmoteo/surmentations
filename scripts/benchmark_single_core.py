@@ -84,6 +84,8 @@ LABELS = {
     "night_ir": "`NightIrMode`",
     "housing_occluders": "`HousingOccluders`",
     "spider_web": "`SpiderWeb`",
+    "ir_dome_glare": "`IrDomeGlare`",
+    "night_insects": "`NightInsects`",
     "dirt_soil": "`DirtSoil`",
     "sun_flare": "`SunFlare`",
     "source_glare": "`SourceGlare`",

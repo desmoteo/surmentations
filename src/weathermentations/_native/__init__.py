@@ -943,7 +943,7 @@ def splat_discs(
     ``total`` is ``(H, W)`` float64 and is added to in place. Disc ``i`` is
     centred on ``(x[i], y[i])`` with ``radius[i]`` and holds ``weight[i]``,
     all float32; the discs are taken in ``order``, int64. The arithmetic of
-    ``spider_web.splat_discs``, so the same field to the last bit.
+    ``illuminator.splat_discs``, so the same field to the last bit.
     """
     if not _enabled:
         return False

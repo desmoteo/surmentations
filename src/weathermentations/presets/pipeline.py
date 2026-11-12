@@ -58,6 +58,10 @@ _STAGE_ORDER: dict[str, int] = {
     # in front of everything, and still after the infrared conversion, which
     # would otherwise light it by the depth of the scene behind it.
     "SpiderWeb": 5,
+    # Insects and dust in the beam, and the beam's own reflection in the
+    # dome: the camera's light again, so after the conversion.
+    "NightInsects": 5,
+    "IrDomeGlare": 5,
     "AcFlicker": 6,
     "RollingShutter": 6,
     "SensorNoise": 6,

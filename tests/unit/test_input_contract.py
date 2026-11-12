@@ -35,6 +35,7 @@ from weathermentations.atmosphere import (
     RandomRain,
     RandomSnow,
 )
+from weathermentations.atmosphere.night_insects import NightInsects
 from weathermentations.camera import (
     AcFlicker,
     ExposureTransient,
@@ -50,6 +51,7 @@ from weathermentations.camera.codec import ffmpeg_path
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
+from weathermentations.lens.dome_glare import IrDomeGlare
 from weathermentations.scene import CastShadows
 
 
@@ -82,6 +84,8 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),
     "HousingOccluders": lambda: HousingOccluders(p=1.0),
+    "IrDomeGlare": lambda: IrDomeGlare(p=1.0),
+    "NightInsects": lambda: NightInsects(p=1.0),
     "SpiderWeb": lambda: SpiderWeb(p=1.0),
     "AcFlicker": lambda: AcFlicker(p=1.0),
     "RollingShutter": lambda: RollingShutter(p=1.0),
