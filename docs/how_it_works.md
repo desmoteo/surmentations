@@ -256,7 +256,7 @@ flowchart TD
     VIS --> COMP["composite: veil, then streaks"]
     ALPHA --> COMP
     COMP --> WET{"wet ground?"}
-    WET -->|yes| FRESNEL["darken diffuse, plus Fresnel mirror about the horizon"]
+    WET -->|yes| FRESNEL["darken diffuse, plus Fresnel mirror about the road's far end"]
     WET -->|no| DONE([output])
     FRESNEL --> DONE
 ```
@@ -300,15 +300,38 @@ some point:
   absorbed. Asphalt loses about half its brightness, white paint almost
   none, and colours deepen because the weak channels fall furthest
   (`wet_albedo`). A flat multiplier greys the markings instead.
-- **A reflection lies under the thing reflected.** Everything far off is
-  mirrored about the horizon. A compact object standing on the road is
-  mirrored about its own foot, for as far down the road as it is tall.
-  Mirrored about the horizon, a car's reflection lands far below it, under
-  nothing; mirrored about its foot with no limit, every car and lamp post
-  rules a stripe down the whole road.
+- **A reflection lies under the thing reflected.** A compact object
+  standing on the road is mirrored about its own foot, for as far down the
+  road as it is tall. Mirrored about the horizon, a car's reflection lands
+  far below it, under nothing; mirrored about its foot with no limit, every
+  car and lamp post rules a stripe down the whole road.
+- **Everything else is mirrored about the road's far end, and seen from
+  the horizon.** Two rows, not one (`ground_horizon`). Where the road ends
+  inside the frame it ends at something, a bridge, a hedge, a row of houses
+  or the horizon itself, and that stands on the ground there. The far end
+  is found by following the ground up the frame for as long as it keeps
+  getting further away: a hedge's top and a roof face upwards too, but they
+  are nearer than the ground behind them. The horizon, which the
+  reflectance is measured from, is at the far end or above it by what the
+  depth of the road's two ends says. Fitting it from inverse depth alone
+  is exact for metres and was forty to three hundred rows out on monocular
+  depth, which places far ground too near: a road mirrored itself, and a
+  night street's lamps fell above the road and left nothing on it.
+- **What stands on the road is not road.** A car a hundred metres off is a
+  smooth bump in the depth map with the road's own orientation, and was
+  darkened and painted with reflections along with it. It is told by two
+  things together (`standing_objects`): it is nearer than the ground round
+  it, which a pool of lamp light or a reflection already in the road is
+  not, and within reach of that bump it does not look like the road beside
+  it, which the road at its wheels does.
 - **Film and puddles are different mirrors.** The film is as rough as the
   road: it smears a reflection a long way down the road and its
-  reflectance rises sooner towards the horizon. Standing water
+  reflectance rises sooner towards the horizon. Most of its facets lie
+  nearly flat and a few are steep, so the smear has two parts: a bright one
+  close under the thing reflected and a long, narrow, faint one running on
+  towards the camera, which is the streak a street lamp lays down a wet
+  road. A lamp is taken to be far brighter in that streak than the clipped
+  pixels that record it, or spread that thin it would not show. Standing water
   (`puddle_coverage_range`), laid out in ground coordinates so it
   foreshortens with the road, is smooth and mirrors the sky cleanly.
 - **The whole road is wet, and stays dark.** Level ground now carries the
