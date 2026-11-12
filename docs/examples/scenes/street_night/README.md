@@ -11,11 +11,11 @@ Source: [Great Holm Milton Keynes at night.jpg](https://commons.wikimedia.org/wi
 | | |
 | --- | --- |
 | Distance of nearest and farthest point | 3 m to 150 m (estimated by eye) |
-| Camera pitch below level | 5 degrees |
+| Camera pitch below level | -6 degrees |
 | Lighting | night, open to the sky |
 | Sky in frame | yes |
-| Fog | visibility 90 m (0.6 x the farthest point) |
-| Rain and snow veils | capped so visibility stays above 225 m and 150 m |
+| Fog | visibility 0.6 x the scene's depth: about 90 m by eye |
+| Rain and snow veils | visibility kept above 1.5 x and 1 x the scene's depth: about 225 m and 150 m |
 
 ## What a provider with scene labels and geometry read off it
 
@@ -30,7 +30,7 @@ and how far to trust it.
 | --- | --- |
 | Field of view | 56°, assumed: a picture does not tell it |
 | Horizon | 0.64 of the frame's height from the top |
-| Camera pitch below level | -6° (by eye: 5°) |
+| Camera pitch below level | -6° (by eye: -6°) |
 | Roll | -1.4° |
 | Camera height | not found: fewer than three usable vehicles or people in view |
 | Depth | the by-eye range above: there is no height to measure from |

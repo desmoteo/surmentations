@@ -291,7 +291,9 @@ map is then in metres measured from the camera. That takes the place of
 
 The consequence is visible in the figures: a scene that is really twenty
 metres to two kilometres deep is veiled like one by rain, snow and fog, and
-is beyond an infrared illuminator's reach. A transform given an explicit
+is beyond an infrared illuminator's reach. Extinction per metre over two
+kilometres can blank a frame; `visibility_range_scene` and
+`min_visibility_scene` set the air against the scene's own depth instead. A transform given an explicit
 `depth_scale` still uses it. To keep `depth_range_m` for every frame, give
 no height and pass `estimate_height=False`.
 
@@ -326,10 +328,14 @@ depth-conditioned transform fires on a frame pays for none of them.
 - With no sky and no ground-level camera (a view straight down, a car
   park under a roof) the estimator gives a bound and no more; give the
   geometry for those cameras.
-- A veil set for one scale is wrong for another. The
-  [scene gallery](examples/scenes/README.md) shows every such effect twice,
-  from the same parameters: its rain and snow veils were capped for the
-  by-eye distances, and over the measured ones some are much thicker.
+- Air set in metres is wrong for a scene of another scale, and measured
+  distances are often several times the by-eye ones. Set it against the
+  scene instead: `visibility_range_scene` on the fogs and
+  `min_visibility_scene` on rain and snow. The
+  [scene gallery](examples/scenes/README.md) does. Its pairs still differ
+  in haze, because the two depth maps differ in shape and not only in
+  scale: measured depth puts most of a frame near and a little of it very
+  far.
 
 ## Writing your own
 

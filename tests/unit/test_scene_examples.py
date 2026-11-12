@@ -16,8 +16,8 @@ from docs.generate_examples import EFFECTS
 from docs.generate_scene_examples import (
     COMPARED,
     FOG_VISIBILITY,
-    KOSCHMIEDER,
     PIPELINE_DRAWS,
+    RAIN_VISIBILITY_FLOOR,
     SCENES,
     Scene,
     _overrides,
@@ -139,19 +139,22 @@ def test_effects_are_left_out_where_they_do_not_apply() -> None:
 
 def test_weather_is_scaled_to_the_scene() -> None:
     """Severity fixes extinction per metre. Over a three-kilometre view that
-    is a blank frame, so fog is set by visibility and the precipitation
-    veils are capped — and a short scene is left exactly as severity has it."""
+    is a blank frame, so fog is set by visibility against the scene's depth
+    and the precipitation veils are kept from closing its far end. The
+    transforms measure that depth; the gallery only says how many of it."""
     valley = Scene((25.0, 3000.0), 0.0)
-    low, high = _overrides("fog", valley)["beta_range"]
-    assert low < KOSCHMIEDER / (FOG_VISIBILITY * 3000.0) < high
+    for fog in ("fog", "night_fog"):
+        low, high = _overrides(fog, valley)["visibility_range_scene"]
+        assert low < FOG_VISIBILITY < high
     assert _overrides("fog", valley)["depth_scale"] is None
+    assert "beta_range" not in _overrides("fog", valley)
 
-    capped = _overrides("rain", valley)["veil_beta_range"]
-    assert capped[1] == pytest.approx(KOSCHMIEDER / (1.5 * 3000.0))
-    assert "veil_beta_range" in _overrides("snow", valley)
+    assert _overrides("rain", valley)["min_visibility_scene"] == RAIN_VISIBILITY_FLOOR
+    assert _overrides("snow", valley)["min_visibility_scene"] > 0.0
 
     crossing = Scene((12.0, 30.0), 70.0, sky_in_frame=False)
-    assert "veil_beta_range" not in _overrides("rain", crossing)
+    # The same setting on a thirty-metre scene: nothing about it is the scene's.
+    assert _overrides("rain", crossing)["min_visibility_scene"] == RAIN_VISIBILITY_FLOOR
     assert _overrides("rain", crossing)["camera_pitch_range_deg"] == (70.0, 70.0)
     # No sky in frame, so the dirt is lit by more than the camera can see.
     assert _overrides("dirt_soil", crossing)["ambient_light_range"][0] > 1.0

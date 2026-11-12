@@ -397,6 +397,12 @@ and go before; its falling flakes are lit by the lamp and go after, as
 draw them. Left to `RandomSnow` alone the flakes were lit by the depth of
 whatever was behind them and vanished over anything distant.
 
+Rain is split the same way. `RandomRain`, built at `max_streaks=0`, goes
+before the conversion for the veil and the wet road, which are the scene;
+`NightRain` goes after it for the streaks. The branch used to hold
+`NightRain` alone, and lamp-lit rain fell on a road as dry as the
+photograph's.
+
 The same branch is the only one in which things on the dome glow. An insect
 or a web is a dark silhouette by day and under street lighting; under the
 infrared ring it is lit from centimetres away, so `HousingOccluders` is given

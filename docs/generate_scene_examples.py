@@ -30,8 +30,11 @@ transforms, which is the point of showing it done:
 * **How thick the air is for that scale.** A severity level fixes extinction
   per metre, which suits a street and blanks a landscape: fog that leaves a
   car park's far wall visible at 40 m hides a mountain at 3 km completely.
-  So fog is set by visibility, as a fraction of the scene's depth, and the
-  distance veils of rain and snow are capped the same way.
+  So fog is set by visibility as a multiple of the scene's depth
+  (``visibility_range_scene``), and the distance veils of rain and snow are
+  kept from closing the far end of it (``min_visibility_scene``). The
+  transforms measure the scene's depth themselves, so the same setting
+  holds whether the provider's distances are the by-eye ones or measured.
 * **What applies.** Sunlight effects and daylight fog are skipped on the
   night scene, the two effects that act on lamps on the daylit ones, and
   rain and snow under a roof. Nothing in the library works
@@ -69,7 +72,6 @@ from docs.generate_examples import (  # noqa: E402
     _GALLERY_DRAWS,
     _NEEDS_FFMPEG,
     EFFECTS,
-    GROUND_ROW_WEATHER_LEVEL,
     GROUND_ROWS,
     LAMP_LIT,
     _build,
@@ -84,11 +86,6 @@ from surmentations.perception import (  # noqa: E402
     SegmentationLabelEstimator,
 )
 from surmentations.presets import surveillance, surveillance_lite  # noqa: E402
-from surmentations.presets.severity import SEVERITY  # noqa: E402
-from surmentations.utils.precipitation import (  # noqa: E402
-    rain_extinction_coefficient,
-    snow_extinction_coefficient,
-)
 
 REPO = Path(__file__).resolve().parents[1]
 SCENES_DIR = REPO / "sample_scenes"
@@ -117,17 +114,17 @@ LONG_VIEW_M = 500.0
 DAYLIGHT_WEATHER = ("fog",)
 NEEDS_LAMPS = ("night_fog", "source_glare")
 
-# Meteorological visibility, as a multiple of the scene's farthest distance.
-# Fog is set to it outright. For rain and snow it is a floor: their veils
-# follow from the precipitation rate and are left alone unless that would
-# hide the far end of the scene altogether. Severity-3 rain is visible to
-# about 1.5 km and snow to about 110 m, so the floor binds on rain only in
-# the two landscapes and on snow nearly everywhere.
+# Meteorological visibility, as a multiple of the scene's depth: the distance
+# of the farthest thing in it that is not sky. Fog is set to it outright,
+# give or take a sixth. For rain and snow it is a floor: their veils follow
+# from the precipitation rate and are left alone unless that would hide the
+# far end of the scene altogether. Severity-3 rain is visible to about
+# 1.5 km and snow to about 110 m, so the floor binds on rain only in the
+# long views and on snow nearly everywhere.
 FOG_VISIBILITY = 0.6
+FOG_VISIBILITY_SPREAD = (0.87, 1.18)
 RAIN_VISIBILITY_FLOOR = 1.5
 SNOW_VISIBILITY_FLOOR = 1.0
-# Koschmieder: visibility is where contrast falls to 2%, exp(-3.912).
-KOSCHMIEDER = 3.912
 
 WHY_NOT = {
     "sun": "it needs the sun, and the scene is at night",
@@ -183,7 +180,8 @@ class Scene:
 
     Attributes:
         depth_range_m: distance of the nearest and farthest thing in frame.
-        camera_pitch_deg: how far the camera looks down from level.
+        camera_pitch_deg: how far the camera looks down from level; negative
+            for one that looks up.
         night: taken at night under artificial light.
         sheltered: under a roof, so nothing falls on it and the sun is not in it.
         sky_in_frame: whether the frame shows any sky. Where it does not, the
@@ -200,45 +198,38 @@ class Scene:
 SCENES: dict[str, Scene] = {
     "crosswalk_day": Scene((12.0, 30.0), 70.0, sky_in_frame=False),
     "parking_garage": Scene((2.0, 45.0), 4.0, sheltered=True, sky_in_frame=False),
-    "street_night": Scene((3.0, 150.0), 5.0, night=True),
+    # Both this and `urban_road_day` look slightly *up*: the horizon is below
+    # the middle of the frame. They were first put down as 5 and 10 degrees
+    # of downward pitch, by eye and by habit, and the geometry estimator
+    # disagreed, rightly.
+    "street_night": Scene((3.0, 150.0), -6.0, night=True),
     "underpass_from_above": Scene((8.0, 160.0), 25.0, sky_in_frame=False),
     "wooded_hills": Scene((40.0, 6000.0), 6.0),
     "mountain": Scene((25.0, 3000.0), 0.0),
-    "urban_road_day": Scene((8.0, 900.0), 10.0),
+    "urban_road_day": Scene((8.0, 900.0), -3.0),
     "urban_street_wet": Scene((6.0, 250.0), 30.0),
 }
-
-
-def _veil_cap(scene: Scene, visibility_floor: float, derived_beta: float) -> dict[str, Any]:
-    """Cap a precipitation veil so the scene's far end is not hidden outright."""
-    cap = KOSCHMIEDER / (visibility_floor * scene.depth_range_m[1])
-    if derived_beta <= cap:
-        return {}
-    return {"veil_beta_range": (0.8 * cap, cap)}
 
 
 def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
     """Tell one transform about the scene it is being applied to."""
     pitch = scene.camera_pitch_deg
-    preset = SEVERITY[SEVERITY_LEVEL]
     extra: dict[str, Any] = {}
     if effect in GROUND_ROWS:
         # The ground rows are rain and snow at a light rate.
-        preset = SEVERITY[GROUND_ROW_WEATHER_LEVEL]
         effect = GROUND_ROWS[effect]
     if effect in ("rain", "snow"):
         extra["camera_pitch_range_deg"] = (pitch, pitch)
     if effect == "rain":
-        rate = float(np.mean(preset["RandomRain"]["rain_rate_range_mm_h"]))
-        extra |= _veil_cap(scene, RAIN_VISIBILITY_FLOOR, rain_extinction_coefficient(rate))
+        extra["min_visibility_scene"] = RAIN_VISIBILITY_FLOOR
     if effect == "snow":
-        rate = float(np.mean(preset["RandomSnow"]["snowfall_rate_range_mm_h"]))
-        extra |= _veil_cap(scene, SNOW_VISIBILITY_FLOOR, snow_extinction_coefficient(rate))
+        extra["min_visibility_scene"] = SNOW_VISIBILITY_FLOOR
     if effect == "cast_shadows":
         extra["camera_pitch_deg"] = pitch
+    if effect in ("fog", "night_fog"):
+        low, high = FOG_VISIBILITY_SPREAD
+        extra["visibility_range_scene"] = (low * FOG_VISIBILITY, high * FOG_VISIBILITY)
     if effect == "fog":
-        beta = KOSCHMIEDER / (FOG_VISIBILITY * scene.depth_range_m[1])
-        extra["beta_range"] = (0.85 * beta, 1.15 * beta)
         # Against the scene's own distances, from the provider, in place of
         # the severity gallery's 40-90 m far plane.
         extra["depth_scale"] = None
@@ -249,9 +240,6 @@ def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
         # Over the scene's own distances, in place of the severity
         # gallery's stand-ins.
         extra["depth_scale"] = None
-    if effect == "night_fog":
-        visibility = FOG_VISIBILITY * scene.depth_range_m[1]
-        extra["visibility_range_m"] = (0.85 * visibility, 1.15 * visibility)
     if effect == "dirt_soil" and not scene.sky_in_frame:
         extra["ambient_light_range"] = (2.5, 4.0)
     if scene.night and effect == "water_droplets":
@@ -520,8 +508,9 @@ def _scene_readme(
         f"| Camera pitch below level | {scene.camera_pitch_deg:g} degrees |",
         f"| Lighting | {where}, {cover} |",
         f"| Sky in frame | {'yes' if scene.sky_in_frame else 'no'} |",
-        f"| Fog | visibility {fog_m:g} m ({FOG_VISIBILITY:g} x the farthest point) |",
-        f"| Rain and snow veils | capped so visibility stays above {rain_m:g} m and {snow_m:g} m |",
+        f"| Fog | visibility {FOG_VISIBILITY:g} x the scene's depth: about {fog_m:g} m by eye |",
+        f"| Rain and snow veils | visibility kept above {RAIN_VISIBILITY_FLOOR:g} x and "
+        f"{SNOW_VISIBILITY_FLOOR:g} x the scene's depth: about {rain_m:g} m and {snow_m:g} m |",
         "",
         "## What a provider with scene labels and geometry read off it",
         "",
@@ -661,9 +650,13 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "- **Depth is relative and stretched to the range it is given.** The facades in",
         "  `urban_street_wet` are placed further away than they are, so its fog is",
         "  heavier than the stated visibility would make it. Where the estimator finds",
-        "  the camera's height, depth is in metres measured from it instead, and a",
-        "  veil set for the by-eye range can then be far too thick or too thin: the",
-        "  parameters of each pair are deliberately the same.",
+        "  the camera's height, depth is in metres measured from it instead. Fog and",
+        "  the veils are set against the scene's depth as each provider has it, and",
+        "  the two still differ: the by-eye range spreads a scene evenly between its",
+        "  nearest and farthest point, where measured depth puts most of the frame",
+        "  near and a little of it very far, so the same fog leaves the foreground",
+        "  clearer and takes the skyline. What is in metres outright, an infrared",
+        "  lamp's reach or a ground fog's few metres of height, differs more.",
         "- **Wet ground stops at a few hundred metres.** Beyond that, level ground is",
         "  taken to be terrain; a distant wet road loses its sheen with it, unless it",
         "  is labelled as a road.",

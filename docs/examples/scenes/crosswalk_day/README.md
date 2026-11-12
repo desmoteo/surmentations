@@ -14,8 +14,8 @@ Source: [Crosswalk of Market at Third, San Francisco.jpg](https://commons.wikime
 | Camera pitch below level | 70 degrees |
 | Lighting | day, open to the sky |
 | Sky in frame | no |
-| Fog | visibility 18 m (0.6 x the farthest point) |
-| Rain and snow veils | capped so visibility stays above 45 m and 30 m |
+| Fog | visibility 0.6 x the scene's depth: about 18 m by eye |
+| Rain and snow veils | visibility kept above 1.5 x and 1 x the scene's depth: about 45 m and 30 m |
 
 ## What a provider with scene labels and geometry read off it
 

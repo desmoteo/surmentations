@@ -11,11 +11,11 @@ Source: [NFTA Metro Bus 18 @ Kensington Expressway overpass bridge, Buffalo, New
 | | |
 | --- | --- |
 | Distance of nearest and farthest point | 8 m to 900 m (estimated by eye) |
-| Camera pitch below level | 10 degrees |
+| Camera pitch below level | -3 degrees |
 | Lighting | day, open to the sky |
 | Sky in frame | yes |
-| Fog | visibility 540 m (0.6 x the farthest point) |
-| Rain and snow veils | capped so visibility stays above 1350 m and 900 m |
+| Fog | visibility 0.6 x the scene's depth: about 540 m by eye |
+| Rain and snow veils | visibility kept above 1.5 x and 1 x the scene's depth: about 1350 m and 900 m |
 
 ## What a provider with scene labels and geometry read off it
 
@@ -30,7 +30,7 @@ and how far to trust it.
 | --- | --- |
 | Field of view | 52°, assumed: a picture does not tell it |
 | Horizon | 0.60 of the frame's height from the top |
-| Camera pitch below level | -3° (by eye: 10°) |
+| Camera pitch below level | -3° (by eye: -3°) |
 | Roll | +0.4° |
 | Camera height | 7 m, from the vehicles and people in view |
 | Depth | in metres from the camera's height: 30 m to 1530 m |

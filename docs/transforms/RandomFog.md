@@ -88,6 +88,7 @@ See [scene understanding](../scene_understanding.md).
 | `depth_scale` | `None` | pseudo-metres at relative depth 1.0, for this transform only. `None` uses the provider's `depth_range_m`, which is the place to calibrate a whole pipeline. |
 | `forward_scatter_range` | `(0.001, 0.005)` | how strongly fog blurs distant detail, as a fraction of the image diagonal at full optical depth. 0 disables the blur and leaves fog as a pure blend. |
 | `sky_optical_depth_cap` | `1.6` | optical depth ceiling applied to sky-like pixels, so the sky desaturates instead of collapsing to a flat airlight colour. |
+| `visibility_range_scene` | `None` | visibility as a multiple of the scene's depth, drawn per call, in place of `beta_range`. A fog of one extinction is a different picture on every scene: a visibility of a hundred metres hides nothing of a car park and all of a valley. `(0.5, 1.0)` is fog that takes the far half of whatever scene it is given. The scene's depth is the distance of the farthest thing in it that is not sky. `None`, the default, uses `beta_range`. |
 | `p` | `0.5` | probability that the transform is applied |
 
 ## Samples
