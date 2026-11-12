@@ -11,6 +11,10 @@ is the honest counterweight, including the places where it did not.
 
 ---
 
+This page is the map. Each transform also has a page of its own in
+[`transforms/`](transforms/README.md): its algorithm as a diagram, the full
+model, every parameter and the references.
+
 ## 1. The shape of the library
 
 Every effect is an Albumentations transform, and all but three are
