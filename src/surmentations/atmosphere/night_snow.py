@@ -50,7 +50,7 @@ from surmentations.atmosphere.night_rain import (
     _frustum_volume,
 )
 from surmentations.atmosphere.snow import render_flake_field, snow_fall_speed
-from surmentations.base import CameraTransform
+from surmentations.base import CameraTransform, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
@@ -260,13 +260,14 @@ class NightSnow(CameraTransform):
         one's ``brightness`` by its distance from the lamp, the veiling
         ``glare``, the ``beam`` across the frame and the ``backscatter``.
         """
-        del data
         height, width = params["shape"][:2]
         rng = self.random_generator
 
         snowfall_rate = self.py_random.uniform(*self.snowfall_rate_range_mm_h)
         snow_density = self.py_random.uniform(*self.snow_density_range_g_cm3)
-        horizontal_fov = self.py_random.uniform(*self.horizontal_fov_range_deg)
+        horizontal_fov = scene_fov(
+            data, self.py_random.uniform(*self.horizontal_fov_range_deg)
+        )
         focus_distance = self.py_random.uniform(*self.focus_distance_range_m)
         exposure = self.py_random.uniform(*self.exposure_time_range)
         aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3

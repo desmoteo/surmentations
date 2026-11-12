@@ -45,12 +45,14 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
 from surmentations import mode
-from surmentations.base import CameraTransform, require_depth_provider, scene_of
+from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
+from surmentations.perception.labels import VEGETATION, class_weight
 from surmentations.utils.channels import percentile
 from surmentations.utils.grids import on_coarse_grid, pixel_grid
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
+from surmentations.utils.sky import sky_to_depth_edge, sky_weight
 
 # Broad, red-weighted stand-in for silicon's response with the IR-cut filter
 # removed. Not a luminance vector: the eye's green-heavy weighting is exactly
@@ -58,12 +60,34 @@ from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 _NIR_RESPONSE = np.array([0.50, 0.30, 0.20], dtype=np.float32)
 
 
-def near_infrared_reflectance(linear_rgb: np.ndarray, vegetation_gain: float) -> np.ndarray:
+# What is left of the sky at night, as a share of what the ambient light
+# would make of a surface as pale. The ambient term is light *reflected*:
+# moonlight and spill off the ground and the walls. The sky reflects
+# nothing, and in a frame the illuminator cannot reach, which is every frame
+# whose distances are real and long, it came out as bright as by day.
+_NIGHT_SKY_LEVEL = 0.12
+
+# How green a pixel labelled as vegetation is taken to be at the least, on
+# the scale the chlorophyll term works in: about what a leaf in full light
+# measures. A leaf in shade, in autumn or under a sodium lamp measures
+# nothing, and reflects the near infrared all the same.
+_LABELLED_GREENNESS = 0.3
+
+
+def near_infrared_reflectance(
+    linear_rgb: np.ndarray, vegetation_gain: float, vegetation: np.ndarray | None = None
+) -> np.ndarray:
     """Estimate NIR reflectance from a visible-light image.
 
     Broad red-weighted response plus a chlorophyll term. ``vegetation_gain``
     controls how strongly foliage lifts; 0 disables the correction and leaves
     a plain broad-band conversion.
+
+    ``vegetation`` is the weight of what the scene's labels call vegetation,
+    ``(H, W)`` in ``[0, 1]``, where there are labels
+    (:mod:`surmentations.perception.labels`). The chlorophyll term is
+    read off colour, and colour says "leaf" only for a green leaf in good
+    light; a labelled one is lifted whatever colour it photographed as.
     """
     broadband = linear_rgb @ _NIR_RESPONSE
 
@@ -73,11 +97,25 @@ def near_infrared_reflectance(linear_rgb: np.ndarray, vegetation_gain: float) ->
     greenness = np.clip(
         (green - np.maximum(red, blue)) / np.maximum(green + red + blue, 1e-4), 0.0, 1.0
     )
+    if vegetation is not None:
+        # By the pixel's own brightness against the frame's, so that the
+        # shade inside a crown stays shade and a tree keeps its shape.
+        lit = np.clip(broadband / max(float(broadband.mean()), 1e-4), 0.0, 1.0)
+        greenness = np.maximum(greenness, np.float32(_LABELLED_GREENNESS) * vegetation * lit)
     return np.clip(broadband + vegetation_gain * greenness, 0.0, 4.0)
 
 
 class NightIrMode(CameraTransform):
     """Monochrome IR night mode with the camera's own illuminator.
+
+    With a provider that carries scene labels
+    (:mod:`surmentations.perception.labels`): vegetation is lifted by
+    name as well as by colour, so a tree is bright in the near infrared in
+    shade, in autumn and under a sodium lamp too; and the sky, which
+    reflects neither the illuminator nor the ambient light, is dark. Where
+    the camera's height is known the illuminator's inverse-square law runs
+    over real metres, and a scene beyond its reach is lit by the ambient
+    term alone.
 
     Args:
         depth_provider: shared :class:`~surmentations.depth.provider.SharedDepthProvider`.
@@ -236,6 +274,23 @@ class NightIrMode(CameraTransform):
             else beam_at(*pixel_grid(height, width))
         )
 
+        # What the scene's labels call vegetation, where there are labels:
+        # the near infrared's brightest material, whatever colour it is.
+        labels = self.depth_provider.get_labels(scene)
+        vegetation = night_sky = None
+        if labels is not None:
+            soften = max(1.0, 0.003 * float(np.hypot(height, width)))
+            vegetation = class_weight(labels, VEGETATION, soften_px=soften)
+            # And the sky, which no lamp lights and nothing is reflected by.
+            # Drawn up to the skyline's own edge: a network's outline is a
+            # few pixels out, and a band of sky left as bright as by day
+            # is a white line round every roof.
+            relative_depth = self.depth_provider.get_depth(scene)
+            linear, _scale, _is_integer = to_linear_unit(first_frame(scene))
+            night_sky = sky_to_depth_edge(
+                sky_weight(linear, relative_depth, labels), relative_depth, linear
+            )
+
         record_draw(
             illuminator_range_m=reference,
             beam_falloff=falloff,
@@ -251,6 +306,8 @@ class NightIrMode(CameraTransform):
             "gain": self.py_random.uniform(*self.gain_range),
             "read_noise": self.py_random.uniform(*self.read_noise_range),
             "noise_seed": self.py_random.randint(0, 2**31 - 1),
+            "vegetation": vegetation,
+            "night_sky": night_sky,
         }
 
     def apply(
@@ -263,6 +320,8 @@ class NightIrMode(CameraTransform):
         gain: float,
         read_noise: float,
         noise_seed: int,
+        vegetation: np.ndarray | None = None,
+        night_sky: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the frame as the near-infrared camera sees it at night.
@@ -273,8 +332,10 @@ class NightIrMode(CameraTransform):
         """
         linear, scale, is_integer = to_linear_unit(img)
 
-        reflectance = near_infrared_reflectance(linear, vegetation_gain)
+        reflectance = near_infrared_reflectance(linear, vegetation_gain, vegetation)
         signal = reflectance * (exposure + ambient)
+        if night_sky is not None:
+            signal = signal * (1.0 - np.float32(1.0 - _NIGHT_SKY_LEVEL) * night_sky)
 
         # Auto-exposure. The camera gains up until the scene is usable, so the
         # absolute level is set by the AE loop rather than by the illuminator's

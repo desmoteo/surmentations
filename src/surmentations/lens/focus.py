@@ -46,7 +46,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, ConfigDict
 
-from surmentations.base import CameraTransform, scene_of
+from surmentations.base import CameraTransform, scene_fov, scene_of
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
 from surmentations.lens.water_droplets import _aperture_blur, _disc_kernel
@@ -182,7 +182,7 @@ class FocusShift(CameraTransform):
         focus = 1.0 / self.py_random.uniform(1.0 / far_focus, 1.0 / near)
         aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
         focal = focal_length_px(
-            width, height, self.py_random.uniform(*self.horizontal_fov_range_deg)
+            width, height, scene_fov(data, self.py_random.uniform(*self.horizontal_fov_range_deg))
         )
         far = float(blur_diameter(np.inf, focus, aperture_m, focal))
         diameter: np.ndarray | float = far

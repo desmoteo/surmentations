@@ -175,7 +175,9 @@ class NightFog(CameraTransform):
         relative_depth = self.depth_provider.get_depth(scene)
         linear, _scale, _is_integer = to_linear_unit(first_frame(scene))
         sky = sky_to_depth_edge(
-            sky_weight(linear, relative_depth), relative_depth, linear
+            sky_weight(linear, relative_depth, self.depth_provider.get_labels(scene)),
+            relative_depth,
+            linear,
         )
         depth_m = lift_sky(self.depth_provider.to_metric(relative_depth), sky)
 

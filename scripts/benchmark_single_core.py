@@ -112,7 +112,12 @@ LABELS = {
     "video_codec": "`VideoCodecArtifacts`",
     "transmission_faults": "`TransmissionFaults`",
     "depth_estimate": "the depth estimate, once per new frame",
+    "scene_labels": "the scene's labels, once per new frame",
+    "scene_geometry": "the camera's geometry, once per new frame",
 }
+
+# Rows that are not transforms: what a provider works out once for a frame.
+PER_FRAME = ("depth_estimate", "scene_labels", "scene_geometry")
 
 
 def _scene_image(scene: str, size: int) -> np.ndarray:
@@ -221,6 +226,20 @@ def run(args: argparse.Namespace) -> None:
         torch.set_num_threads(1)
         estimator = DepthAnythingV2Estimator()
 
+    # What a provider may work out besides depth, timed on its own as the
+    # depth estimate is. A checkout from before there was any has no rows.
+    labeller = geometry = None
+    if not args.load_depth and not args.only:
+        try:
+            from surmentations.perception import (
+                GroundPlaneGeometryEstimator,
+                SegmentationLabelEstimator,
+            )
+        except ImportError:
+            pass
+        else:
+            labeller, geometry = SegmentationLabelEstimator(), GroundPlaneGeometryEstimator()
+
     provider = SharedDepthProvider(estimator)
     times: dict[str, list[float]] = {}
     for size in args.sizes:
@@ -237,6 +256,22 @@ def run(args: argparse.Namespace) -> None:
                 times.setdefault(f"depth_estimate/{size}", []).append(
                     _least(lambda image=image: _estimate_synchronised(estimator, image), 5)
                 )
+            if labeller is not None and geometry is not None:
+                times.setdefault(f"scene_labels/{size}", []).append(
+                    _least(lambda image=image: _estimate_synchronised(labeller, image), 5)
+                )
+                labels = labeller.estimate(image)
+                disparity = estimator.disparity(estimator.estimate(image))
+
+                def read(
+                    image: np.ndarray = image,
+                    disparity: np.ndarray = disparity,
+                    labels: np.ndarray = labels,
+                ) -> None:
+                    """One reading of the camera's geometry off this scene."""
+                    geometry.estimate(image, disparity, labels)
+
+                times.setdefault(f"scene_geometry/{size}", []).append(_least(read, 5))
             for name, transform in transforms.items():
                 for seed in SEEDS:
 
@@ -310,7 +345,7 @@ def compare(args: argparse.Namespace) -> None:
                 f"{ratio(name, size):.1f}x",
             ]
         print(f"| {LABELS.get(name, name)} | " + " | ".join(cells) + " |")
-    transforms = [name for name in names if name != "depth_estimate"]
+    transforms = [name for name in names if name not in PER_FRAME]
     count = len(transforms)
     means = [
         math.exp(np.mean([math.log(ratio(n, size)) for n in transforms])) for size in (small, large)

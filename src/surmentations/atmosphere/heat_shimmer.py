@@ -212,7 +212,11 @@ class HeatShimmer(CameraTransform):
         rng = self.random_generator
         cn2 = 10.0 ** self.py_random.uniform(*self.log10_cn2_range)
         focal = focal_length_px(
-            width, height, self.py_random.uniform(*self.horizontal_fov_range_deg)
+            width,
+            height,
+            self.depth_provider.settle_fov(
+                scene, self.py_random.uniform(*self.horizontal_fov_range_deg)
+            ),
         )
         aperture_m = self.py_random.uniform(*self.aperture_diameter_range_mm) * 1e-3
         cell = self.py_random.uniform(*self.cell_size_range) * float(np.hypot(width, height))

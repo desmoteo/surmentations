@@ -46,7 +46,7 @@ from typing import Any, ClassVar
 import numpy as np
 from albumentations.core.transforms_interface import ImageOnlyTransform
 
-from surmentations.depth.provider import carry_depth
+from surmentations.depth.provider import carry_depth, settled_fov
 from surmentations.diagnostics import instrument
 
 RangeF = tuple[float, float]
@@ -163,6 +163,23 @@ def scene_of(data: dict[str, Any]) -> np.ndarray:
     else:
         raise KeyError("expected the data to contain `image` or `images`")
     return scene
+
+
+def scene_fov(data: dict[str, Any], horizontal_fov_deg: float) -> float:
+    """The field of view a transform is to use: the scene's, or the one it drew.
+
+    A transform draws a field of view from its own range, and two transforms
+    on one frame used to see it through two lenses. Where a depth provider
+    in the pipeline knows how the camera is mounted
+    (:mod:`surmentations.perception.geometry`) the scene has one field of
+    view, and this returns it in place of ``horizontal_fov_deg``. A
+    transform with no provider of its own asks through here; one with a
+    provider asks the provider. Called with no frame at all, as a transform
+    that does not read its frame may be, it returns the draw.
+    """
+    if "image" not in data and "images" not in data:
+        return horizontal_fov_deg
+    return settled_fov(scene_of(data), horizontal_fov_deg)
 
 
 def first_frame(scene: np.ndarray) -> np.ndarray:

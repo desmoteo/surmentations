@@ -218,7 +218,11 @@ class LocalPlumes(CameraTransform):
         height, width = params["shape"][:2]
         rng = self.random_generator
         focal = focal_length_px(
-            width, height, self.py_random.uniform(*self.horizontal_fov_range_deg)
+            width,
+            height,
+            self.depth_provider.settle_fov(
+                scene, self.py_random.uniform(*self.horizontal_fov_range_deg)
+            ),
         )
         depth_m = self.depth_provider.to_metric(
             self.depth_provider.get_depth(scene), far_m=self.depth_scale

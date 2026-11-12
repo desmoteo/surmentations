@@ -59,6 +59,40 @@ def source_mask(linear_rgb: np.ndarray) -> np.ndarray:
     return np.clip((peak - _SOURCE_LEVEL) / (1.0 - _SOURCE_LEVEL), 0.0, 1.0).astype(np.float32)
 
 
+# The smallest clipped region taken for a lamp, as a fraction of the frame:
+# nine pixels of an 800 x 533 one. Below it is a glint on a leaf or a kerb.
+_MIN_LAMP_AREA_FRACTION = 2e-5
+
+
+def lamp_mask(linear_rgb: np.ndarray) -> np.ndarray:
+    """:func:`source_mask`, kept only where the clipped pixels are a lamp, ``(H, W)``.
+
+    Under a street lamp a good deal more than the lamp is clipped: the pool
+    of light on the road, the white line through it, the leaves beside it.
+    None of those was many times brighter than the sensor could record, and
+    raising them by a lamp's over-range factor before a wet road reflects
+    them filled its puddles with slabs of saturated yellow. A lamp is a
+    region that is compact, neither a speck nor a surface: it fills its own
+    bounding box as a disc does, as :func:`light_sources` requires too.
+    """
+    clipped = source_mask(linear_rgb)
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        (clipped > 0.0).astype(np.uint8), connectivity=8
+    )
+    if count <= 1:
+        return clipped
+    frame = float(clipped.size)
+    areas = stats[:, cv2.CC_STAT_AREA].astype(np.float64)
+    boxes = stats[:, cv2.CC_STAT_WIDTH] * stats[:, cv2.CC_STAT_HEIGHT]
+    lamp = (
+        (areas >= _MIN_LAMP_AREA_FRACTION * frame)
+        & (areas <= _MAX_AREA_FRACTION * frame)
+        & (areas >= _MIN_BOX_FILL * boxes)
+    )
+    lamp[0] = False
+    return (clipped * lamp[labels]).astype(np.float32)
+
+
 def light_sources(linear_rgb: np.ndarray, max_sources: int = 4) -> list[LightSource]:
     """The compact lights in a linear-light frame, largest first."""
     height, width = linear_rgb.shape[:2]

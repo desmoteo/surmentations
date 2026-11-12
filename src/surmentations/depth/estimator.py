@@ -47,6 +47,19 @@ class DepthEstimator(ABC):
     def estimate(self, image: np.ndarray) -> np.ndarray:
         """Estimate relative depth for an ``(H, W, C)`` uint8/float image."""
 
+    def disparity(self, relative_depth: np.ndarray) -> np.ndarray | None:
+        """The disparity :meth:`estimate`'s depth was made from, or ``None``.
+
+        Disparity is the reciprocal of distance up to a scale and an offset
+        nobody knows, larger for nearer. It is what the camera's geometry is
+        read from (:mod:`surmentations.perception.geometry`): on level
+        ground it is a linear function of position in the picture, which a
+        depth that has been normalised and reshaped is not. A backend that
+        can undo its own reshaping returns it here; the default is ``None``,
+        and the geometry is then not estimated.
+        """
+        return None
+
 
 class DepthAnythingV2Estimator(DepthEstimator):
     """Depth Anything V2 (Small), the shipped default :class:`DepthEstimator`.
@@ -261,3 +274,16 @@ class DepthAnythingV2Estimator(DepthEstimator):
         depth -= depth.min()
         depth /= max(float(depth.max()), 1e-6)
         return depth.astype(np.float32)
+
+    def disparity(self, relative_depth: np.ndarray) -> np.ndarray | None:
+        """The network's disparity, normalised to ``[0, 1]``, back from :meth:`estimate`'s depth.
+
+        :meth:`estimate` normalises the disparity to ``[0, 1]``, takes
+        ``1 / (disparity + disparity_offset)`` and rescales that to
+        ``[0, 1]``; this is the same three steps backwards, so it is exact
+        to the rounding of a float.
+        """
+        offset = self.disparity_offset
+        nearest, farthest = 1.0 / (1.0 + offset), 1.0 / offset
+        reciprocal = relative_depth.astype(np.float64) * (farthest - nearest) + nearest
+        return (1.0 / reciprocal - offset).astype(np.float32)

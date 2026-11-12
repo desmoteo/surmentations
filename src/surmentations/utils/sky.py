@@ -1,4 +1,4 @@
-"""Finding the sky without a segmentation model.
+"""Finding the sky, with a segmentation model or without one.
 
 Several effects need to know where the sky is: fog must not flatten it,
 overcast light has to grey it, and a wet road reflects it. Depth alone does
@@ -26,6 +26,12 @@ dropped when the frame as a whole is dark.
 This is a heuristic and is documented as one. It misses sky seen through
 branches, and it will take a smooth, distant, pale surface that touches the
 top edge — a snowfield, a white facade — for sky.
+
+Given the scene's labels (:mod:`surmentations.perception.labels`) none of
+it is used: the sky is what the network called sky, which is right in both
+of those cases and in every sample scene. Its outline is the network's, a
+few pixels soft, and is redrawn against the depth map's own edge by
+:func:`sky_to_depth_edge` either way.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ import cv2
 import numpy as np
 
 from surmentations import _native
+from surmentations.perception.labels import SceneClass, class_weight
 from surmentations.utils.channels import channel_max
 from surmentations.utils.filters import wide_blur, wide_dilate
 from surmentations.utils.photometry import luminance
@@ -67,13 +74,22 @@ _MIN_DAY_BRIGHTNESS = 0.75
 _NIGHT_LEVEL = 0.22
 
 
-def sky_weight(linear_rgb: np.ndarray, relative_depth: np.ndarray | None = None) -> np.ndarray:
+def sky_weight(
+    linear_rgb: np.ndarray,
+    relative_depth: np.ndarray | None = None,
+    labels: np.ndarray | None = None,
+) -> np.ndarray:
     """Soft ``[0, 1]`` mask of sky, shape ``(H, W)``, float32.
 
     ``linear_rgb`` is linear light in ``[0, 1]``. ``relative_depth`` is the
     depth provider's output; without it a ceiling cannot be told from sky.
+    ``labels`` are the scene's classes, where the provider has them: the sky
+    is then the pixels labelled sky, feathered as the heuristic's mask is.
     """
     height, width = linear_rgb.shape[:2]
+    if labels is not None:
+        feather = 1.5 * width / _WORK_WIDTH
+        return class_weight(labels, (SceneClass.SKY,), soften_px=max(1.0, feather))
     scale = _WORK_WIDTH / max(width, 1)
     size = (max(8, round(width * scale)), max(8, round(height * scale)))
     small = cv2.resize(linear_rgb, size, interpolation=cv2.INTER_AREA)
