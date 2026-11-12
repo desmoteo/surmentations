@@ -37,6 +37,10 @@ than exposed.
 - **[`docs/pipelines.md`](docs/pipelines.md)** — a worked composite whose
   effects cannot contradict each other, with measured frequencies and cost.
   Start here if you want a pipeline rather than a transform.
+- **[`docs/scene_understanding.md`](docs/scene_understanding.md)** — the two
+  things a provider can work out besides depth: what each pixel is, and how
+  the camera is mounted. What they change in each effect, how the geometry
+  is estimated and how far to trust it.
 - **[`docs/physical_review.md`](docs/physical_review.md)** — a critical audit
   of whether the implementation lives up to that, including where it did not.
 - **[`optimizations.md`](optimizations.md)** — where the CPU time actually
@@ -66,7 +70,7 @@ Optional runtime dependencies:
 
 | Need | Required for |
 | --- | --- |
-| CUDA GPU | the depth-conditioned effects (fog, rain, snow, night IR, cast shadows) |
+| CUDA GPU | the depth-conditioned effects (fog, rain, snow, night IR, cast shadows), and the optional scene labels |
 | `ffmpeg` on PATH, or PyAV | `VideoCodecArtifacts` and `TransmissionFaults` |
 
 Everything else runs on CPU with no extra setup.
@@ -152,6 +156,42 @@ transform = A.Compose([
 With no CUDA device, constructing `DepthAnythingV2Estimator` raises a
 `RuntimeError` immediately with an actionable message, rather than silently
 falling back to a CPU path slow enough to blow a training-step budget.
+
+### Scene labels and installation geometry — optional
+
+Depth says how far away a pixel is, not what it is, and not where the
+camera stands. The same provider can work out both, once per scene:
+
+```python
+from surmentations.perception import (
+    GroundPlaneGeometryEstimator,
+    InstallationGeometry,
+    SegmentationLabelEstimator,
+)
+
+depth_provider = SharedDepthProvider(
+    DepthAnythingV2Estimator(),
+    labels=SegmentationLabelEstimator(),        # road, sky, vegetation, vehicles ...
+    geometry=GroundPlaneGeometryEstimator(),    # horizon, tilt and height, from the frame
+)
+
+# A fixed camera whose mounting is known is better given than estimated:
+geometry = InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_m=6.5)
+```
+
+With labels, a wet road stays off the vehicles on it and snow settles by
+name as well as by shape; the sky is the sky; foliage is bright in infrared
+night whatever colour it photographed as. With a geometry, every transform
+sees the frame through one camera in place of a field of view and a pitch
+drawn by each; a wet road mirrors about the true horizon; and where the
+camera's height is known, depth is in metres measured from it and
+`depth_range_m` is not needed. Both are evidence and not a verdict, and a
+provider given neither behaves as before.
+[`docs/scene_understanding.md`](docs/scene_understanding.md) has the
+figures, what the estimator can and cannot tell, and the licences of the
+networks.
+
+![what the provider reads off each sample scene](docs/assets/scene_understanding/labels_and_horizon.jpg)
 
 ---
 
@@ -512,6 +552,10 @@ depth-conditioned transform that shares one `SharedDepthProvider` reuses it:
 chained in one pipeline, only the first pays. Constructing a provider per
 transform pays it again in each.
 
+A provider asked for [scene labels and geometry](docs/scene_understanding.md)
+makes them with the depth, once per new frame: 33 ms for the labels at
+either size, with the default network, and 5 to 6 ms for the geometry.
+
 The saving holds along a whole pipeline, not only between adjacent
 transforms: each transform here passes the scene on with its output, so depth
 is estimated from the clean frame and reused by everything downstream —
@@ -586,6 +630,11 @@ provider = SharedDepthProvider(DepthAnythingV2Estimator(), depth_range_m=(1.0, 1
 
 `RandomFog` can additionally override the far plane for itself with
 `depth_scale`.
+
+Or let the camera's height set the scale: a provider with an
+[installation geometry](docs/scene_understanding.md#metres) whose height is
+known, given or estimated, puts the depth in metres measured from the
+camera, frame by frame, and `depth_range_m` is not used.
 
 **Severity is extinction per metre, so it has to match the scene's scale.**
 The presets suit the default 3-50 m. Calibrate a provider to a landscape and
@@ -809,6 +858,7 @@ intentionally changes:
 python -m tests.visual_regression.generate_goldens
 python docs/generate_examples.py          # the severity gallery
 python docs/generate_scene_examples.py    # every effect over sample_scenes/
+python docs/make_scene_understanding_figures.py   # the labels and geometry guide's figures
 ```
 
 The code reference is a site generated from the source: Python by autodoc,

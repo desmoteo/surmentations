@@ -208,6 +208,39 @@ normal points at the camera, so `n·up` there equals `sin(pitch)` and crosses
 a lenient threshold at about 18° of downward tilt — past which a raw mask
 swallows the sky.
 
+### What depth does not say: what a pixel is, and where the camera stands
+
+Depth is how far away. It is not *what*: a car two hundred metres off is a
+smooth bump with the road's own orientation, and from above a tree's crown
+is level ground. And it is not *from where*: "up" in the diagram above
+needs the camera's pitch and field of view, which every transform used to
+draw for itself, and the metres above are two numbers given by hand.
+
+A provider can work out both alongside depth, once per scene, and is asked
+for them the same way (`surmentations.perception`):
+
+```mermaid
+flowchart TD
+    F["the frame a pipeline is given"] --> D["depth, and the disparity it was made from"]
+    F --> L["scene labels: road, sky, vegetation, vehicle ..."]
+    D --> G["installation geometry"]
+    L --> G
+    G --> HOR["horizon and roll: the ground's disparity plane meets the sky's"]
+    G --> CAM["one camera per scene: field of view, pitch"]
+    G --> MET["metres: the ground's disparity against its known distance"]
+    L --> USE["what is ground, what is sky, what is a leaf"]
+    CAM --> T["every transform that asks"]
+    HOR --> T
+    MET --> T
+    USE --> T
+```
+
+Both are optional, and both are evidence: a label can take an object off
+the ground or put a road on it and decides nothing else, and what the
+geometry cannot tell from one picture it leaves open.
+[`scene_understanding.md`](scene_understanding.md) has what each effect does
+with them and how far the estimates can be trusted.
+
 ---
 
 ## 4. Atmosphere
@@ -316,14 +349,18 @@ some point:
   depth of the road's two ends says. Fitting it from inverse depth alone
   is exact for metres and was forty to three hundred rows out on monocular
   depth, which places far ground too near: a road mirrored itself, and a
-  night street's lamps fell above the road and left nothing on it.
+  night street's lamps fell above the road and left nothing on it. Where
+  the provider knows how the camera is mounted, the horizon is the
+  camera's.
 - **What stands on the road is not road.** A car a hundred metres off is a
   smooth bump in the depth map with the road's own orientation, and was
   darkened and painted with reflections along with it. It is told by two
   things together (`standing_objects`): it is nearer than the ground round
   it, which a pool of lamp light or a reflection already in the road is
   not, and within reach of that bump it does not look like the road beside
-  it, which the road at its wheels does.
+  it, which the road at its wheels does. A provider with scene labels adds
+  the network's word for it: a labelled vehicle is dry whatever the depth
+  map and the colours say.
 - **Film and puddles are different mirrors.** The film is as rough as the
   road: it smears a reflection a long way down the road and its
   reflectance rises sooner towards the horizon. Most of its facets lie
@@ -401,7 +438,8 @@ mid-range in most frames and, over a skyline, nearer than the buildings
 under it. What sky reliably is, is featureless, all at *one* depth to three
 decimals, and reachable from the top of the frame (`utils/sky.py`). Found
 that way it is lifted to the far plane, so fog thickens up into the sky
-instead of stopping at the roofline.
+instead of stopping at the roofline. A provider with scene labels answers
+this directly, and the sky is then what the network called sky.
 
 **What colour a veil is.** The horizon sky's. It used to be read off the
 frame's brightest pixels, which at night are lamps. Now it is read off the
@@ -410,7 +448,8 @@ droplets scatter all colours alike — and where there is none it is inferred
 from the frame's mean and a typical albedo (`utils/color.py`).
 
 **What is paving.** Rain's mirror goes on level ground that is not green
-vegetation. And where a reflection's source row is above the frame the road
+vegetation; with scene labels, on what is named as paving and off what is
+named as a vehicle, a person, a tree or a lawn. And where a reflection's source row is above the frame the road
 reflects that sky estimate; repeating the top row, as it did, drew vertical
 stripes down any steeply viewed road.
 

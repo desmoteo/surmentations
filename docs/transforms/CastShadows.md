@@ -61,6 +61,15 @@ and the surface — a shadow at someone's feet is crisp, the same shadow's head
 is noticeably soft. That gradient is modelled, since a uniformly hard or
 uniformly soft shadow both read as fake.
 
+## With scene labels and geometry
+
+With a provider that knows how the camera is mounted
+(`geometry`), which surfaces face up is
+read through that camera, in place of `camera_pitch_deg` and
+`horizontal_fov_deg`.
+
+See [scene understanding](../scene_understanding.md).
+
 ## Parameters
 
 | Parameter | Default | Meaning |

@@ -81,6 +81,15 @@ the way, as in `RandomFog`.
 The veil's colour is `RandomFog`'s: the horizon sky's radiance, read
 where sky is in frame and inferred where it is not.
 
+## With scene labels and geometry
+
+With a provider that knows how the camera is mounted
+(`geometry`) the layer is laid under
+that camera: its field of view, its pitch, and its height where that is
+known, in place of the three ranges below.
+
+See [scene understanding](../scene_understanding.md).
+
 ## Parameters
 
 | Parameter | Default | Meaning |

@@ -13,6 +13,7 @@ atmosphere
 camera
 depth
 lens
+perception
 presets
 scene
 utils
