@@ -182,7 +182,9 @@ def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, ob
             "cast_shadows": CastShadows(depth_provider=depth_provider, p=1.0),
             "ground_fog": GroundFog(depth_provider=depth_provider, p=1.0),
             "local_plumes": LocalPlumes(depth_provider=depth_provider, p=1.0),
-            "heat_shimmer": HeatShimmer(depth_provider=depth_provider, p=1.0),
+            # Over a long view, where it has work to do: across these scenes' own
+            # fifty metres it returns the frame untouched.
+            "heat_shimmer": HeatShimmer(depth_provider=depth_provider, p=1.0, depth_scale=3000.0),
         }
     return transforms
 
