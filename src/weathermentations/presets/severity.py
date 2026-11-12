@@ -362,6 +362,7 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 # there is a timestamp at all stays the caller's.
                 "text_height_range": (_lerp(0.02, 0.05, t), _lerp(0.03, 0.08, t)),
                 "privacy_mask_count_range": (int(_lerp(0, 2, t)), int(_lerp(1, 5, t))),
+                "privacy_mask_size_range": (_lerp(0.05, 0.14, t), _lerp(0.15, 0.4, t)),
             },
             "GroundFog": {
                 # Thicker at the ground and deeper: less seen along the

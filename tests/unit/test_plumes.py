@@ -131,6 +131,23 @@ def test_a_plume_takes_the_level_of_the_light_on_it() -> None:
     assert level(0.9) > level(0.3) > 60.0
 
 
+def test_a_plume_is_brightest_on_top_and_greyer_underneath() -> None:
+    image = np.full((*SHAPE, 3), 60, dtype=np.uint8)
+    plumes = _plumes()
+    for seed in range(6):
+        plumes.set_random_seed(seed)
+        params = plumes.get_params_dependent_on_data({"shape": image.shape}, {"image": image})
+        shade, thick = params["shade"], params["veiled"] > 0.5
+        rows = np.nonzero(thick.any(axis=1))[0]
+        if len(rows) < 30:
+            continue
+        top, bottom = rows[: len(rows) // 4], rows[-len(rows) // 4 :]
+        assert float(shade[top][thick[top]].mean()) > float(shade[bottom][thick[bottom]].mean())
+        assert float(shade.min()) >= 0.55 - 1e-6
+        return
+    pytest.fail("no plume large enough to measure in six draws")
+
+
 def test_no_plumes_leave_the_frame_alone() -> None:
     image = np.random.default_rng(0).integers(0, 256, (*SHAPE, 3), dtype=np.uint8)
     plumes = _plumes(plume_count_range=(0, 0))

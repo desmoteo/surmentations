@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 
 from weathermentations.atmosphere import GroundFog
-from weathermentations.atmosphere.ground_fog import layer_optical_depth, scene_points
+from weathermentations.atmosphere.ground_fog import (
+    layer_optical_depth,
+    open_sky_optical_depth,
+    scene_points,
+)
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 
@@ -79,6 +83,22 @@ def test_a_ray_that_dips_into_the_layer_meets_more_fog_than_a_level_one() -> Non
     down = float(layer_optical_depth(np.array(50.0), np.array(-6.0), **LAYER))
     up = float(layer_optical_depth(np.array(50.0), np.array(20.0), **LAYER))
     assert down > 2.0 * level > 4.0 * up
+
+
+def test_the_sky_is_clear_overhead_and_closed_at_the_horizon() -> None:
+    focal = 160 / (2.0 * math.tan(math.radians(30.0)))
+    # A camera looking up at thirty degrees: the horizon is below the
+    # frame's middle, and the top of the frame is steeply up.
+    tau = open_sky_optical_depth(120, 160, focal, math.radians(-30.0), **LAYER)
+    centre = tau[:, 80]
+    assert (np.diff(centre) >= -1e-6).all()
+    # Straight along the axis, thirty degrees up: the column over the sine.
+    column = LAYER["beta_ground"] * math.exp(-2.0) * LAYER["scale_height_m"]
+    assert float(tau[60, 80]) == pytest.approx(column / math.sin(math.radians(30.0)), rel=0.05)
+    # And a camera looking down sees only ground along its axis, which a
+    # ray into the sky is not: it is given the ceiling.
+    down = open_sky_optical_depth(120, 160, focal, math.radians(40.0), **LAYER)
+    assert float(down[100, 80]) == pytest.approx(12.0)
 
 
 def test_a_point_is_not_taken_below_the_ground() -> None:

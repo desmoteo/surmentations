@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from weathermentations.lens import FrostOnGlass
-from weathermentations.lens.frost import frost_depth
+from weathermentations.lens.frost import fronds, frost_depth
 
 SHAPE = (240, 320)
 
@@ -41,19 +41,41 @@ def test_more_coverage_frosts_more_of_the_frame() -> None:
     assert frosted[0] < 0.5 < frosted[-1]
 
 
-def test_feathering_makes_plumes_that_point_at_the_centre() -> None:
-    def roughness(feather: float) -> tuple[float, float]:
-        """How much the frost varies along the top edge, and down the frame under its middle."""
-        depth = _depth(2, coverage=1.0, feather=feather)
-        across = depth[20, 60:260]
-        down = depth[5:45, 160]
-        return float(across.std() / across.mean()), float(down.std() / down.mean())
+def test_ferns_run_ahead_of_the_even_layer_and_leave_glass_between_them() -> None:
+    even = _depth(2, coverage=0.9, feather=0.0)
+    ferny = _depth(2, coverage=0.9, feather=1.0)
+    ahead = even == 0.0
+    assert ahead.mean() > 0.2
+    iced = ferny[ahead] > 0.2
+    # Crystal in places, clear glass in others: neither none nor all.
+    assert 0.03 < float(iced.mean()) < 0.7
 
-    even_across, _ = roughness(0.0)
-    across, down = roughness(1.0)
-    assert across > 3.0 * max(even_across, 0.02)
-    # A plume runs inwards, so the frost changes faster across them than along.
-    assert across > 1.5 * down
+
+def test_fronds_start_at_the_rim_and_reach_as_far_as_they_have_grown() -> None:
+    def crystal(reach: float) -> np.ndarray:
+        """Where there is crystal, for fronds grown this far, averaged over a few draws."""
+        return np.mean(
+            [fronds(np.random.default_rng(s), *SHAPE, reach=reach, scale=0.008) for s in range(6)],
+            axis=0,
+        )
+
+    short, long = crystal(0.3), crystal(1.0)
+    rim = np.ones(SHAPE, dtype=bool)
+    rim[30:-30, 30:-30] = False
+    middle = (slice(90, 150), slice(120, 200))
+    assert float(short[rim].mean()) > 5.0 * float(short[middle].mean())
+    assert float(long[middle].mean()) > 5.0 * max(float(short[middle].mean()), 1e-4)
+    assert float(long.mean()) > 1.5 * float(short.mean())
+
+
+def test_thicker_crystals_are_fewer_and_wider() -> None:
+    def runs(scale: float) -> float:
+        """Mean length of the runs of crystal along the rows: how wide a branch is."""
+        mask = fronds(np.random.default_rng(3), 480, 640, reach=0.8, scale=scale) > 0.5
+        edges = np.abs(np.diff(mask.astype(np.int8), axis=1)).sum()
+        return float(2.0 * mask.sum() / max(edges, 1))
+
+    assert runs(0.014) > 1.5 * runs(0.005)
 
 
 def test_frost_scatters_and_does_not_darken() -> None:

@@ -143,7 +143,7 @@ class IrCutFilterFault(WeatherTransform):
         self,
         leak_range: tuple[float, float] = (0.3, 1.0),
         coverage_range: tuple[float, float] = (0.5, 1.0),
-        white_balance_adaptation_range: tuple[float, float] = (0.3, 1.0),
+        white_balance_adaptation_range: tuple[float, float] = (0.0, 0.8),
         vegetation_gain_range: tuple[float, float] = (0.25, 0.7),
         edge_softness_range: tuple[float, float] = (0.02, 0.08),
         p: float = 0.5,

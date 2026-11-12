@@ -82,6 +82,19 @@ def test_by_day_the_underside_is_darker_where_the_cap_is_thicker() -> None:
     assert out[2, 160, 0] < out[100, 160, 0]
 
 
+def test_by_day_snow_is_pale_and_a_little_blue_and_its_surface_uneven() -> None:
+    image = np.full((*SHAPE, 3), 70, dtype=np.uint8)
+    transform = SnowOnHousing(
+        p=1.0, cap_depth_range=(0.5, 0.5), lumpiness_range=(0.0, 0.0), patch_count_range=(0, 0)
+    )
+    transform.set_random_seed(0)
+    out = transform(image=image)["image"].astype(np.float32)
+    snow = out[:60]
+    assert snow.mean() > 1.3 * 70.0
+    assert snow[..., 2].mean() > snow[..., 0].mean()
+    assert float(snow[..., 1].std()) > 1.0
+
+
 def test_under_the_lamp_snow_clips() -> None:
     night = np.full((*SHAPE, 3), 20, dtype=np.uint8)
     transform = SnowOnHousing(

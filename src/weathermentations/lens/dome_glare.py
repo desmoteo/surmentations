@@ -189,7 +189,7 @@ class IrDomeGlare(WeatherTransform):
         led_count_range: tuple[int, int] = (4, 24),
         led_contrast_range: tuple[float, float] = (0.0, 0.7),
         veil_range: tuple[float, float] = (0.0, 0.06),
-        dirt_range: tuple[float, float] = (0.0, 0.8),
+        dirt_range: tuple[float, float] = (0.0, 0.6),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring."""
@@ -252,7 +252,7 @@ class IrDomeGlare(WeatherTransform):
             reduction=_REDUCTION if mode.fast() else 1,
         )
         if dirt > 0.0:
-            patches = value_noise(_DIRT_CELLS, _DIRT_CELLS, rng=rng, octaves=4, base_cells=3)
+            patches = value_noise(_DIRT_CELLS, _DIRT_CELLS, rng=rng, octaves=4, base_cells=8)
             patches = cv2.resize(patches, (width, height), interpolation=cv2.INTER_CUBIC)
             # About a mean of one, so dirt moves the light and adds none.
             glow *= (1.0 - dirt) + dirt * patches / max(float(patches.mean()), 1e-3)

@@ -24,10 +24,14 @@ from the source up, and it ends by fading, not at an edge. Turbulence
 breaks it into billows the size of its own width: a fractal noise
 modulates the density and bends the column.
 
-**It is white.** Droplets scatter all colours alike and absorb none. The
-plume takes the colour and level of the light falling on it, estimated as
-for rain and snow from the frame; ``brightness_range`` scales that, for
-exhaust in shadow or steam in the sun.
+**It is white, and it shades itself.** Droplets scatter all colours alike
+and absorb none. The plume takes the colour and level of the light
+falling on it, estimated as for rain and snow from the frame;
+``brightness_range`` scales that, for exhaust in shadow or steam in the
+sun. The light comes from above, through the plume's own upper part, so
+each billow is brightest on top and greyer underneath by the optical
+depth above it: what gives steam its modelling and stops it being a flat
+white shape.
 """
 
 from __future__ import annotations
@@ -52,6 +56,9 @@ _SPREAD = 3.5
 # How far in front of the plume's distance the scene starts to be veiled,
 # as a share of that distance: a plume has depth of its own.
 _DEPTH_SOFTNESS = 0.08
+# How much of the light from above a plume's own optical depth takes off
+# what is under it, at most.
+_SELF_SHADE = 0.45
 
 
 def plume_depth(
@@ -204,7 +211,8 @@ class LocalPlumes(WeatherTransform):
         """Put each plume on a point of the scene and work out what of it each pixel sees.
 
         Returns ``veiled``, the share of each pixel's light the plumes
-        replace, and their ``brightness``.
+        replace; ``shade``, how much of the light from above reaches each
+        point of them; and their ``brightness``.
         """
         scene = scene_of(data)
         height, width = params["shape"][:2]
@@ -217,6 +225,7 @@ class LocalPlumes(WeatherTransform):
         )
 
         clear = np.ones((height, width), dtype=np.float32)
+        above = np.zeros((height, width), dtype=np.float32)
         distances = []
         for _ in range(self.py_random.randint(*self.plume_count_range)):
             # On the ground, which in a camera's view is the lower part of
@@ -241,6 +250,9 @@ class LocalPlumes(WeatherTransform):
                 1.0,
             )
             clear *= np.exp(-tau * behind)
+            # Optical depth between each point and the light overhead:
+            # the column above it, counted across the plume's own width.
+            above += np.cumsum(tau, axis=0) / max(float(tau.sum(axis=0).max()), 1e-6)
             distances.append(distance)
 
         record_draw(
@@ -249,10 +261,19 @@ class LocalPlumes(WeatherTransform):
             focal_px=focal,
             veiled_fraction=lambda: float((clear < 0.5).mean()),
         )
-        return {"veiled": 1.0 - clear, "brightness": self.py_random.uniform(*self.brightness_range)}
+        return {
+            "veiled": 1.0 - clear,
+            "shade": 1.0 - _SELF_SHADE * np.clip(above, 0.0, 1.0),
+            "brightness": self.py_random.uniform(*self.brightness_range),
+        }
 
     def apply(
-        self, img: np.ndarray, veiled: np.ndarray, brightness: float, **params: Any
+        self,
+        img: np.ndarray,
+        veiled: np.ndarray,
+        shade: np.ndarray,
+        brightness: float,
+        **params: Any,
     ) -> np.ndarray:
         """Replace what the plumes hide by their own light, in linear light."""
         if float(veiled.max()) < 1e-3:
@@ -260,5 +281,5 @@ class LocalPlumes(WeatherTransform):
         linear, scale, is_integer = to_linear_unit(img)
         steam = brightness * illuminant_radiance_linear(linear)
         share = veiled[..., None]
-        out = linear * (1.0 - share) + share * steam[None, None, :]
+        out = linear * (1.0 - share) + share * shade[..., None] * steam[None, None, :]
         return from_linear_unit(out, scale, is_integer, img.dtype)

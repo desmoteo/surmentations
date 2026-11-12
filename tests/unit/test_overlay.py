@@ -73,6 +73,16 @@ def test_lettering_is_whole_dots_and_inside_the_frame_at_every_size(size: tuple[
         assert np.array_equal(middle, image[size[0] // 3 : 2 * size[0] // 3])
 
 
+def test_the_largest_lettering_still_fits_across_the_frame() -> None:
+    for size in ((240, 320), (480, 640), (720, 1280)):
+        overlay = _overlay(text_height_range=(0.2, 0.2))
+        for seed in range(8):
+            overlay.set_random_seed(seed)
+            params = overlay.get_params_dependent_on_data({"shape": (*size, 3)}, {})
+            for text, _corner, _style in params["lines"]:
+                assert render_text(text, params["scale"]).shape[1] <= size[1]
+
+
 def test_the_text_can_be_read_back_from_the_frame() -> None:
     image = np.full((256, 256, 3), 110, dtype=np.uint8)
     overlay = _overlay(label_probability=0.0)
