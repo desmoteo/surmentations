@@ -13,12 +13,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from weathermentations.atmosphere.fog import RandomFog
-from weathermentations.atmosphere.rain import RandomRain
-from weathermentations.atmosphere.snow import RandomSnow
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, SunFlare, WaterDroplets
+from surmentations.atmosphere.fog import RandomFog
+from surmentations.atmosphere.rain import RandomRain
+from surmentations.atmosphere.snow import RandomSnow
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import DirtSoil, SunFlare, WaterDroplets
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 

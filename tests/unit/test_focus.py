@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import FocusShift
-from weathermentations.lens.focus import blur_by_depth, blur_diameter
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import FocusShift
+from surmentations.lens.focus import blur_by_depth, blur_diameter
 
 SHAPE = (120, 160)
 

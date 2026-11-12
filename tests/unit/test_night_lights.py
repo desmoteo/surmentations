@@ -11,15 +11,15 @@ import cv2
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.night_fog import NightFog
-from weathermentations.atmosphere.rain import RandomRain, _apply_ground_wetness, _lamp_light
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.diagnostics import recording
-from weathermentations.lens.source_glare import SourceGlare
-from weathermentations.presets.severity import SEVERITY
-from weathermentations.utils.photometry import srgb_to_linear
-from weathermentations.utils.sources import light_sources
+from surmentations.atmosphere.night_fog import NightFog
+from surmentations.atmosphere.rain import RandomRain, _apply_ground_wetness, _lamp_light
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.diagnostics import recording
+from surmentations.lens.source_glare import SourceGlare
+from surmentations.presets.severity import SEVERITY
+from surmentations.utils.photometry import srgb_to_linear
+from surmentations.utils.sources import light_sources
 
 SIZE = 240
 LAMP = (60, 80)

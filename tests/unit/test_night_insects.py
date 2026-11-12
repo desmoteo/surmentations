@@ -1,7 +1,7 @@
 """NightInsects: streaks whose length, beading and brightness follow from where the insect is.
 
 Each claim of the module's docstring as a measurement on
-:func:`~weathermentations.atmosphere.night_insects.insect_streaks`, and the
+:func:`~surmentations.atmosphere.night_insects.insect_streaks`, and the
 transform held to adding light and nothing else.
 """
 
@@ -10,9 +10,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import NightInsects
-from weathermentations.atmosphere.night_insects import insect_streaks
-from weathermentations.utils.illuminator import lamp_falloff
+from surmentations.atmosphere import NightInsects
+from surmentations.atmosphere.night_insects import insect_streaks
+from surmentations.utils.illuminator import lamp_falloff
 
 SETTINGS = {
     "width": 640,

@@ -6,14 +6,14 @@ import cv2
 import numpy as np
 import pytest
 
-from weathermentations.lens.dirt import DirtSoil
-from weathermentations.lens.sun_flare import SunFlare, diffraction_starburst
-from weathermentations.lens.water_droplets import (
+from surmentations.lens.dirt import DirtSoil
+from surmentations.lens.sun_flare import SunFlare, diffraction_starburst
+from surmentations.lens.water_droplets import (
     WaterDroplets,
     capillary_length_mm,
     power_law_radii,
 )
-from weathermentations.utils.spectral import ghost_tint
+from surmentations.utils.spectral import ghost_tint
 
 
 @pytest.fixture

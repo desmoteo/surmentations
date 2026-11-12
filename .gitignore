@@ -24,7 +24,7 @@ diagnostics/
 pipeline_samples/
 
 # The compiled kernels, built by hatch_build.py from native/*.c
-src/weathermentations/_native/_wmkernels.*
+src/surmentations/_native/_smkernels.*
 
 # The code reference site, built by sphinx-build from docs/site.
 docs/site/_build/

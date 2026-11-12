@@ -807,7 +807,7 @@ flowchart LR
     EYE --> REV
 ```
 
-`WeatherTransform.__init_subclass__` instruments every subclass
+`CameraTransform.__init_subclass__` instruments every subclass
 automatically, so transforms do not opt in and recording costs one flag check
 when off.
 

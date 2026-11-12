@@ -1,4 +1,0 @@
-``weathermentations``
-=====================
-
-.. automodule:: weathermentations

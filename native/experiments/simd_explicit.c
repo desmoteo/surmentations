@@ -1,6 +1,6 @@
 /** Would hand-written SIMD beat the compiler on these kernels?
  *
- * Three loops of wm_kernels.c, each written twice: in plain C, as the
+ * Three loops of sm_kernels.c, each written twice: in plain C, as the
  * library has it, and with intrinsics (AVX2 on x86-64, NEON on arm64). The
  * intrinsics do the same operations in the same order, so the outputs must
  * be equal bit for bit, and the program checks that before it prints a time.

@@ -1,4 +1,4 @@
-"""Sphinx configuration for the weathermentations code reference.
+"""Sphinx configuration for the surmentations code reference.
 
 Build it from the repository root::
 
@@ -20,9 +20,9 @@ ROOT = Path(__file__).resolve().parents[2]
 for path in (ROOT / "src", ROOT, ROOT / "scripts", ROOT / "docs", Path(__file__).parent / "_ext"):
     sys.path.insert(0, str(path))
 
-project = "weathermentations"
-author = "the weathermentations authors"
-copyright = "the weathermentations authors, MIT licence"
+project = "surmentations"
+author = "the surmentations authors"
+copyright = "the surmentations authors, MIT licence"
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -47,7 +47,7 @@ autodoc_typehints_format = "short"
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 
-# C: the kernels are compiled once per instruction-set tier with WM_TIER set;
+# C: the kernels are compiled once per instruction-set tier with SM_TIER set;
 # the reference is of the portable spelling of each.
 hawkmoth_root = str(ROOT / "native")
 
@@ -58,8 +58,8 @@ hawkmoth_compiler = "cc"
 
 hawkmoth_clang = [
     "-std=c11",
-    "-DWM_TIER=portable",
-    "-DWM_NATIVE",
+    "-DSM_TIER=portable",
+    "-DSM_NATIVE",
     f"-I{ROOT / 'native'}",
 ]
 
@@ -69,4 +69,4 @@ myst_heading_anchors = 3
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 exclude_patterns = ["_build"]
 html_theme = "furo"
-html_title = "weathermentations reference"
+html_title = "surmentations reference"

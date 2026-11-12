@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import LocalPlumes
-from weathermentations.atmosphere.plumes import plume_depth
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
+from surmentations.atmosphere import LocalPlumes
+from surmentations.atmosphere.plumes import plume_depth
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
 
 SHAPE = (240, 320)
 PLUME = {"source": (160.0, 200.0), "width_px": 30.0, "rise_px": 150.0, "lean": 0.0, "peak": 2.0}

@@ -5,17 +5,17 @@ What is on the glass and the housing, and what the lens does with bright light a
 ```{toctree}
 :maxdepth: 1
 
-weathermentations.lens
-weathermentations.lens.dirt
-weathermentations.lens.dome_glare
-weathermentations.lens.focus
-weathermentations.lens.foliage
-weathermentations.lens.frost
-weathermentations.lens.occluders
-weathermentations.lens.snow_cap
-weathermentations.lens.source_glare
-weathermentations.lens.spider_web
-weathermentations.lens.sun_flare
-weathermentations.lens.tamper
-weathermentations.lens.water_droplets
+surmentations.lens
+surmentations.lens.dirt
+surmentations.lens.dome_glare
+surmentations.lens.focus
+surmentations.lens.foliage
+surmentations.lens.frost
+surmentations.lens.occluders
+surmentations.lens.snow_cap
+surmentations.lens.source_glare
+surmentations.lens.spider_web
+surmentations.lens.sun_flare
+surmentations.lens.tamper
+surmentations.lens.water_droplets
 ```

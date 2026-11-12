@@ -6,8 +6,8 @@ import albumentations as A
 import numpy as np
 import pytest
 
-from weathermentations.camera import CameraVibration
-from weathermentations.camera.vibration import swing_path
+from surmentations.camera import CameraVibration
+from surmentations.camera.vibration import swing_path
 
 
 def _extent(kernel: np.ndarray, axis: int = 1) -> float:

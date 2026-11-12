@@ -5,10 +5,10 @@ The entry point, the transform base class, the fast and exact modes, diagnostics
 ```{toctree}
 :maxdepth: 1
 
-weathermentations
-weathermentations._native
-weathermentations.allocator
-weathermentations.base
-weathermentations.diagnostics
-weathermentations.mode
+surmentations
+surmentations._native
+surmentations.allocator
+surmentations.base
+surmentations.diagnostics
+surmentations.mode
 ```

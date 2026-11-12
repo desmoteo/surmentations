@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.fog import RandomFog
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
+from surmentations.atmosphere.fog import RandomFog
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
 
 
 class _LinearDepthEstimator(DepthEstimator):

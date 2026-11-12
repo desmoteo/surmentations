@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.snow import RandomSnow, snow_fall_speed
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.utils.precipitation import snow_physical_diameter
+from surmentations.atmosphere.snow import RandomSnow, snow_fall_speed
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.utils.precipitation import snow_physical_diameter
 
 _FOV_DEG = 60.0
 _MAX_DEPTH_M = 50.0
@@ -293,7 +293,7 @@ def test_a_binding_flake_budget_keeps_the_widest_flakes_not_a_random_subset() ->
     snow did not: at 1920 px and severity 5 it was over budget in five draws of
     six and dropped a fifth of its flakes at random.
     """
-    from weathermentations.diagnostics import recording
+    from surmentations.diagnostics import recording
 
     image = np.full((720, 960, 3), 110, dtype=np.uint8)
     provider = SharedDepthProvider(_GroundPlaneDepthEstimator())

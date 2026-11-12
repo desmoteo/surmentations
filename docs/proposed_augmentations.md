@@ -32,7 +32,7 @@ transmission`, the order `presets/pipeline.py` sorts transforms into.
 The same list for every entry below. `NightSnow` is the most recent transform
 added this way and is the one to copy from.
 
-1. The transform, subclassing `WeatherTransform` (`base.py`). Parameters are
+1. The transform, subclassing `CameraTransform` (`base.py`). Parameters are
    physical quantities given as ranges and drawn per call. Anything that
    follows from them is derived, not exposed. Work in linear light
    (`utils/photometry.py`). Accept `uint8` and float input.

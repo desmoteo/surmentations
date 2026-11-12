@@ -1,10 +1,12 @@
-# weathermentations
+# surmentations
 
-![weathermentations: physically grounded weather, lens and camera augmentations](docs/assets/social_banner.png)
+![surmentations: physically grounded weather, lens and camera augmentations](docs/assets/social_banner.png)
 
 Albumentations-compatible, physically-grounded augmentations for training
-models that run on real camera feeds. Thirty-seven transforms, in four
-groups:
+models that run on real camera feeds: surveillance cameras first, and any
+camera that is bolted to something and left outdoors. The name is
+"surveillance" and "augmentations" run together. Thirty-seven transforms,
+in four groups:
 
 - **weather and scene**: rain, snow and fog by day and under the camera's
   own lamp, fog lying on the ground, steam, heat shimmer, cast shadows,
@@ -66,22 +68,22 @@ Optional runtime dependencies:
 
 Everything else runs on CPU with no extra setup.
 
-`pip install "weathermentations[codec]"` adds [PyAV](https://pyav.org), and
+`pip install "surmentations[codec]"` adds [PyAV](https://pyav.org), and
 the two codec transforms then encode inside the process: an H.264 frame in
 about 10 ms at 512 px where starting two ffmpeg processes takes 150 or
 more. For H.264 the frame is the binary's to the byte, which is checked
 once on each installation and not assumed; H.265 comes from another release
 of the encoder and is used in fast mode only. PyAV's wheels carry their own
 FFmpeg built with GPL components (libx264, libx265) and are about 130 MB
-installed. `WEATHERMENTATIONS_CODEC=ffmpeg` keeps to the binary.
+installed. `SURMENTATIONS_CODEC=ffmpeg` keeps to the binary.
 
 If a C compiler (`cc`, `gcc` or `clang`) is present, installing also builds a
 small native library that draws rain and snow and converts colour several
 times faster. It is optional and changes no picture: without it the same
-transforms run their numpy code. `python -c "from weathermentations import
+transforms run their numpy code. `python -c "from surmentations import
 _native; print(_native.tier())"` prints the instruction set in use, or
 `None` if it was not built; `python hatch_build.py` builds it in a checkout.
-`WEATHERMENTATIONS_BUILD_MARCH=native` adds a tier compiled with
+`SURMENTATIONS_BUILD_MARCH=native` adds a tier compiled with
 `-march=native -mtune=native`, for the machine doing the build only.
 See [`docs/native_kernels.md`](docs/native_kernels.md).
 
@@ -93,11 +95,11 @@ moves about 1% of pixels along the skyline; and the depth network runs in
 half precision, which halves the depth estimate and moves depth-dependent
 edges by a pixel here and there (`DepthAnythingV2Estimator(half_precision=False)`
 keeps full precision).
-`weathermentations.set_fast(False)`, `with weathermentations.exact():` or
-`WEATHERMENTATIONS_FAST=0` selects exact mode. The bounds are in
+`surmentations.set_fast(False)`, `with surmentations.exact():` or
+`SURMENTATIONS_FAST=0` selects exact mode. The bounds are in
 [`docs/native_kernels.md`](docs/native_kernels.md#fast-and-exact-mode).
 
-**In a `DataLoader` worker**, `weathermentations.keep_freed_memory()` tells
+**In a `DataLoader` worker**, `surmentations.keep_freed_memory()` tells
 glibc's allocator to reuse freed frames instead of returning them to the
 system. It made `SensorNoise` twice as fast at 512 px and several other
 transforms 6 to 10% faster, at the cost of the worker not shrinking after a
@@ -111,7 +113,7 @@ peak. It is a process-wide setting, so it is yours to call.
 
 ```python
 import albumentations as A
-from weathermentations.lens import WaterDroplets, DirtSoil, SunFlare
+from surmentations.lens import WaterDroplets, DirtSoil, SunFlare
 
 transform = A.Compose([
     WaterDroplets(p=0.3),
@@ -132,8 +134,8 @@ reports hits and misses if you want to confirm it is happening.
 
 ```python
 import albumentations as A
-from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow
-from weathermentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
+from surmentations.atmosphere import RandomFog, RandomRain, RandomSnow
+from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
 
 depth_provider = SharedDepthProvider(DepthAnythingV2Estimator())
 
@@ -289,7 +291,7 @@ could not exist — fog and snow at once, a sun flare under an IR night sky.
 Two pipelines that cannot are importable directly:
 
 ```python
-from weathermentations.presets import surveillance, surveillance_lite
+from surmentations.presets import surveillance, surveillance_lite
 
 transform = surveillance(provider, codec=0.0)   # needs CUDA
 transform = surveillance_lite()                 # CPU only, no night
@@ -343,8 +345,8 @@ For ImageNet-C-style sweeps, unpack a preset instead of picking ranges by
 hand. Levels are 1-5 and every ladder is tested for monotonicity.
 
 ```python
-from weathermentations.presets import SEVERITY
-from weathermentations.lens import WaterDroplets
+from surmentations.presets import SEVERITY
+from surmentations.lens import WaterDroplets
 
 transform = WaterDroplets(p=1.0, **SEVERITY[3]["WaterDroplets"])
 ```
@@ -355,7 +357,7 @@ how much snow lies on it follow how long the weather has lasted, not how
 hard it is coming down, so the two are combined freely:
 
 ```python
-from weathermentations.presets import GROUND_SEVERITY, SEVERITY
+from surmentations.presets import GROUND_SEVERITY, SEVERITY
 
 # A blizzard that has only just started: heavy fall, bare ground.
 RandomSnow(depth_provider=provider, **SEVERITY[5]["RandomSnow"],
@@ -376,7 +378,7 @@ could not exist (codec blocking underneath lens blur means the lens blurred
 an already-compressed image). `physical_order` sorts a list into it:
 
 ```python
-from weathermentations.presets import physical_order
+from surmentations.presets import physical_order
 
 transform = A.Compose(physical_order([
     VideoCodecArtifacts(p=0.4),
@@ -757,11 +759,11 @@ PYTHONPATH=. python scripts/diagnose.py --out diagnostics --seeds 3
 That writes one frame plus one compact JSON record per call: the constructor
 ranges, the physical quantities actually sampled, and a summary of every
 parameter handed to the renderer. Recording is opt-in and costs one flag check
-when off; transforms do not opt in, `WeatherTransform` instruments every
+when off; transforms do not opt in, `CameraTransform` instruments every
 subclass automatically.
 
 ```python
-from weathermentations.diagnostics import recording, write_jsonl
+from surmentations.diagnostics import recording, write_jsonl
 
 with recording() as log:
     augmented = transform(image=image)["image"]
@@ -781,10 +783,10 @@ and what the failures had in common.
 ```bash
 pip install -e ".[dev]"                      # also builds the native kernels
 ruff check src tests docs scripts hatch_build.py
-mypy src/weathermentations
+mypy src/surmentations
 pytest tests -q
-WEATHERMENTATIONS_NATIVE=0 pytest tests -q   # the numpy path alone
-WEATHERMENTATIONS_FAST=0 pytest tests -q     # exact mode
+SURMENTATIONS_NATIVE=0 pytest tests -q   # the numpy path alone
+SURMENTATIONS_FAST=0 pytest tests -q     # exact mode
 python hatch_build.py                        # rebuild after editing native/*.c
 ```
 

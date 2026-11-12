@@ -1,4 +1,4 @@
-# weathermentations — implementation plan
+# surmentations — implementation plan
 
 Albumentations-compatible transforms for physically-grounded weather and lens
 artifacts (fog, rain, snow, water droplets, dirt/soil, sun flare), for use as
@@ -30,7 +30,7 @@ training-time robustness augmentation.
 ### 2.1 Package layout
 
 ```
-weathermentations/
+surmentations/
   __init__.py
   base.py                    # shared base classes / mixins
   depth/
@@ -73,7 +73,7 @@ LICENSE                        # MIT
   ranges, matching existing Albumentations conventions (`RandomRain`,
   `RandomFog`). A `p` argument controls the transform's own apply
   probability, as usual.
-- `weathermentations.presets.SEVERITY[level]` (`level` 1–5, ImageNet-C
+- `surmentations.presets.SEVERITY[level]` (`level` 1–5, ImageNet-C
   style) returns a dict of kwargs per transform class that can be unpacked
   into its constructor — a convenience layer on top of the range API, not a
   separate code path inside the transforms themselves.
@@ -1300,7 +1300,7 @@ any of the v1 effects do. Ordered by robustness gained per unit of work.
 
 ## 6.4 Auditing the derived chains
 
-`src/weathermentations/diagnostics.py` records the draws behind each frame and
+`src/surmentations/diagnostics.py` records the draws behind each frame and
 `scripts/diagnose.py` sweeps every effect. [`docs/physical_review.md`](docs/physical_review.md)
 is the assessment built from one such sweep (225 frames).
 
@@ -1331,7 +1331,7 @@ Open items it raised, not yet actioned:
 
 ## 7. Packaging & release
 
-- Package name `weathermentations`, MIT license.
+- Package name `surmentations`, MIT license.
 - `src/`-layout, `pyproject.toml` (PEP 621), Python ≥3.10.
 - `albumentations>=1.4` (modern RNG API), `torch`, `transformers` or `timm`
   for the depth model, `opencv-python`/`numpy` for compositing.
@@ -1353,7 +1353,7 @@ on-screen overlays, focus shift and camera vibration, and heat shimmer.
 ### Phase 0 — Repo & scaffolding
 - [x] `git init`, `.gitignore`, `LICENSE` (MIT), `README.md` skeleton
 - [x] `pyproject.toml` (src layout, deps, ruff/mypy config)
-- [x] `weathermentations/` package skeleton per §2.1
+- [x] `surmentations/` package skeleton per §2.1
 - [x] `base.py`: shared conventions (range-param validation helpers, RNG
       access via Albumentations' `random_utils`)
 - [x] CI workflow: lint + type-check + unit tests on push/PR
@@ -1376,7 +1376,7 @@ on-screen overlays, focus shift and camera vibration, and heat shimmer.
   - [x] doc sample images
   - [x] **Realism pass (2026-09-11)**, prompted by comparing against the
         team's earlier raindrop-on-lens generator
-        (github.com/waterviewsrl/weathermentations, itself derived from
+        (github.com/waterviewsrl/surmentations, itself derived from
         Chia-Tse Chang's ROLE — github.com/ricky40403/ROLE): droplets now
         (1) never overlap — positions are rejection-sampled against every
         already-placed droplet's footprint with a mandatory gap, degrading

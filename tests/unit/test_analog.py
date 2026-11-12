@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.camera import AnalogVideoArtifacts
-from weathermentations.camera.analog import along_lines, composite_round_trip, displace_lines
+from surmentations.camera import AnalogVideoArtifacts
+from surmentations.camera.analog import along_lines, composite_round_trip, displace_lines
 
 SHAPE = (96, 128)
 NOTHING: dict[str, object] = {

@@ -16,28 +16,28 @@ import cv2
 import numpy as np
 import pytest
 
-import weathermentations
-from weathermentations import _native, mode
-from weathermentations.atmosphere import NightSnow, rain
-from weathermentations.atmosphere.night_rain import _beam_profile
-from weathermentations.atmosphere.snow import render_flake_field
-from weathermentations.camera import (
+import surmentations
+from surmentations import _native, mode
+from surmentations.atmosphere import NightSnow, rain
+from surmentations.atmosphere.night_rain import _beam_profile
+from surmentations.atmosphere.snow import render_flake_field
+from surmentations.camera import (
     NightIrMode,
     SensorNoise,
     TemporalDenoiseArtifacts,
     WdrToneMapping,
 )
-from weathermentations.depth.normals import upward_facing
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare
-from weathermentations.lens import dirt as dirt_module
-from weathermentations.lens import sun_flare as flare_module
-from weathermentations.lens.sun_flare import diffraction_starburst, polygon_distance
-from weathermentations.utils import color, overcast
-from weathermentations.utils import sky as sky_module
-from weathermentations.utils.channels import channel_max, frame_mean, percentile, weighted_colour
-from weathermentations.utils.filters import wide_blur, wide_dilate
-from weathermentations.utils.grids import centered_grid, on_coarse_grid, pixel_grid
-from weathermentations.utils.ground import ground_noise
+from surmentations.depth.normals import upward_facing
+from surmentations.lens import DirtSoil, HousingOccluders, SunFlare
+from surmentations.lens import dirt as dirt_module
+from surmentations.lens import sun_flare as flare_module
+from surmentations.lens.sun_flare import diffraction_starburst, polygon_distance
+from surmentations.utils import color, overcast
+from surmentations.utils import sky as sky_module
+from surmentations.utils.channels import channel_max, frame_mean, percentile, weighted_colour
+from surmentations.utils.filters import wide_blur, wide_dilate
+from surmentations.utils.grids import centered_grid, on_coarse_grid, pixel_grid
+from surmentations.utils.ground import ground_noise
 
 
 @pytest.fixture(autouse=True)
@@ -52,19 +52,19 @@ def _restore_mode():
 
 
 def test_the_mode_is_set_and_restored() -> None:
-    weathermentations.set_fast(True)
-    assert weathermentations.fast()
-    with weathermentations.exact():
-        assert not weathermentations.fast()
-        with weathermentations.exact():
-            assert not weathermentations.fast()
-        assert not weathermentations.fast()
-    assert weathermentations.fast()
+    surmentations.set_fast(True)
+    assert surmentations.fast()
+    with surmentations.exact():
+        assert not surmentations.fast()
+        with surmentations.exact():
+            assert not surmentations.fast()
+        assert not surmentations.fast()
+    assert surmentations.fast()
 
-    weathermentations.set_fast(False)
-    with weathermentations.exact():
+    surmentations.set_fast(False)
+    with surmentations.exact():
         pass
-    assert not weathermentations.fast(), "leaving the block must not switch fast mode on"
+    assert not surmentations.fast(), "leaving the block must not switch fast mode on"
 
 
 def test_an_error_inside_an_exact_block_still_restores_the_mode() -> None:
@@ -80,10 +80,10 @@ def test_an_error_inside_an_exact_block_still_restores_the_mode() -> None:
 def test_the_environment_sets_the_mode_at_import(value: str | None, expected: bool) -> None:
     """Fast unless told otherwise, and told through the environment for a
     spawned worker, which never sees the parent's `set_fast`."""
-    env = {key: item for key, item in os.environ.items() if key != "WEATHERMENTATIONS_FAST"}
+    env = {key: item for key, item in os.environ.items() if key != "SURMENTATIONS_FAST"}
     if value is not None:
-        env["WEATHERMENTATIONS_FAST"] = value
-    code = "import weathermentations; print(weathermentations.fast())"
+        env["SURMENTATIONS_FAST"] = value
+    code = "import surmentations; print(surmentations.fast())"
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert out.stdout.strip() == str(expected), out.stderr
 
@@ -694,9 +694,9 @@ def test_a_shadow_s_penumbra_blurred_small_is_within_a_level_or_two() -> None:
     """CastShadows blurs its shadows on a reduced copy in fast mode once the
     penumbra is wide. With no depth to give a surface, the shadows here are
     applied through a ground plane, as the depth-sharing tests do."""
-    from weathermentations.depth import SharedDepthProvider
-    from weathermentations.depth.estimator import DepthEstimator
-    from weathermentations.scene import CastShadows
+    from surmentations.depth import SharedDepthProvider
+    from surmentations.depth.estimator import DepthEstimator
+    from surmentations.scene import CastShadows
 
     class GroundPlane(DepthEstimator):
         """A level road under the lower half of the frame."""
@@ -717,8 +717,8 @@ def test_a_shadow_s_penumbra_blurred_small_is_within_a_level_or_two() -> None:
 def test_the_night_illuminator_by_the_short_way_is_within_a_few_levels() -> None:
     """Fast mode takes the beam on a coarse grid and the exposure level from
     a histogram."""
-    from weathermentations.depth import SharedDepthProvider
-    from weathermentations.depth.estimator import DepthEstimator
+    from surmentations.depth import SharedDepthProvider
+    from surmentations.depth.estimator import DepthEstimator
 
     class Receding(DepthEstimator):
         """Depth rising from 0.05 at the top row to 1 at the bottom."""

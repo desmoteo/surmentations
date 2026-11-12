@@ -13,11 +13,11 @@ import albumentations as A
 import numpy as np
 import pytest
 
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.diagnostics import recording
-from weathermentations.presets import surveillance, surveillance_lite, weather_state
-from weathermentations.presets.pipeline import stage_of
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.diagnostics import recording
+from surmentations.presets import surveillance, surveillance_lite, weather_state
+from surmentations.presets.pipeline import stage_of
 
 WEATHER = {"RandomRain", "RandomSnow", "RandomFog", "NightRain", "NightSnow", "NightFog"}
 # Which transforms render each weather state. Snow at night is two of them by
@@ -119,7 +119,7 @@ def test_weather_state_rejects_probabilities_that_leave_no_clear_weather() -> No
 def test_pipelines_are_in_physical_order() -> None:
     """`physical_order` cannot sort containers, so the order is written by hand
     and has to be checked."""
-    from weathermentations.presets.pipelines import _stream
+    from surmentations.presets.pipelines import _stream
 
     tail = _stream(
         lit_by_mains=False, infrared=False, dirt=0.2, occluders=0.1, codec=0.1,
@@ -192,8 +192,8 @@ def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
     and it has to work on a machine with no ffmpeg — `surveillance_lite` is
     sold as running anywhere. It used to construct the codec transform anyway,
     at probability zero, and the constructor is what demands the binary."""
-    from weathermentations.camera import _inprocess
-    from weathermentations.camera import codec as codec_module
+    from surmentations.camera import _inprocess
+    from surmentations.camera import codec as codec_module
 
     monkeypatch.setattr(codec_module, "ffmpeg_path", lambda: None)
     # Nor PyAV, which would do in the binary's place.
@@ -306,7 +306,7 @@ def test_rain_at_night_is_metered_for_street_lighting() -> None:
     one looking at the rain. Under street lighting its shutter runs at the
     slow end of what it can do, so night rain is long faint streaks; by day
     the same transform meters for daylight and mostly freezes the drops."""
-    from weathermentations.presets.pipelines import weather_state
+    from surmentations.presets.pipelines import weather_state
 
     def shutters(night: bool) -> np.ndarray:
         transform = A.Compose(

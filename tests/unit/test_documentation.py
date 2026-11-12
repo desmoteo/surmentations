@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 PYTHON = sorted(
     [
-        *ROOT.glob("src/weathermentations/**/*.py"),
+        *ROOT.glob("src/surmentations/**/*.py"),
         *ROOT.glob("scripts/*.py"),
         *ROOT.glob("docs/*.py"),
         *ROOT.glob("docs/site/**/*.py"),
@@ -67,7 +67,7 @@ def test_every_test_module_and_helper_has_a_docstring(path: Path) -> None:
 
 # A top-level C declaration: a function definition, a type, a macro.
 _C_DECLARATION = re.compile(
-    r"^(static |WM_EXPORT |extern |typedef |#define |int |void |ptrdiff_t |const |float |double )"
+    r"^(static |SM_EXPORT |extern |typedef |#define |int |void |ptrdiff_t |const |float |double )"
 )
 # A member of the kernel table: a function pointer or the tier's name.
 _C_MEMBER = re.compile(r"^    (int|void|ptrdiff_t|const char \*)\s*\(?\*?\w")
@@ -77,7 +77,7 @@ _C_MEMBER = re.compile(r"^    (int|void|ptrdiff_t|const char \*)\s*\(?\*?\w")
 def test_every_c_declaration_has_a_doc_comment(path: Path) -> None:
     """Hawkmoth documents a declaration from the ``/** */`` comment just before it.
 
-    Declarations a macro's own definition spans (``WM_CAT_`` and the like) and
+    Declarations a macro's own definition spans (``SM_CAT_`` and the like) and
     include guards are exempt: they are spelling, not interface.
     """
     lines = path.read_text().split("\n")
@@ -89,7 +89,7 @@ def test_every_c_declaration_has_a_doc_comment(path: Path) -> None:
         is_extern_function = line.startswith("extern") and "(" in line
         if line.rstrip().endswith(";") and not is_member and not is_extern_function:
             continue  # a variable, or a declaration of one defined elsewhere
-        if re.match(r"#define (WM_\w+_|WM_KERNELS_H)\b", line):
+        if re.match(r"#define (SM_\w+_|SM_KERNELS_H)\b", line):
             continue
         above = index - 1
         while above >= 0 and lines[above].strip().startswith("#if"):
@@ -120,6 +120,6 @@ def _modules(pattern: str, root: str) -> set[str]:
 
 def test_every_module_has_a_page_on_the_site() -> None:
     pages = {path.stem for path in (ROOT / "docs/site/python").glob("*.rst")}
-    assert _modules("src/weathermentations/**/*.py", "src") == pages
+    assert _modules("src/surmentations/**/*.py", "src") == pages
     tests = {path.stem for path in (ROOT / "docs/site/tests").glob("*.rst")}
     assert _modules("tests/**/*.py", ".") == tests

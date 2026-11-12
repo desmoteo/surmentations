@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.camera import IrCutFilterFault
-from weathermentations.camera.ir_cut import unfiltered_side
+from surmentations.camera import IrCutFilterFault
+from surmentations.camera.ir_cut import unfiltered_side
 
 SHAPE = (120, 160)
 

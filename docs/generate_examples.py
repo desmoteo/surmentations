@@ -33,14 +33,14 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-from weathermentations.atmosphere import GroundFog, HeatShimmer, LocalPlumes, NightInsects
-from weathermentations.atmosphere.fog import RandomFog
-from weathermentations.atmosphere.night_fog import NightFog
-from weathermentations.atmosphere.night_rain import NightRain
-from weathermentations.atmosphere.night_snow import NightSnow
-from weathermentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
-from weathermentations.atmosphere.snow import RandomSnow
-from weathermentations.camera import (
+from surmentations.atmosphere import GroundFog, HeatShimmer, LocalPlumes, NightInsects
+from surmentations.atmosphere.fog import RandomFog
+from surmentations.atmosphere.night_fog import NightFog
+from surmentations.atmosphere.night_rain import NightRain
+from surmentations.atmosphere.night_snow import NightSnow
+from surmentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
+from surmentations.atmosphere.snow import RandomSnow
+from surmentations.camera import (
     AcFlicker,
     AnalogVideoArtifacts,
     CameraVibration,
@@ -56,10 +56,10 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
-from weathermentations.camera.codec import ffmpeg_path
-from weathermentations.depth.estimator import DepthAnythingV2Estimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import (
+from surmentations.camera.codec import ffmpeg_path
+from surmentations.depth.estimator import DepthAnythingV2Estimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import (
     DirtSoil,
     FocusShift,
     FoliageIntrusion,
@@ -73,8 +73,8 @@ from weathermentations.lens import (
     SunFlare,
     WaterDroplets,
 )
-from weathermentations.presets.severity import GROUND_SEVERITY, SEVERITY
-from weathermentations.scene import CastShadows
+from surmentations.presets.severity import GROUND_SEVERITY, SEVERITY
+from surmentations.scene import CastShadows
 
 OUT_DIR = Path(__file__).parent / "examples"
 REFERENCE_IMAGE = OUT_DIR / "reference.webp"

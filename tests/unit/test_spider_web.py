@@ -12,10 +12,10 @@ import math
 import numpy as np
 import pytest
 
-from weathermentations import mode
-from weathermentations.lens import SpiderWeb
-from weathermentations.lens.spider_web import _NEAREST_M, _glints, _orb_web, _pieces
-from weathermentations.utils.illuminator import (
+from surmentations import mode
+from surmentations.lens import SpiderWeb
+from surmentations.lens.spider_web import _NEAREST_M, _glints, _orb_web, _pieces
+from surmentations.utils.illuminator import (
     REFERENCE_DISTANCE_M,
     RING_RADIUS_M,
     lamp_falloff,

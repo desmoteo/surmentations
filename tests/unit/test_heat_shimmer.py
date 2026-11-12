@@ -5,15 +5,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere import HeatShimmer
-from weathermentations.atmosphere.heat_shimmer import (
+from surmentations.atmosphere import HeatShimmer
+from surmentations.atmosphere.heat_shimmer import (
     blur_by_sigma,
     blur_fwhm_rad,
     smooth_field,
     tilt_sigma_rad,
 )
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
 
 SHAPE = (160, 200)
 

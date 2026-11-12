@@ -1,7 +1,7 @@
 """IrDomeGlare: a ring of light where the dome mirrors the LEDs, and how it is cut and broken up.
 
 The ring's shape is measured on
-:func:`~weathermentations.lens.dome_glare.ring_glow`; the transform is held
+:func:`~surmentations.lens.dome_glare.ring_glow`; the transform is held
 to adding light, and to its two modes agreeing.
 """
 
@@ -10,10 +10,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations import mode
-from weathermentations.lens import IrDomeGlare
-from weathermentations.lens.dome_glare import ring_glow
-from weathermentations.utils.grids import pixel_grid
+from surmentations import mode
+from surmentations.lens import IrDomeGlare
+from surmentations.lens.dome_glare import ring_glow
+from surmentations.utils.grids import pixel_grid
 
 SIZE = 201
 SHAPE = {

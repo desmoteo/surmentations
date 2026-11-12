@@ -24,13 +24,13 @@ import albumentations as A
 import numpy as np
 import pytest
 
-from weathermentations import mode
-from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow
-from weathermentations.camera import NightIrMode, RollingShutter
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil
-from weathermentations.scene import CastShadows
+from surmentations import mode
+from surmentations.atmosphere import RandomFog, RandomRain, RandomSnow
+from surmentations.camera import NightIrMode, RollingShutter
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import DirtSoil
+from surmentations.scene import CastShadows
 
 
 class _SignedDepth(DepthEstimator):

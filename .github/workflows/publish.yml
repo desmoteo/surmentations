@@ -27,7 +27,7 @@ jobs:
         # job (docs/native_kernels.md, "Not done"); until then a user gets
         # the kernels by installing from the sdist with a C compiler present.
         env:
-          WEATHERMENTATIONS_BUILD_NATIVE: "0"
+          SURMENTATIONS_BUILD_NATIVE: "0"
         run: |
           pip install build
           python -m build

@@ -8,8 +8,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from weathermentations.camera.codec import MACROBLOCK_PX, ffmpeg_path
-from weathermentations.camera.transmission import (
+from surmentations.camera.codec import MACROBLOCK_PX, ffmpeg_path
+from surmentations.camera.transmission import (
     _PACKET_BYTES,
     _START_CODE,
     TransmissionFaults,
@@ -22,8 +22,8 @@ from weathermentations.camera.transmission import (
     packet_losses,
     split_nal_units,
 )
-from weathermentations.diagnostics import recording
-from weathermentations.presets.severity import SEVERITY
+from surmentations.diagnostics import recording
+from surmentations.presets.severity import SEVERITY
 
 requires_ffmpeg = pytest.mark.skipif(ffmpeg_path() is None, reason="needs the ffmpeg binary")
 
@@ -248,8 +248,8 @@ def test_the_link_s_state_is_recorded() -> None:
 def test_it_refuses_to_be_built_without_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
     """It could fall back to drawing blocks. It must not: that would put a
     different artefact in a training set under this transform's name."""
-    from weathermentations.camera import _inprocess
-    from weathermentations.camera import codec as codec_module
+    from surmentations.camera import _inprocess
+    from surmentations.camera import codec as codec_module
 
     monkeypatch.setattr(codec_module, "ffmpeg_path", lambda: None)
     # Nor PyAV, which would do in the binary's place.

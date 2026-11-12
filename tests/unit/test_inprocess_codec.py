@@ -1,6 +1,6 @@
 """The codec transforms encoding in this process, through PyAV, against the ffmpeg binary.
 
-PyAV is an optional extra (``pip install weathermentations[codec]``). Without
+PyAV is an optional extra (``pip install surmentations[codec]``). Without
 it most of this file skips, and what is left checks that its absence is
 handled: nothing is encoded in process and the binary does the work.
 
@@ -19,10 +19,10 @@ import sys
 import numpy as np
 import pytest
 
-from weathermentations import mode
-from weathermentations.camera import TransmissionFaults, VideoCodecArtifacts, _inprocess
-from weathermentations.camera import codec as codec_module
-from weathermentations.camera import transmission as transmission_module
+from surmentations import mode
+from surmentations.camera import TransmissionFaults, VideoCodecArtifacts, _inprocess
+from surmentations.camera import codec as codec_module
+from surmentations.camera import transmission as transmission_module
 
 HAS_BINARY = codec_module.ffmpeg_path() is not None
 requires_av = pytest.mark.skipif(
@@ -76,10 +76,10 @@ def test_without_pyav_nothing_is_encoded_in_process(monkeypatch: pytest.MonkeyPa
 
 
 def test_the_environment_keeps_the_codec_to_the_binary() -> None:
-    code = "from weathermentations.camera import _inprocess; print(_inprocess.available())"
+    code = "from surmentations.camera import _inprocess; print(_inprocess.available())"
     off = subprocess.run(
         [sys.executable, "-c", code],
-        env={**os.environ, "WEATHERMENTATIONS_CODEC": "ffmpeg"},
+        env={**os.environ, "SURMENTATIONS_CODEC": "ffmpeg"},
         capture_output=True,
         text=True,
         check=True,

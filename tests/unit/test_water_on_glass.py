@@ -25,8 +25,8 @@ import cv2
 import numpy as np
 import pytest
 
-from weathermentations.diagnostics import recording
-from weathermentations.lens.water_droplets import (
+from surmentations.diagnostics import recording
+from surmentations.lens.water_droplets import (
     _LOBE_REACH,
     _OUTLINE_HARMONICS,
     _OUTLINE_LEVEL,
@@ -40,7 +40,7 @@ from weathermentations.lens.water_droplets import (
     _runner_path,
     _water_surface,
 )
-from weathermentations.utils.photometry import srgb_to_linear
+from surmentations.utils.photometry import srgb_to_linear
 
 # A pane with nothing on it but film: one drop too small to cover a pixel.
 NO_DROPS = {"droplet_count_range": (1, 1), "droplet_radius_range": (0.0005, 0.0006)}

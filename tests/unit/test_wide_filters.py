@@ -9,7 +9,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from weathermentations.utils.filters import wide_blur, wide_dilate
+from surmentations.utils.filters import wide_blur, wide_dilate
 
 
 def test_a_wide_blur_is_the_blur_it_stands_in_for() -> None:

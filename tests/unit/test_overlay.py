@@ -8,9 +8,9 @@ import albumentations as A
 import numpy as np
 import pytest
 
-from weathermentations.camera import OnScreenOverlay
-from weathermentations.camera.overlay import _GLYPHS, GLYPH_ROWS, render_text, timestamp
-from weathermentations.presets.pipeline import physical_order, stage_of
+from surmentations.camera import OnScreenOverlay
+from surmentations.camera.overlay import _GLYPHS, GLYPH_ROWS, render_text, timestamp
+from surmentations.presets.pipeline import physical_order, stage_of
 
 
 def _scene(height: int = 240, width: int = 320) -> np.ndarray:
@@ -154,7 +154,7 @@ def test_boxes_survive_a_whole_pipeline_unless_hidden() -> None:
 
 
 def test_who_draws_it_decides_where_in_the_chain_it_goes() -> None:
-    from weathermentations.camera import AnalogVideoArtifacts, SensorNoise
+    from surmentations.camera import AnalogVideoArtifacts, SensorNoise
 
     camera, recorder = OnScreenOverlay(drawn_by="camera"), OnScreenOverlay(drawn_by="recorder")
     link, sensor = AnalogVideoArtifacts(), SensorNoise()

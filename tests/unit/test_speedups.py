@@ -13,16 +13,16 @@ import numpy as np
 import pytest
 import torch
 
-from weathermentations import mode
-from weathermentations.atmosphere import rain
-from weathermentations.camera import NightIrMode
-from weathermentations.depth import DepthAnythingV2Estimator
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.diagnostics import record_draw, recording
-from weathermentations.utils import precipitation
-from weathermentations.utils.color import veil_radiance_linear
-from weathermentations.utils.sources import source_mask
+from surmentations import mode
+from surmentations.atmosphere import rain
+from surmentations.camera import NightIrMode
+from surmentations.depth import DepthAnythingV2Estimator
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.diagnostics import record_draw, recording
+from surmentations.utils import precipitation
+from surmentations.utils.color import veil_radiance_linear
+from surmentations.utils.sources import source_mask
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="the depth model requires CUDA"

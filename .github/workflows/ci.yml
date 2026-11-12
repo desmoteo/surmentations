@@ -22,7 +22,7 @@ jobs:
     env:
       # The editable install below compiles native/*.c. Here a failure to do
       # so is an error, not the silent fall back to numpy a user gets.
-      WEATHERMENTATIONS_BUILD_NATIVE: require
+      SURMENTATIONS_BUILD_NATIVE: require
     steps:
       - uses: actions/checkout@v4
 
@@ -48,11 +48,11 @@ jobs:
         # The hashes are compared by the tests on this machine; printing them
         # lets the x86-64 and arm64 jobs be compared with each other.
         run: |
-          python -c "from weathermentations import _native as n; assert n.available(); print(n.tier(), n.tiers())"
+          python -c "from surmentations import _native as n; assert n.available(); print(n.tier(), n.tiers())"
           sh native/check/run.sh
 
       - name: mypy
-        run: mypy src/weathermentations
+        run: mypy src/surmentations
 
       - name: pytest
         # Depth-conditioned effects require CUDA (Phase 2+); those tests are
@@ -61,11 +61,11 @@ jobs:
 
       - name: pytest without the native kernels
         # What an install with no C compiler runs: the numpy code alone.
-        run: WEATHERMENTATIONS_NATIVE=0 pytest tests -q
+        run: SURMENTATIONS_NATIVE=0 pytest tests -q
 
       - name: pytest in exact mode
         # Fast mode is the default and what the runs above used.
-        run: WEATHERMENTATIONS_FAST=0 pytest tests -q
+        run: SURMENTATIONS_FAST=0 pytest tests -q
 
       - name: The codec transforms through PyAV
         # The optional extra: H.264 and H.265 encoded in the process. Its
@@ -75,7 +75,7 @@ jobs:
         run: |
           pip install -e ".[codec]"
           pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py tests/unit/test_camera.py -q
-          WEATHERMENTATIONS_FAST=0 pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py -q
+          SURMENTATIONS_FAST=0 pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py -q
 
   docs:
     # The code reference, generated from the source. Warnings are errors: a
@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # autodoc imports the package; the kernels are not needed for that.
-      WEATHERMENTATIONS_BUILD_NATIVE: "0"
+      SURMENTATIONS_BUILD_NATIVE: "0"
     steps:
       - uses: actions/checkout@v4
 

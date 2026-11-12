@@ -21,19 +21,19 @@ import cv2
 import numpy as np
 import pytest
 
-from weathermentations import _native, mode
-from weathermentations.atmosphere import NightRain, NightSnow
-from weathermentations.atmosphere import rain as rain_module
-from weathermentations.atmosphere.snow import render_flake_field
-from weathermentations.camera import TemporalDenoiseArtifacts
-from weathermentations.camera import denoise as denoise_module
-from weathermentations.lens import DirtSoil, SpiderWeb, WaterDroplets
-from weathermentations.lens import water_droplets as droplets_module
-from weathermentations.utils import ground as ground_module
-from weathermentations.utils import overcast, photometry
-from weathermentations.utils.illuminator import splat_discs
+from surmentations import _native, mode
+from surmentations.atmosphere import NightRain, NightSnow
+from surmentations.atmosphere import rain as rain_module
+from surmentations.atmosphere.snow import render_flake_field
+from surmentations.camera import TemporalDenoiseArtifacts
+from surmentations.camera import denoise as denoise_module
+from surmentations.lens import DirtSoil, SpiderWeb, WaterDroplets
+from surmentations.lens import water_droplets as droplets_module
+from surmentations.utils import ground as ground_module
+from surmentations.utils import overcast, photometry
+from surmentations.utils.illuminator import splat_discs
 
-# Built and switched on: with WEATHERMENTATIONS_NATIVE=0 the library is there
+# Built and switched on: with SURMENTATIONS_NATIVE=0 the library is there
 # and every comparison below would be numpy against itself.
 requires_native = pytest.mark.skipif(
     not _native.enabled(),
@@ -1012,10 +1012,10 @@ def test_a_transform_s_output_does_not_depend_on_the_kernels(transform) -> None:
 
 
 def test_the_environment_switches_the_kernels_off() -> None:
-    code = "from weathermentations import _native; print(_native.enabled())"
+    code = "from surmentations import _native; print(_native.enabled())"
     off = subprocess.run(
         [sys.executable, "-c", code],
-        env={**os.environ, "WEATHERMENTATIONS_NATIVE": "0"},
+        env={**os.environ, "SURMENTATIONS_NATIVE": "0"},
         capture_output=True,
         text=True,
         check=True,

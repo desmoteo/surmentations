@@ -9,11 +9,11 @@ an IR-mode night sky.
 
 This is a worked composite that does not, with measured frequencies and a
 measured cost. It ships as
-[`weathermentations.presets.surveillance`](../src/weathermentations/presets/pipelines.py),
+[`surmentations.presets.surveillance`](../src/surmentations/presets/pipelines.py),
 alongside a CPU-only `surveillance_lite`:
 
 ```python
-from weathermentations.presets import surveillance, surveillance_lite
+from surmentations.presets import surveillance, surveillance_lite
 ```
 
 Every probability below is a keyword argument, because the defaults encode how
@@ -150,13 +150,13 @@ nothing about whether the encoder dropped a frame.
 
 ```python
 import albumentations as A
-from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow
-from weathermentations.camera import (
+from surmentations.atmosphere import RandomFog, RandomRain, RandomSnow
+from surmentations.camera import (
     AcFlicker, ExposureTransient, NightIrMode, RollingShutter, SensorNoise,
     TemporalDenoiseArtifacts, VideoCodecArtifacts, WdrToneMapping,
 )
-from weathermentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
-from weathermentations.scene import CastShadows
+from surmentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from surmentations.scene import CastShadows
 
 
 def _weather(
@@ -262,7 +262,7 @@ def surveillance(depth_provider, day=0.55, lit_night=0.15, ir_night=0.30, codec_
 Used as:
 
 ```python
-from weathermentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
+from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
 
 provider = SharedDepthProvider(DepthAnythingV2Estimator())   # construct once
 transform = surveillance(provider)
@@ -287,7 +287,7 @@ thirds of those have tripped to IR.
 
 ## Measured behaviour
 
-Over 3000 images, recorded with `weathermentations.diagnostics`:
+Over 3000 images, recorded with `surmentations.diagnostics`:
 
 | Property | Measured | Designed |
 | --- | --- | --- |
