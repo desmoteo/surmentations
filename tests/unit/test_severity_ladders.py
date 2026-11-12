@@ -46,6 +46,9 @@ from weathermentations.camera import (
     TemporalDenoiseArtifacts,
     WdrToneMapping,
 )
+from weathermentations.camera.analog import AnalogVideoArtifacts
+from weathermentations.camera.demosaic import DemosaicArtifacts
+from weathermentations.camera.ir_cut import IrCutFilterFault
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
@@ -116,6 +119,9 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
     # severity does not control.
     "SunFlare": lambda k: SunFlare(p=1.0, flare_position=(0.75, 0.15), **k),
     "HousingOccluders": lambda k: HousingOccluders(p=1.0, **k),
+    "AnalogVideoArtifacts": lambda k: AnalogVideoArtifacts(p=1.0, **k),
+    "DemosaicArtifacts": lambda k: DemosaicArtifacts(p=1.0, **k),
+    "IrCutFilterFault": lambda k: IrCutFilterFault(p=1.0, **k),
     "FoliageIntrusion": lambda k: FoliageIntrusion(p=1.0, **k),
     "LensTamper": lambda k: LensTamper(p=1.0, **k),
     "SnowOnHousing": lambda k: SnowOnHousing(p=1.0, **k),

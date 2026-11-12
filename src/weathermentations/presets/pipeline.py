@@ -48,6 +48,8 @@ _STAGE_ORDER: dict[str, int] = {
     "SourceGlare": 3,
     # Sensor: exposure, readout and their artefacts.
     "NightIrMode": 4,
+    # The same filter, stuck open by day.
+    "IrCutFilterFault": 4,
     # Rain lit by the camera's own illuminator, so it has to follow the IR
     # conversion rather than precede it: the streaks are already in infrared
     # terms and running them through the scene's reflectance-to-IR conversion
@@ -70,12 +72,16 @@ _STAGE_ORDER: dict[str, int] = {
     "AcFlicker": 6,
     "RollingShutter": 6,
     "SensorNoise": 6,
+    # The mosaic, and the interpolation that follows it.
+    "DemosaicArtifacts": 6,
     # ISP: everything the processor does to the raw frame.
     "ExposureTransient": 7,
     "WdrToneMapping": 8,
     "TemporalDenoiseArtifacts": 9,
     # Transmission: last, because it acts on the finished picture.
     "VideoCodecArtifacts": 10,
+    # An analog link, for a camera that has no codec.
+    "AnalogVideoArtifacts": 10,
     # What the link then loses of the encoded stream.
     "TransmissionFaults": 11,
 }

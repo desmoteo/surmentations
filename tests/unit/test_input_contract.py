@@ -47,7 +47,10 @@ from weathermentations.camera import (
     VideoCodecArtifacts,
     WdrToneMapping,
 )
+from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.codec import ffmpeg_path
+from weathermentations.camera.demosaic import DemosaicArtifacts
+from weathermentations.camera.ir_cut import IrCutFilterFault
 from weathermentations.depth.estimator import DepthEstimator
 from weathermentations.depth.provider import SharedDepthProvider
 from weathermentations.lens import DirtSoil, HousingOccluders, SpiderWeb, SunFlare, WaterDroplets
@@ -88,6 +91,9 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),
     "HousingOccluders": lambda: HousingOccluders(p=1.0),
+    "AnalogVideoArtifacts": lambda: AnalogVideoArtifacts(p=1.0),
+    "DemosaicArtifacts": lambda: DemosaicArtifacts(p=1.0),
+    "IrCutFilterFault": lambda: IrCutFilterFault(p=1.0),
     "FoliageIntrusion": lambda: FoliageIntrusion(p=1.0),
     "LensTamper": lambda: LensTamper(p=1.0),
     "SnowOnHousing": lambda: SnowOnHousing(p=1.0),

@@ -6,10 +6,13 @@ ones in ``atmosphere/``: the physical chain is scene -> atmosphere -> optics
 images that could not exist (codec blocking underneath lens blur, say).
 """
 
+from weathermentations.camera.analog import AnalogVideoArtifacts
 from weathermentations.camera.codec import VideoCodecArtifacts
+from weathermentations.camera.demosaic import DemosaicArtifacts
 from weathermentations.camera.denoise import TemporalDenoiseArtifacts
 from weathermentations.camera.exposure import ExposureTransient
 from weathermentations.camera.flicker import AcFlicker
+from weathermentations.camera.ir_cut import IrCutFilterFault
 from weathermentations.camera.night_ir import NightIrMode
 from weathermentations.camera.rolling_shutter import RollingShutter
 from weathermentations.camera.sensor_noise import SensorNoise
@@ -18,7 +21,10 @@ from weathermentations.camera.transmission import TransmissionFaults
 
 __all__ = [
     "AcFlicker",
+    "AnalogVideoArtifacts",
+    "DemosaicArtifacts",
     "ExposureTransient",
+    "IrCutFilterFault",
     "NightIrMode",
     "RollingShutter",
     "SensorNoise",

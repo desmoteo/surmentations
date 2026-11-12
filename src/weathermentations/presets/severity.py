@@ -322,6 +322,28 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "branch_count_range": (1, int(_lerp(1, 5, t))),
                 "reach_range": (_lerp(0.15, 0.5, t), _lerp(0.35, 1.0, t)),
             },
+            "IrCutFilterFault": {
+                # More infrared reaching more of the sensor, and a camera
+                # that takes less of the cast back out.
+                "leak_range": (_lerp(0.15, 0.9, t), _lerp(0.35, 1.6, t)),
+                "white_balance_adaptation_range": (_lerp(0.8, 0.2, t), _lerp(1.0, 0.6, t)),
+            },
+            "DemosaicArtifacts": {
+                # A sharper lens on a coarser sensor, and a processor that
+                # hides less of the result.
+                "optical_blur_range_px": (_lerp(0.5, 0.0, t), _lerp(0.8, 0.2, t)),
+                "sensor_scale_range": (_lerp(1.0, 1.6, t), _lerp(1.2, 2.6, t)),
+                "chroma_filter_range_px": (0, 1 if t < 0.5 else 0),
+            },
+            "AnalogVideoArtifacts": {
+                # A longer cable into a cheaper receiver: less bandwidth,
+                # more leakage, more noise, a stronger reflection.
+                "luma_bandwidth_range": (_lerp(0.75, 0.2, t), _lerp(0.95, 0.4, t)),
+                "crosstalk_range": (_lerp(0.1, 0.7, t), _lerp(0.4, 1.0, t)),
+                "noise_range": (_lerp(0.004, 0.03, t), _lerp(0.012, 0.07, t)),
+                "ghost_strength_range": (_lerp(0.0, 0.1, t), _lerp(0.06, 0.35, t)),
+                "hum_depth_range": (_lerp(0.0, 0.03, t), _lerp(0.02, 0.12, t)),
+            },
             "CastShadows": {
                 # At least two. A figure's shadow covers a fifth of what a
                 # crown's does, so a single draw can be one thin figure on
