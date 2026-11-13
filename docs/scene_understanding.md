@@ -376,8 +376,13 @@ AGPL. Classical tail-lamp detection, red by colour and paired by symmetry
 already is, and has no counterpart for an unlit headlamp by day. OWLv2 is
 Apache-2.0.
 
+**Street lamps, in the same look.** The pass over the whole frame is also
+asked for "a street light". A tall box is a lamp's post and the flat boxes
+at its top are its heads; `provider.get_street_lamps(image)` returns one
+row to a head. `NightIrMode` lights a night scene from them.
+
 **What uses it.** `RandomRain`'s spray and lamps, and `NightIrMode`'s
-lamps ([`road_surface.md`](road_surface.md)). Each vehicle told apart has its
+lamps and night lighting ([`road_surface.md`](road_surface.md)). Each vehicle told apart has its
 own wake, its own place in the mist and its own lamps. A vehicle the
 network is sure of keeps its own reading; the rest go with their road's
 traffic; one it did not read is read by colour as before. A vehicle it

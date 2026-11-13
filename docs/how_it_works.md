@@ -306,6 +306,35 @@ a wet road was darkened and mirrored with it and rain in front of spray was
 painted out. The camera's exposure still counts them: it is set from the
 veiled frame and the share of it the streaks will cover.
 
+**The veil is not fog.** The streaks are the drops within a few metres of
+the lens; the rest is a veil, their average, and an average is the same
+grey in front of every pixel at one distance. It is the average of a
+countable number of things. Between the last drop drawn and the distance
+at which there are thousands in front of every pixel, the air holds a few
+drops a pixel, then tens, and their number varies from pixel to pixel as a
+count does, by its own square root
+([`far_field_texture`](../src/surmentations/utils/precipitation.py),
+`distant_rain_range`). So the veil's thickness is given that grain, in
+bands of distance that double: a band at distance `z` and depth `dz`
+holds `N (z / f)^2 dz` drops in the column of air one pixel looks down,
+`N` being the drops in a cubic metre and `f` the focal length in pixels;
+its veil varies by one over the square root of the effective number of
+them, a sixth of the count, since extinction goes with the square of the
+diameter. Where that number is under one, the band is counted out drop by
+drop, as a scatter of dots; above it, it is a grain. The grain is as long
+as the drops fall during the exposure and slants with the wind. Each band
+counts only for the part of it that lies in front of what the pixel shows,
+which is what puts the scene's depth into the rain: none in front of a
+near wall but what was drawn there, all of it in front of the far end of a
+road. Over that the far veil hangs in sheets, thicker in one place than
+another by a fifth. `RandomSnow` does the same with flakes
+(`distant_snow_range`), whose grain is a speckle; and at night the glow of
+what the illuminator lights and the lens cannot resolve has the grain of
+the nearest band of it (`backscatter_grain_range` on `NightRain` and
+`NightSnow`). Left, the veil even; right, with its grain:
+
+![the far field of rain and snow](assets/road_surface/far_field.jpg)
+
 The **resolvability cut is on projected width, not diameter**. A 2 mm drop
 at 1 m is 0.7 px wide and worth drawing; the same drop at 20 m is 0.035 px
 and is not. Cutting on diameter instead truncated the population unevenly

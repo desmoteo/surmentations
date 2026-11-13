@@ -323,34 +323,67 @@ dry has them off. `vehicle_lamp_range` lights them
 
 ### At night
 
-A photograph taken by day has its traffic's lamps off, and by night they
-are the brightest things in a frame. Two cases:
+A photograph taken by day is lit evenly, by the sky, and its traffic has
+its lamps off. Turned into a night frame with one level of ambient light
+it is the same photograph in grey: the road as bright at three hundred
+metres as at thirty, the sun's shade still across it. A road at night is
+lit from a few points, and
+[`NightIrMode`](transforms/NightIrMode.md) lights it that way where the
+provider knows where the points are
+([`utils.night_light`](../src/surmentations/utils/night_light.py)):
 
-- **A daylight frame made into a night one.**
-  [`NightIrMode`](transforms/NightIrMode.md) lights them itself, on a
-  provider with a vehicle reader: headlamps on each vehicle seen from the
-  front and tail lamps on each seen from behind, where the reader found
-  them, about six in seven vehicles and the rest left dark as parked ones
-  are. They are far over full scale, eight times further than in daylight
-  rain because the camera has opened up for the dark, and they bloom. They
-  are white whichever end they are on: with the infrared-cut filter out, a
-  red lamp is a bright lamp and no more. They are added as light, after the
-  illuminator's falloff and the auto-exposure, so neither dims them; and
-  whatever follows in a pipeline, `NightFog`, `NightRain`, `NightSnow`,
-  finds them as it finds any lamp in a frame. Without a vehicle reader no
-  lamp is lit: which end a vehicle shows is not something colour says in a
-  frame about to lose its colour. Light them here and not in `RandomRain`
-  before it, where they would be painted on the car and then dimmed with
-  it.
-- **A frame that was taken at night.** Its lamps are in it already.
-  `RandomRain` leaves a vehicle alone when a few of its pixels are at full
-  scale and the rest of it is dark, gives the lamps it finds burning the
-  glow it gives the ones it lights, and reflects them in the wet road. A
-  vehicle that is dark all over is lit, every one.
+- **Street lamps throw pools.** Each lamp's light falls off with the
+  square of the distance from its head and with the angle from straight
+  down, so a lit road is bright under each column and dark between and
+  beyond them (`street_lamp_range`, in unit exposures straight under a
+  lamp). The lamps themselves burn, far over full scale. Where they are
+  comes from the provider's vehicle reader, which finds them down the
+  length of a road in the same look that finds the vehicles; without one,
+  from the scene's labels, which find the nearest. A post is thin and a
+  depth map is poor at thin things, so a lamp is placed by where its foot
+  meets the ground and how tall its box is at that distance.
+- **The road loses the day's light and shade.** A road is nearly one
+  material: what varies slowly across it was the sun, and is divided out;
+  its paint and its texture, which vary quickly, stay.
+- **The camera holds the lit road below white.** A scene lit from a few
+  points is mostly dark, and a camera that exposed for the dark would show
+  the pools as white sheets.
+- **The traffic's lamps are lit**, on a provider with a vehicle reader:
+  headlamps on each vehicle seen from the front and tail lamps on each
+  seen from behind, where the reader found them, about six in seven
+  vehicles and the rest left dark as parked ones are
+  (`vehicle_lamp_range`). They are far over full scale, eight times
+  further than in daylight rain because the camera has opened up for the
+  dark, and they bloom. They are white whichever end they are on: with the
+  infrared-cut filter out, a red lamp is a bright lamp and no more.
+- **Each lit vehicle throws its beam** on the road ahead of it: along the
+  road from its front, widening, half as strong at fourteen metres and
+  gone by seventy-five, and cut off above the height of a bonnet, as a
+  dipped beam is.
 
-The same draw without a vehicle reader and with one:
+Lamps are added as light, after the illuminator's falloff and the
+auto-exposure, so neither dims them, and whatever follows in a pipeline,
+`NightFog`, `NightRain`, `NightSnow`, finds them as it finds any lamp in a
+frame. Light them here and not in `RandomRain` before it, where they would
+be painted on the car and then dimmed with it. All of it is worked out in
+space, so it needs the scene's ground labelled; with no lamps and no
+labels the frame is what it was.
 
-![infrared night lamps](assets/road_surface/night_lamps.jpg)
+**A frame that was taken at night** has its lamps in it already.
+`RandomRain` leaves a vehicle alone when a few of its pixels are at full
+scale and the rest of it is dark, gives the lamps it finds burning the
+glow it gives the ones it lights, and reflects them in the wet road. A
+vehicle that is dark all over is lit, every one.
+
+It costs what its lamps and vehicles cost. On one CPU core, over the
+sample scenes: 16 ms more than the evenly lit frame at 512 px, and 50 ms
+(a city road, ten lamps and a dozen vehicles) to 85 ms (a motorway with
+two dozen vehicles lit) at 1024 px.
+
+The same draw with the lamps turned off, which is how every scene looked
+before, and with them:
+
+![infrared night, lit evenly and lit by its lamps](assets/road_surface/night_lamps.jpg)
 
 ## Limits
 
@@ -392,9 +425,13 @@ The same draw without a vehicle reader and with one:
   are divided along the edges of their boxes, which is square where the
   vehicles are not; and far traffic it cannot tell apart stays one
   outline.
-- **Night lamps throw no light.** A headlamp lit by `NightIrMode` is a
-  bright point with a halo. It does not light the road ahead of it, and a
-  road wetted before the frame was made a night one does not reflect it.
+- **Night lighting is a few lamps and a plane.** The ground is one plane
+  fitted through what is labelled ground: a hill, a ramp or a flyover is
+  lit as if it lay on it. Nothing casts a shadow in a lamp's light, a lamp
+  the reader misses lights nothing, and one it finds that is not a lamp
+  lights the road all the same. Windows, signs and shop fronts are not
+  lit. A road wetted before the frame was made a night one does not
+  reflect the lamps lit afterwards.
 - **Frames taken at night with traffic in them were tested on drawn
   frames only.** The sample scenes have no night photograph with a vehicle
   in it.

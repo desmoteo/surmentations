@@ -554,8 +554,9 @@ def _scene_readme(
         "and which only a provider that knows the road and its vehicles can draw. That",
         "provider also has a vehicle reader, which says which end of each vehicle is",
         "seen and where its lamps are; see [the road surface](../../../road_surface.md).",
-        "With that reader `night_ir` lights the traffic's lamps too, as it does whenever",
-        "a provider has one.",
+        "With that reader `night_ir` is lit as a road is at night, from its street lamps",
+        "and its traffic's lamps and beams, as it is whenever a provider has one; on the",
+        "left it is lit evenly, as a daylight frame is.",
         "",
     ]
     compared = [effect for effect in effects if effect in COMPARED]
