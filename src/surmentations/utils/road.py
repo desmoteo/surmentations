@@ -109,6 +109,10 @@ class RoadFrame(NamedTuple):
       ``(dx, dy)``, pointing down the frame where it has a choice.
     * ``piece``: ``(H, W)`` int32: which connected piece of road the pixel
       belongs to, from 1; 0 off the road.
+    * ``heights_wide``: for each road, at the index ``piece`` gives it, how
+      wide it is in heights of the camera above it, where the road was read
+      as a camera sees it (:class:`RoadModel`); ``None`` otherwise. With
+      the camera's height in metres, that is the road's width in metres.
     """
 
     weight: np.ndarray
@@ -116,6 +120,7 @@ class RoadFrame(NamedTuple):
     width_px: np.ndarray
     along: np.ndarray
     piece: np.ndarray
+    heights_wide: np.ndarray | None = None
 
 
 def _tidy(road: np.ndarray) -> np.ndarray:
@@ -374,14 +379,17 @@ _ENOUGH_VEHICLES = 4
 # Paint, counted by position across the road: the least of it that is a
 # line, in pixels of length weighted by the road's width there; and the
 # least share of the tallest peak another peak may be.
-_LEAST_PAINT = 0.08
+_LEAST_PAINT = 0.25
 _PEAK_SHARE = 0.07
 # How much of a lane has to fit between the last line and the verge for a
 # lane to be put there.
 _PART_OF_A_LANE = 0.6
-# How near two painted lines may be, as a share of a lane, and still be two
-# lanes' edges.
-_NEAREST_LINES = 0.6
+# How much the vehicles' say counts against the paint's in placing lanes.
+_VEHICLES_AGAINST_PAINT = 0.5
+# The width of a lane, in metres.
+_LANE_M = 3.4
+# What each lane line costs a comb, against the share of the paint it explains.
+_TOOTH_COST = 0.05
 # How far from a whole number of lanes the gaps between painted lines may
 # be, on average, as a share of a lane; and the narrowest a lane read off
 # paint may be against the one the vehicles suggest.
@@ -409,77 +417,102 @@ class Lanes(NamedTuple):
     painted: list[int]
 
 
-def _line_positions(across: np.ndarray, weight: np.ndarray, least_apart: float) -> np.ndarray:
-    """The positions across a road at which its paint piles up: its lane lines.
+def _comb(
+    paint_at: np.ndarray,
+    paint_weight: np.ndarray,
+    vehicles_at: np.ndarray,
+    lane_by_vehicles: float | None,
+    lane_by_height: float | None = None,
+) -> tuple[np.ndarray, int] | None:
+    """The lane lines of one road as an even comb, and how many of them lie on paint.
 
-    A lane line lies at one position across the road for its whole length,
-    so the paint on a road, counted by position, stands in narrow peaks.
-    ``across`` and ``weight`` are the position and the length each painted
-    pixel counts for. Returns the peaks in order, at least ``least_apart``
-    from each other; empty when there is no paint to speak of.
+    A road's lanes are one width, so its lane lines are a comb: a pitch and
+    an offset. Every pitch and offset in reach is tried, and scored on
+    both things that say where lanes are, at once:
+
+    * **paint lies on the comb's teeth.** The score is the share of the
+      road's paint that lies on a tooth, lowered by up to half for teeth
+      with no paint on them. The first alone is best for a comb twice too
+      fine, which has a tooth under everything; the second alone for one
+      twice too coarse, all of whose teeth are painted.
+    * **vehicles sit between the teeth**, in the middle of a lane.
+
+    ``paint_at`` and ``vehicles_at`` are positions across the road,
+    ``paint_weight`` the length of line each painted pixel counts for, and
+    ``lane_by_vehicles`` the lane's width as the vehicles' own widths
+    suggest it, which bounds the pitches tried. ``lane_by_height`` is the
+    width of a lane of ordinary size where the camera's height is known,
+    and bounds them more surely: a lane is three to four metres whatever
+    is driving in it. ``None`` when there is neither paint nor a vehicle
+    to go by.
     """
     bins = 400
     piled = np.bincount(
-        np.clip((across * bins).astype(np.int64), 0, bins - 1), weights=weight, minlength=bins
+        np.clip((paint_at * bins).astype(np.int64), 0, bins - 1),
+        weights=paint_weight,
+        minlength=bins,
     ).astype(np.float32)
-    counts: np.ndarray = cv2.GaussianBlur(piled.reshape(1, -1), (0, 0), sigmaX=1.6).ravel()
-    if float(counts.max()) < _LEAST_PAINT:
-        return np.zeros(0)
-    apart = max(2, round(least_apart * bins))
-    found: list[int] = []
-    for index in np.argsort(-counts):
-        if counts[index] < max(_PEAK_SHARE * float(counts.max()), _LEAST_PAINT):
-            break
-        # The strongest first, so of two lines too close to be two lanes'
-        # edges, a kerb and the line painted beside it, the bolder is kept.
-        if all(abs(int(index) - other) >= apart for other in found):
-            found.append(int(index))
-    return np.sort(np.array(found, dtype=np.float64) + 0.5) / bins
+    has_paint = float(piled.sum()) >= _LEAST_PAINT
+    if not has_paint and lane_by_vehicles is None and lane_by_height is None:
+        return None
+    # The paint within a hundredth of the road's width of each position.
+    reach = 5
+    summed = np.concatenate([[0.0], np.cumsum(piled, dtype=np.float64)])
+    upper = np.minimum(np.arange(bins) + reach + 1, bins)
+    lower = np.maximum(np.arange(bins) - reach, 0)
+    nearby = summed[upper] - summed[lower]
+    total = max(float(piled.sum()), 1e-9)
+    low, high = 0.12, 0.6
+    if lane_by_vehicles is not None:
+        low, high = 0.8 * lane_by_vehicles, 1.25 * lane_by_vehicles
+        if has_paint:
+            # The paint says how wide a lane is, within what the vehicles
+            # allow: a lane is neither narrower than what drives in it nor
+            # more than three times as wide.
+            low, high = 0.7 * lane_by_vehicles, 2.0 * lane_by_vehicles
+    if lane_by_height is not None:
+        low, high = 0.8 * lane_by_height, 1.25 * lane_by_height
+    low, high = float(np.clip(low, *_LANE_SHARE)), float(np.clip(high, *_LANE_SHARE))
+    best: tuple[float, float, float, int] | None = None
+    for pitch in np.geomspace(low, max(high, low * 1.01), 40):
+        for offset in np.linspace(0.0, pitch, 48, endpoint=False):
+            teeth = np.arange(offset - pitch, 1.0 + pitch, pitch)
+            teeth = teeth[(teeth > -0.25 * pitch) & (teeth < 1.0 + 0.25 * pitch)]
+            score, on_paint = 0.0, 0
+            if has_paint:
+                at = np.clip(np.rint(teeth * bins).astype(np.int64), 0, bins - 1)
+                mass = nearby[at]
+                inside = (teeth > 0.04) & (teeth < 0.96)
+                painted = mass > 0.2 * max(float(mass.max()), 1e-9)
+                on_paint = int(painted.sum())
+                covered = float(painted[inside].mean()) if inside.any() else 0.0
+                explained = min(float(mass.sum()) / total, 1.0)
+                # And every tooth has to earn its place: a comb fine enough
+                # has a tooth under any paint there is.
+                score += explained * (0.5 + 0.5 * covered) - _TOOTH_COST * float(inside.sum())
+            if len(vehicles_at):
+                in_lane = np.cos(2.0 * np.pi * (vehicles_at - offset) / pitch - np.pi)
+                score += _VEHICLES_AGAINST_PAINT * float(in_lane.mean())
+                if lane_by_vehicles is not None:
+                    score -= 0.05 * abs(float(np.log(pitch / lane_by_vehicles)))
+            if best is None or score > best[0]:
+                best = (score, float(pitch), float(offset), on_paint)
+    assert best is not None
+    _score, lane, start, supported = best
+    # Out to both verges: the last lane on either side is cut short by the
+    # road's edge, and is a lane if more than half of one is left.
+    lines = np.clip(np.arange(start - 2.0 * lane, 1.0 + 2.0 * lane, lane), 0.0, 1.0)
+    lines = np.unique(lines)
+    if len(lines) > 2 and lines[1] - lines[0] < 0.5 * lane:
+        lines = lines[1:]
+    if len(lines) > 2 and lines[-1] - lines[-2] < 0.5 * lane:
+        lines = lines[:-1]
+    return lines, supported if has_paint else 0
 
 
-def _lane_width(gaps: np.ndarray, by_vehicles: float | None) -> float | None:
-    """One lane's width, from the gaps between a road's painted lines, or ``None``.
-
-    Every gap is a whole number of lanes: one, or two where a line is worn
-    away or was never painted. So the width is the largest that every gap
-    is a whole multiple of, to within a sixth of a lane; tried are the gaps
-    themselves and the width the vehicles suggest. ``None`` when nothing
-    fits, or when what fits is a lane narrower than an eighth of the road or
-    much narrower than what drives on it, which is paint that is not lane
-    lines.
-    """
-    tried = sorted([*gaps.tolist(), *([] if by_vehicles is None else [by_vehicles])], reverse=True)
-    for width in tried:
-        lanes = np.maximum(np.rint(gaps / width), 1.0)
-        if float(np.mean(np.abs(gaps / width - lanes) / lanes)) > _GAPS_FIT:
-            continue
-        lane = float(np.median(gaps / lanes))
-        if lane < _NARROWEST_PAINTED_LANE:
-            # Narrow enough, a lane divides anything.
-            return None
-        if by_vehicles is not None and lane < _NARROWEST_LANE * by_vehicles:
-            return None
-        return float(np.clip(lane, *_LANE_SHARE))
-    return None
-
-
-def _lanes_between(lines: np.ndarray, lane: float, first: float, last: float) -> np.ndarray:
-    """Lane lines every ``lane`` across a road, through the ones that were found.
-
-    Between two found lines there is a whole number of lanes, as near
-    ``lane`` wide as divides the gap. Beyond the outermost, lanes of that
-    width for as long as a good part of one fits before the verge.
-    """
-    edges = [float(lines[0])]
-    for line in lines[1:]:
-        gap = float(line) - edges[-1]
-        count = max(1, round(gap / lane))
-        edges.extend(edges[-1] + gap * (step + 1) / count for step in range(count))
-    while edges[0] - first > _PART_OF_A_LANE * lane:
-        edges.insert(0, max(first, edges[0] - lane))
-    while last - edges[-1] > _PART_OF_A_LANE * lane:
-        edges.append(min(last, edges[-1] + lane))
-    return np.array(edges)
+def _even_lanes(count: int) -> np.ndarray:
+    """Lane lines for ``count`` lanes spread evenly between a road's verges."""
+    return np.linspace(_VERGE, 1.0 - _VERGE, count + 1)
 
 
 def road_lanes(
@@ -488,29 +521,22 @@ def road_lanes(
     rng: np.random.Generator,
     lane_count_range: tuple[int, int] = (2, 3),
     paint: np.ndarray | None = None,
+    camera_height_m: float | None = None,
+    guess: bool = True,
 ) -> Lanes:
-    """Where the lanes are: read off the paint, and off the vehicles in them.
+    """Where the lanes are: one comb per road, set by its paint and its vehicles together.
 
-    Three things say where a road's lanes are, and they are used in that
-    order.
-
-    **The paint.** ``paint`` is the mask of painted lines
-    (:func:`painted_lines`). Counted by position across the road it stands
-    in peaks, one to a line, and those are lane lines to the pixel. Two of
-    them give the width of a lane; the gaps between them are divided into
-    whole lanes of about that width, a dashed line too worn to be found
-    being a gap of two; and lanes are carried on beyond the outermost for
-    as long as there is road.
-
-    **The vehicles.** Each one's foot gives a position across the road and
-    its width a size: a lane is some 1.7 times as wide as what drives in
-    it. With one painted line, or none, that is the width of a lane; with
-    none, the lanes are a comb of that pitch slid across the road to where
-    the vehicles sit closest to the middle of its teeth, which is the mean
-    of their positions taken round the circle of one lane's width.
-
-    **A guess.** A road with neither gets a number of lanes drawn from
-    ``lane_count_range``, spread between its verges.
+    ``paint`` is the mask of painted lines (:func:`painted_lines`) and
+    ``vehicles`` of the vehicles. Each vehicle's foot gives a position
+    across the road and its width a size: a lane is some 1.7 times as wide
+    as what drives in it, which bounds the lane widths tried. The lane
+    lines are then the comb that the paint lies on and the vehicles sit
+    between (:func:`_comb`). Where the camera's height is known and the
+    road was read as a camera sees it (:class:`RoadModel`), the road's
+    width is known in metres, and a lane is 3.4 of them, give or take a
+    quarter: that bounds the comb before anything else does. A road with
+    nothing to go by gets a number of lanes drawn from ``lane_count_range``,
+    or none at all with ``guess`` off.
 
     A road whose vehicles lie across the way it was read gets none: it is
     a junction seen from above.
@@ -535,12 +561,13 @@ def road_lanes(
             road = int(frame.piece[row, column])
             if road == 0:
                 continue
-            # As wide as it is at its foot: the box round a vehicle seen at
-            # an angle takes in its length as well.
-            foot = mask[max(top, row - max(1, tall // 4)) : row + 1, left : left + wide]
-            wide_at_foot = float(foot.sum(axis=1).max())
-            share = wide_at_foot / max(float(frame.width_px[row, column]), 1.0)
-            # Which way it lies against the way the road is said to run.
+            # As wide as it is at its foot, and across the road, not across
+            # the picture: the box round a vehicle seen at an angle takes in
+            # its length, and its roof leans away from its wheels.
+            foot_rows = slice(max(top, row - max(1, tall // 4)), row + 1)
+            foot = mask[foot_rows, left : left + wide] > 0
+            reach = frame.across[foot_rows, left : left + wide][foot]
+            share = float(np.percentile(reach, 95.0) - np.percentile(reach, 5.0))
             run_x, run_y = (abs(float(value)) for value in frame.along[row, column])
             lies_across = (wide > _CROSSWISE * tall and run_y > run_x) or (
                 tall > _CROSSWISE * wide and run_x > run_y
@@ -551,7 +578,9 @@ def road_lanes(
     for road in range(1, roads + 1):
         if crosswise[road] > 0.0:
             continue
-        first, last = _VERGE, 1.0 - _VERGE
+        here = np.zeros(frame.piece.shape, dtype=bool)
+        if paint is not None:
+            here = paint & (frame.piece == road)
         where = np.array([position for position, _share in seen[road]])
         by_vehicles = None
         if len(where):
@@ -559,48 +588,19 @@ def road_lanes(
             # are both wider than a vehicle and never narrower.
             size = float(np.percentile([share for _position, share in seen[road]], 40.0))
             by_vehicles = float(np.clip(_LANE_OVER_VEHICLE * size, *_LANE_SHARE))
-        lines = np.zeros(0)
-        if paint is not None:
-            here = paint & (frame.piece == road)
-            if int(here.sum()) >= _LINE_FEWEST_PIXELS:
-                # No two lines nearer than most of a lane: the vehicles say
-                # how wide that is, where there are any. Counted by length
-                # along the road and not by pixels, or the paint under the
-                # camera would be all of it.
-                narrowest = _LANE_SHARE[0] if by_vehicles is None else by_vehicles
-                lines = _line_positions(
-                    frame.across[here], 1.0 / frame.width_px[here], _NEAREST_LINES * narrowest
-                )
-        lane_by_paint = _lane_width(np.diff(lines), by_vehicles) if len(lines) >= 2 else None
-        if len(lines) >= 2 and lane_by_paint is None:
-            # Paint that fits no even spacing is not lane lines: a
-            # crossing, hatching, words. Nothing is read off it.
-            lines = np.zeros(0)
-        painted[road] = len(lines)
-        if lane_by_paint is not None:
-            edges[road] = _lanes_between(lines, lane_by_paint, first, last)
-            continue
-        if by_vehicles is None:
+        # Paint counted by length along the road and not by pixels, or the
+        # paint under the camera would be all of it.
+        by_height = None
+        heights_wide = frame.heights_wide
+        if camera_height_m is not None and heights_wide is not None and heights_wide[road] > 0.0:
+            by_height = _LANE_M / (camera_height_m * float(heights_wide[road]))
+        comb = _comb(frame.across[here], 1.0 / frame.width_px[here], where, by_vehicles, by_height)
+        if comb is None or len(comb[0]) < 2:
             count = int(rng.integers(lane_count_range[0], lane_count_range[1] + 1))
-            lane = (last - first) / count
-            start = float(lines[0]) if len(lines) else first
-            edges[road] = _lanes_between(np.array([start]), lane, first, last)
+            if guess:
+                edges[road] = _even_lanes(count)
             continue
-        lane = by_vehicles
-        if len(lines) == 1:
-            edges[road] = _lanes_between(lines, lane, first, last)
-            continue
-        turn = 2.0 * np.pi * where / lane
-        centre = lane * float(np.angle(np.exp(1j * turn).mean())) / (2.0 * np.pi)
-        if len(where) >= _ENOUGH_VEHICLES:
-            first = max(_VERGE / 2.0, float(where.min()) - 0.6 * lane)
-            last = min(1.0 - _VERGE / 2.0, float(where.max()) + 0.6 * lane)
-        # The comb's teeth are lane lines: half a lane from the centres.
-        line = centre + 0.5 * lane
-        line += lane * np.ceil((first - line) / lane)
-        if line > last:
-            line = 0.5 * (first + last)
-        edges[road] = _lanes_between(np.array([line]), lane, first, last)
+        edges[road], painted[road] = comb
     return Lanes(edges, painted)
 
 
@@ -698,12 +698,19 @@ _HEADING_NEAR_ROAD = 0.82
 # road covers for its vehicles to be given spray at all.
 _HEADING_ACROSS = 0.7
 _LEAST_ROAD_FOR_SPRAY = 0.05
-# A tail lamp: red at this level, in linear light, and this many times its
-# other channels. And the fewest vehicles on a road that have to show them
-# for the road's traffic to be taken as driving away.
-_TAIL_LAMP_LEVEL = 0.3
-_TAIL_LAMP_RED = 2.5
-_FEWEST_TAIL_LAMPS = 2
+# A tail lamp's lens: red at this level, in linear light, and this many
+# times its other channels.
+_LENS_LEVEL = 0.05
+_LENS_RED = 1.8
+# A rear's lenses are between these shares of the vehicle's outline; below
+# the third, on a vehicle of at least so many pixels, there are none and it
+# is a front.
+_LENS_SHARE = (0.004, 0.09)
+_NO_LENS = 0.001
+_SHOWS_LENSES = 250
+# A headlamp: every channel at this level, in a frame darker than the second.
+_HEAD_LAMP_LEVEL = 0.8
+_NIGHT_FRAME = 0.08
 
 
 def vehicle_spray(
@@ -736,11 +743,17 @@ def vehicle_spray(
     scrap of road, a slip road cut by the frame's edge, is on a road whose
     direction is a guess. Both used to shoot a jet of mist out sideways.
 
-    **Which end is the tail** a frame says only sometimes. Tail lamps do:
-    a vehicle showing red lamps is seen from behind, and is driving away.
-    Where ``linear_rgb`` is given and enough of a road's vehicles show
-    them, that road's traffic runs away from the camera. Otherwise the
-    direction is drawn, once per road, since a carriageway goes one way.
+    **Which end is the tail** a frame says only sometimes, and each
+    vehicle's own picture is where it says it (``linear_rgb``). A rear has
+    red lenses, a little red in a small part of the vehicle: it is seen
+    from behind, and driving away. A vehicle large enough to show lenses
+    and showing no red at all is seen from the front, and so is one with
+    white lamps burning at night: it is coming on, and its spray is behind
+    it, up the frame, mostly hidden by the vehicle itself. A red car says
+    nothing. A vehicle that says nothing goes the way of the nearest one
+    across the road that does, since traffic keeps to its side and the two
+    sides run opposite ways. A road none of whose vehicles says anything
+    has its direction drawn.
 
     How fast each vehicle is going is drawn too: each is given its own
     share of spray, and some none, as a parked car has none.
@@ -759,7 +772,8 @@ def vehicle_spray(
     order = order[:_MOST_SPRAYING]
 
     shapes = []
-    red_lamps = np.zeros(roads + 1)
+    faces: dict[int, float] = {}
+    night = linear_rgb is not None and float(linear_rgb.mean()) < _NIGHT_FRAME
     for index in order:
         left, top, wide, tall, _area = (int(value) for value in stats[index])
         rows, columns = np.nonzero(parts[top : top + tall, left : left + wide] == index)
@@ -771,13 +785,30 @@ def vehicle_spray(
             continue
         shapes.append((index, road, rows, columns, row, column))
         if linear_rgb is not None:
+            # Which end of the vehicle its own picture shows. A rear has
+            # red lenses, lit or not: a little red, in a small part of it.
+            # A front has none, so a vehicle large enough to show them and
+            # showing no red at all is seen from the front. One that is
+            # red all over, a red car, says nothing either way; taking any
+            # red for a tail lamp had one red car turn a whole motorway
+            # round, and spray come off the bonnets.
             colour = linear_rgb[rows, columns]
-            lit = (colour[:, 0] > _TAIL_LAMP_LEVEL) & (
-                colour[:, 0] > _TAIL_LAMP_RED * colour[:, 1:].max(axis=1)
-            )
-            red_lamps[road] += 1.0 if int(lit.sum()) >= 2 else 0.0
-    # Seen from behind: driving away, and trailing towards the camera.
-    trailing[red_lamps >= _FEWEST_TAIL_LAMPS] = 1.0
+            other = colour[:, 1:].max(axis=1)
+            lens = (colour[:, 0] > _LENS_LEVEL) & (colour[:, 0] > _LENS_RED * other)
+            red_share = float(lens.mean())
+            white = night & (colour.min(axis=1) > _HEAD_LAMP_LEVEL)
+            if _LENS_SHARE[0] <= red_share <= _LENS_SHARE[1]:
+                faces[index] = 1.0
+            elif int(white.sum()) >= 2 or (red_share < _NO_LENS and len(rows) >= _SHOWS_LENSES):
+                faces[index] = -1.0
+    # A vehicle that shows no lamps goes the way of the nearest one across
+    # the road that does: traffic keeps to its side, and the two sides of a
+    # road run opposite ways.
+    told = [
+        (road, float(frame.across[row, column]), faces[index])
+        for index, road, _rows, _columns, row, column in shapes
+        if index in faces
+    ]
 
     near = np.zeros((height, width), dtype=np.float32)
     behind = np.zeros((height, width), dtype=np.float32)
@@ -806,7 +837,12 @@ def vehicle_spray(
         heading = (
             own if long_way > _HEADING_ELONGATION and agrees > _HEADING_NEAR_ROAD else along_road
         )
-        way = heading * trailing[road]
+        sign = float(trailing[road])
+        here = float(frame.across[row, column])
+        nearest = [(abs(at - here), face) for told_road, at, face in told if told_road == road]
+        if nearest:
+            sign = min(nearest)[1]
+        way = heading * sign
         side = np.array([-way[1], way[0]])
         half_wide = max(1.5, float(np.percentile(np.abs(offsets @ side), 90.0)))
         long_px = max(3.0, 2.0 * float(np.percentile(np.abs(offsets @ way), 90.0)))
@@ -876,6 +912,8 @@ _LINE_OVER_ROAD = 1.12
 _LINE_ELONGATION = 3.0
 _LINE_ALONG = 0.75
 _LINE_FEWEST_PIXELS = 10
+# The most of a road that may be thin and bright and still be paint.
+_MOST_PAINT = 0.15
 _LINE_LENGTH = 0.012
 
 
@@ -895,27 +933,14 @@ def painted_lines(
     whose pale roofs are thin and bright as well.
     """
     height, width = road.shape
-    luma = np.sqrt(
-        np.clip(linear_rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32), 0.0, 1.0)
-    ).astype(np.float32)
-    reach = max(3, round(_LINE_WIDTH * float(np.hypot(height, width))) | 1)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
-    without = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
     where = (road > 0.5) & (frame.weight > 0.5)
     if on_road is not None:
         near = cv2.dilate((on_road > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8))
         where &= near == 0
-    if int(where.sum()) < 64:
-        return np.zeros(road.shape, dtype=bool)
-    typical = float(np.median(luma[where]))
-    thin = (
-        where
-        & (luma - without > _LINE_STANDS_OUT * (without + 0.05))
-        & (luma > _LINE_OVER_ROAD * typical)
-    )
-    count, parts, stats, _centroids = cv2.connectedComponentsWithStats(
-        thin.astype(np.uint8), connectivity=8
-    )
+    parts, count = _thin_bright(linear_rgb, where)
+    thin = parts > 0
+    stats = np.zeros((count, 5), dtype=np.int64)
+    stats[:, cv2.CC_STAT_AREA] = np.bincount(parts.ravel(), minlength=count)
     keep = np.zeros(count, dtype=bool)
     rows, columns = np.nonzero(thin)
     part = parts[rows, columns]
@@ -940,6 +965,29 @@ def painted_lines(
     lines: np.ndarray = keep[parts]
     return lines
 
+
+# The road as a camera sees it. How much a pixel of paint, of the road's
+# edge and of a vehicle's outline counts for as a cue to its direction; the
+# fewest cues a road is fitted to; the angle, in degrees, at which a cue
+# agrees with a road, the share of the cues, by weight, that has to agree
+# for there to be a road at all, and how many pairs of cues a road is
+# looked for through; how far below the horizon, as a share of the frame's
+# height, a pixel has to be to be given a place on the road; the rows above
+# the top of the road, as shares of the frame's height, at which the
+# horizon is looked for; and how much of a position's length has to be road
+# for it to be on a carriageway.
+_CUE_PAINT = 1.0
+_CUE_EDGE = 0.5
+_CUE_VEHICLE = 0.6
+_FEWEST_CUES = 6
+_CUE_TOLERANCE_DEG = 5.0
+_CUES_AGREE = 0.3
+_CUES_AGREE_KNOWN_HORIZON = 0.2
+_PAIRS_TRIED = 200
+_BEND_EARNS = 0.1
+_BELOW_HORIZON = 0.02
+_HORIZON_LADDER = (0.01, 0.03, 0.06, 0.1, 0.16, 0.25, 0.4, 0.6, 0.9, 1.4, 2.2)
+_CARRIAGEWAY_SOLID = 0.5
 
 # Fewest painted lines a vanishing point is found from; how far, in degrees,
 # the middle one of them may point from it; and how unlike in direction
@@ -1034,6 +1082,293 @@ def straighten(frame: RoadFrame, paint: np.ndarray) -> RoadFrame:
     return frame._replace(across=across, width_px=width_px, along=along)
 
 
+class RoadModel(NamedTuple):
+    """A road as a camera sees it: every lane line of it at once.
+
+    On level ground, a line along a road of constant curvature is, in the
+    picture,
+
+        u = centre + offset * (v - horizon) + bend / (v - horizon)
+
+    for a column ``u`` and a row ``v``. ``horizon`` is the row of the
+    horizon, ``centre`` the column the road runs to on it, and ``bend`` the
+    road's curvature; those three are the road's, and the same for every
+    line along it. ``offset`` is the line's own: how far to the side it
+    lies, in camera heights. So ``offset`` is a position across the road
+    for every pixel, constant along every lane line, kerb and wheel track,
+    on a bend as on a straight, and across two carriageways as across one.
+    """
+
+    centre: float
+    horizon: float
+    bend: float
+
+    def offset(self, columns: np.ndarray, rows: np.ndarray) -> np.ndarray:
+        """The position across the road of each pixel; ``nan`` at the horizon and above."""
+        below = np.asarray(rows, dtype=np.float64) - self.horizon
+        with np.errstate(divide="ignore", invalid="ignore"):
+            across = (
+                np.asarray(columns, dtype=np.float64) - self.centre - self.bend / below
+            ) / below
+        return np.where(below > 0.0, across, np.nan)
+
+    def slope(self, columns: np.ndarray, rows: np.ndarray) -> np.ndarray:
+        """How many columns the road runs per row down the frame, at each pixel."""
+        below = np.maximum(np.asarray(rows, dtype=np.float64) - self.horizon, 1e-6)
+        return (np.asarray(columns, dtype=np.float64) - self.centre) / below - 2.0 * self.bend / (
+            below * below
+        )
+
+
+def _thin_bright(linear_rgb: np.ndarray, where: np.ndarray) -> tuple[np.ndarray, int]:
+    """Thin things brighter than the road round them: a label for each, and how many labels."""
+    height, width = where.shape
+    luma = np.sqrt(
+        np.clip(linear_rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32), 0.0, 1.0)
+    ).astype(np.float32)
+    reach = max(3, round(_LINE_WIDTH * float(np.hypot(height, width))) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
+    without = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
+    if int(where.sum()) < 64:
+        return np.zeros(where.shape, dtype=np.int32), 1
+    typical = float(np.median(luma[where]))
+    thin = (
+        where
+        & (luma - without > _LINE_STANDS_OUT * (without + 0.05))
+        & (luma > _LINE_OVER_ROAD * typical)
+    )
+    if float(thin.sum()) > _MOST_PAINT * float(where.sum()):
+        # Paint is a little of a road. This much of it "paint" is the grain
+        # of the asphalt under a lamp, or the noise of a night frame.
+        return np.zeros(where.shape, dtype=np.int32), 1
+    count, parts = cv2.connectedComponents(thin.astype(np.uint8), connectivity=8)
+    return parts, count
+
+
+def road_cues(
+    linear_rgb: np.ndarray, road: np.ndarray, on_road: np.ndarray, vehicles: np.ndarray | None
+) -> np.ndarray:
+    """Everything in a picture that says which way its road runs, ``(N, 5)``.
+
+    Each row is a short piece of line: its column and row, its direction as
+    a unit vector pointing down the frame, and how much it counts for.
+    Three kinds of thing give them:
+
+    * **paint**: every thin bright streak on the road, a pixel of weight
+      for a pixel of length. A lane line runs along the road by definition;
+    * **the road's edges**: the outline of its mask, where that is not the
+      frame's own border. A kerb runs along the road, the far end of a road
+      does not, and the fit has to tell them apart;
+    * **the vehicles**: the long way of each one's outline, for what it is
+      worth, which from most cameras is roughly the way it is driving.
+
+    None of them is trusted. They are handed to a robust fit
+    (:func:`fit_road_model`), which keeps the ones that agree.
+    """
+    height, width = road.shape
+    cues: list[tuple[float, float, float, float, float]] = []
+
+    def add(columns: np.ndarray, rows: np.ndarray, weight: float, least: float) -> None:
+        """One cue from a set of pixels: their middle, their long axis, if long enough."""
+        if len(rows) < 3:
+            return
+        values, vectors = np.linalg.eigh(np.cov(np.stack([columns, rows]).astype(np.float64)))
+        if values[1] < least * least * max(values[0], 0.08):
+            return
+        axis = vectors[:, 1] * (1.0 if vectors[1, 1] >= 0.0 else -1.0)
+        cues.append((float(columns.mean()), float(rows.mean()), axis[0], axis[1], weight))
+
+    carriageway = (road > 0.5) & (
+        cv2.dilate((on_road > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) == 0
+    )
+    parts, count = _thin_bright(linear_rgb, carriageway)
+    rows, columns = np.nonzero(parts)
+    order = np.argsort(parts[rows, columns], kind="stable")
+    rows, columns = rows[order], columns[order]
+    starts = np.searchsorted(parts[rows, columns], np.arange(1, count + 1))
+    for index in range(1, count):
+        ys, xs = rows[starts[index - 1] : starts[index]], columns[starts[index - 1] : starts[index]]
+        if len(ys) >= _LINE_FEWEST_PIXELS:
+            add(xs, ys, _CUE_PAINT * float(np.ptp(ys) + np.ptp(xs)), _LINE_ELONGATION)
+
+    # The outline, in stretches a fortieth of the diagonal long.
+    whole = ((road > 0.5) | (on_road > 0.5)).astype(np.uint8)
+    stretch = max(6, round(0.025 * float(np.hypot(height, width))))
+    contours, _hierarchy = cv2.findContours(whole, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    for contour in contours:
+        points = contour.reshape(-1, 2)
+        if len(points) < 4 * stretch:
+            continue
+        for start in range(0, len(points) - stretch, stretch):
+            xs, ys = points[start : start + stretch, 0], points[start : start + stretch, 1]
+            on_border = (xs <= 1) | (ys <= 1) | (xs >= width - 2) | (ys >= height - 2)
+            if not on_border.any():
+                add(xs, ys, _CUE_EDGE * float(stretch), 2.5)
+
+    if vehicles is not None:
+        count, parts = cv2.connectedComponents((vehicles > 0.5).astype(np.uint8), connectivity=8)
+        for index in range(1, count):
+            ys, xs = np.nonzero(parts == index)
+            if len(ys) >= _FEWEST_VEHICLE_PIXELS:
+                add(xs, ys, _CUE_VEHICLE * float(np.sqrt(len(ys))), 1.3)
+    return np.array(cues, dtype=np.float64).reshape(-1, 5)
+
+
+def fit_road_model(
+    cues: np.ndarray, height: int, top_of_road: float, horizon_row: float | None = None
+) -> RoadModel | None:
+    """The :class:`RoadModel` most of a picture's cues agree on, or ``None``.
+
+    For a horizon, the way the road runs at a pixel is a linear function of
+    the other two numbers of the model, so two cues give a road. Many pairs
+    are tried, the road kept is the one the largest share of the cues lies
+    along to within a few degrees, and those then settle it between them by
+    least squares. The horizon is the one known (``horizon_row``, from the
+    camera's geometry), or the one of a ladder of rows above the top of the
+    road at which the most cues agree.
+
+    ``None`` when the cues are too few, or fewer than two in five of them
+    agree on any road. That is a road running across the picture, a
+    junction, or a road that is not on level ground.
+    """
+    if len(cues) < _FEWEST_CUES:
+        return None
+    tolerance = np.sin(np.radians(_CUE_TOLERANCE_DEG))
+    # A known horizon is used, give or take a little. Left to find its own,
+    # the fit has a number too many: a road can be bent to pass through
+    # almost anything by moving its horizon as well.
+    if horizon_row is not None:
+        tried = [horizon_row + height * step for step in (0.0, -0.02, 0.02, -0.04, 0.04)]
+    else:
+        tried = [top_of_road - height * step for step in _HORIZON_LADDER]
+    # The same pairs for the same picture, whatever else has been drawn.
+    rng = np.random.default_rng(0)
+    best: tuple[float, RoadModel] | None = None
+    for horizon in tried:
+        assert horizon is not None
+        below = cues[:, 1] - horizon
+        use = below > _BELOW_HORIZON * height
+        if int(use.sum()) < _FEWEST_CUES:
+            continue
+        u, t, dx, dy, weight = cues[use, 0], below[use], cues[use, 2], cues[use, 3], cues[use, 4]
+        # dx = dy * slope, with slope = (u - centre) / t - 2 bend / t^2:
+        # linear in the centre and the bend.
+        design = np.stack([dy / t, 2.0 * dy / (t * t)], axis=1)
+        scale = np.maximum(np.abs(design).max(axis=0), 1e-12)
+        design = design / scale
+        target = dy * u / t - dx
+
+        def off(found: np.ndarray) -> np.ndarray:
+            """The sine of the angle between each cue and the road there, for a fit."""
+            slope = (u - found[0]) / t - 2.0 * found[1] / (t * t)  # noqa: B023
+            return np.asarray((dx - dy * slope) / np.sqrt(1.0 + slope * slope))  # noqa: B023
+
+        # Two cues make a road. Many pairs are tried, and the road kept is
+        # the one most of the others lie along: a slip road, a kerb's end
+        # and a crossing are each a few cues, and never most of them.
+        chosen = rng.choice(len(u), size=(_PAIRS_TRIED, 2), p=weight / weight.sum())
+        agreed, start = 0.0, None
+        straight, start_straight = 0.0, None
+        for first, second in chosen:
+            # One cue makes a straight road, which is tried first.
+            if abs(float(design[first, 0])) > 1e-9:
+                found = np.array([target[first] / design[first, 0] / scale[0], 0.0])
+                share = float(weight[np.abs(off(found)) < tolerance].sum() / weight.sum())
+                if share > straight:
+                    straight, start_straight = share, found
+            pair = design[[first, second]]
+            if first == second or abs(float(np.linalg.det(pair))) < 1e-9:
+                continue
+            found = np.linalg.solve(pair, target[[first, second]]) / scale
+            share = float(weight[np.abs(off(found)) < tolerance].sum() / weight.sum())
+            if share > agreed:
+                agreed, start = share, found
+        # A bend has to earn itself: with one more number to choose, some
+        # curve always passes through a few more cues than a straight road.
+        if start is None or (start_straight is not None and agreed < straight + _BEND_EARNS):
+            start = start_straight
+        if start is None:
+            continue
+        # And then all that agree with it settle it between them.
+        found = start
+        for _ in range(6):
+            keep = weight / (1.0 + (off(found) / tolerance) ** 4)
+            found, *_ = np.linalg.lstsq(design * keep[:, None], target * keep, rcond=None)
+            found = found / scale
+        agreed = float(weight[np.abs(off(found)) < tolerance].sum() / weight.sum())
+        enough = _CUES_AGREE_KNOWN_HORIZON if horizon_row is not None else _CUES_AGREE
+        if agreed >= enough and (best is None or agreed > best[0]):
+            best = (agreed, RoadModel(float(found[0]), float(horizon), float(found[1])))
+    return None if best is None else best[1]
+
+
+def model_frame(model: RoadModel, road: np.ndarray, on_road: np.ndarray) -> RoadFrame | None:
+    """A :class:`RoadFrame` from a :class:`RoadModel`: its carriageways, and each one's coordinates.
+
+    The model gives every pixel a position across the road. Counted by that
+    position, the road's mask is solid where there is a carriageway and
+    empty where there is a reserve or a barrier between two, however the
+    two masks run together at the bottom of the frame: so the carriageways
+    are the stretches of position most of whose length is road, each is a
+    road of its own, and no lane of one crosses to the other.
+    """
+    height, width = road.shape
+    rows, columns = np.mgrid[0:height, 0:width]
+    below = rows - model.horizon
+    seen = below > _BELOW_HORIZON * height
+    offset = np.where(seen, model.offset(columns, rows), 0.0)
+    whole = ((road > 0.5) | (on_road > 0.5)) & seen
+    if int(whole.sum()) < _LEAST_SHARE * height * width:
+        return None
+    low, high = np.percentile(offset[whole], [0.5, 99.5])
+    if not high - low > 1e-9:
+        return None
+    bins = 240
+    at = np.clip(((offset - low) / (high - low) * bins).astype(np.int64), -1, bins)
+    inside = seen & (at >= 0) & (at < bins)
+    # A row is a row: each counts the same for every position it reaches.
+    per_row = 1.0 / np.maximum(below, 1.0)
+    of_road = np.bincount(at[inside & whole], weights=per_row[inside & whole], minlength=bins)
+    of_frame = np.bincount(at[inside], weights=per_row[inside], minlength=bins)
+    solid = cv2.GaussianBlur(
+        (of_road / np.maximum(of_frame, 1e-9)).astype(np.float32).reshape(1, -1), (0, 0), 1.2
+    ).ravel()
+    is_road = (solid > _CARRIAGEWAY_SOLID) & (of_frame > 0.1 * float(of_frame.max()))
+    padded = np.concatenate([[0], is_road.astype(np.int8), [0]])
+    starts = np.flatnonzero(np.diff(padded) == 1)
+    ends = np.flatnonzero(np.diff(padded) == -1)
+    found = []
+    for start, end in zip(starts, ends, strict=True):
+        body = inside & whole & (at >= start) & (at < end)
+        if end - start >= 4 and int(body.sum()) >= _LEAST_SHARE * height * width:
+            found.append((int(body.sum()), body, start, end))
+    if not found:
+        return None
+    found.sort(key=lambda entry: -entry[0])
+    across = np.zeros((height, width), dtype=np.float32)
+    span = np.ones((height, width), dtype=np.float32)
+    piece = np.zeros((height, width), dtype=np.int32)
+    heights_wide = np.zeros(min(len(found), _MOST_ROADS) + 1)
+    for index, (_area, body, start, end) in enumerate(found[:_MOST_ROADS], start=1):
+        first = low + (high - low) * start / bins
+        last = low + (high - low) * end / bins
+        heights_wide[index] = last - first
+        across[body] = np.clip((offset[body] - first) / (last - first), 0.0, 1.0)
+        span[body] = ((last - first) * below[body]).astype(np.float32)
+        piece[body] = index
+    slope = model.slope(columns, rows)
+    length = np.sqrt(1.0 + slope * slope)
+    along = np.stack([slope / length, 1.0 / length], axis=2).astype(np.float32)
+    return RoadFrame(
+        weight=(piece > 0).astype(np.float32),
+        across=across,
+        width_px=np.maximum(span, 1.0),
+        along=along,
+        piece=piece,
+        heights_wide=heights_wide,
+    )
+
+
 def read_road(
     linear_rgb: np.ndarray,
     road: np.ndarray,
@@ -1041,38 +1376,64 @@ def read_road(
     vehicles: np.ndarray | None,
     rng: np.random.Generator,
     lane_count_range: tuple[int, int] = (2, 3),
+    horizon_row: float | None = None,
+    camera_height_m: float | None = None,
 ) -> tuple[RoadFrame, Lanes] | None:
     """A picture's roads and their lanes, from everything that says where they are.
 
-    The steps of this module in order: the road's frame from the mask of
-    the carriageway and what stands on it (:func:`road_frame`); the lines
-    painted on it (:func:`painted_lines`); the frame redrawn through the
-    point those lines run to, where they run to one (:func:`straighten`),
-    and the paint read again in the truer frame; and the lanes, from the
-    paint where it put the road right, and otherwise from the vehicles or
-    a guess (:func:`road_lanes`).
+    First as a camera's view of a road on level ground
+    (:class:`RoadModel`): every cue to the road's direction is gathered,
+    paint, kerbs and vehicles (:func:`road_cues`), the model they agree on
+    is fitted (:func:`fit_road_model`), and it gives the carriageways and
+    their coordinates (:func:`model_frame`). ``horizon_row`` is the horizon
+    where the camera's mounting is known, which is one number fewer to fit,
+    and ``camera_height_m`` its height, which says how wide a lane is.
+
+    Where the cues agree on no such road, one running across the picture
+    or seen from straight above, the road is read off its mask alone
+    (:func:`road_frame`), and put right by its paint where that runs to one
+    point (:func:`straighten`).
+
+    Either way the lanes are then the comb the paint lies on and the
+    vehicles sit between (:func:`road_lanes`).
 
     ``road`` is the carriageway itself, ``on_road`` what stands on it, and
     ``vehicles`` the vehicles among that. ``None`` when the picture holds
-    no road with two sides.
+    no road at all.
     """
-    frame = road_frame((road > 0.5) | (on_road > 0.5))
+    height, width = road.shape
+    whole = (road > 0.5) | (on_road > 0.5)
+    held = np.flatnonzero(whole.sum(axis=1) >= max(3.0, 0.01 * width))
+    frame = None
+    if held.size:
+        cues = road_cues(linear_rgb, road, on_road, vehicles)
+        model = fit_road_model(cues, height, float(held[0]), horizon_row)
+        if model is not None:
+            frame = model_frame(model, road, on_road)
+    if frame is not None:
+        paint = painted_lines(linear_rgb, frame, road, on_road)
+        # The road's width is in camera heights only when the model's
+        # horizon is the camera's: found by the fit alone, it is whatever
+        # made the cues agree, and the widths that follow from it are not
+        # metres of anything.
+        height_m = camera_height_m if horizon_row is not None else None
+        return frame, road_lanes(frame, vehicles, rng, lane_count_range, paint, height_m)
+    frame = road_frame(whole)
     if frame is None:
         return None
+    # Read off the mask alone, a road is only as good as the mask, and its
+    # paint is counted only where the paint itself put the road right.
     paint = painted_lines(linear_rgb, frame, road, on_road)
     trusted = np.zeros(road.shape, dtype=bool)
     if paint.any():
         truer = straighten(frame, paint)
-        # Lane lines are counted off the paint only on a road its paint put
-        # right: there the lines demonstrably run to one point, and each
-        # lies at one position across. On a road read off its mask alone,
-        # a bend or two carriageways run together, the same paint piles up
-        # at the wrong positions, and lanes read off it were bunched
-        # against one kerb. Those roads take their lanes from the vehicles.
         moved = np.abs(truer.across - frame.across) > 1e-6
         for index in range(1, int(frame.piece.max()) + 1):
             if moved[frame.piece == index].any():
                 trusted |= frame.piece == index
         frame = truer
         paint = painted_lines(linear_rgb, frame, road, on_road) & trusted
-    return frame, road_lanes(frame, vehicles, rng, lane_count_range, paint)
+    # And nothing is guessed: a road nothing vouches for, neither a model
+    # nor its paint nor a vehicle on it, is as likely a junction seen from
+    # above, and tracks ruled across a junction are worse than none.
+    return frame, road_lanes(frame, vehicles, rng, lane_count_range, paint, guess=False)

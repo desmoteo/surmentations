@@ -830,12 +830,15 @@ class RandomRain(CameraTransform):
         road = lanes = lie = None
         if draw_wetness and labels is not None:
             on_road = class_weight(labels, _ON_THE_ROAD) > 0.5
+            view = self.depth_provider.settle_camera(scene)
             read = read_road(
                 linear_scene,
                 labels == int(SceneClass.ROAD),
                 on_road,
                 labels == int(SceneClass.VEHICLE),
                 rng,
+                horizon_row=self.depth_provider.horizon_row(scene),
+                camera_height_m=None if view is None else view.height_m,
             )
             if read is not None:
                 road, lanes = read
@@ -1320,6 +1323,10 @@ _WET_GROUND_FAR_M = 400.0
 # fraction of the diagonal: a network's outline is a few pixels out.
 _NO_FILM = (*NOT_GROUND, SceneClass.GRASS)
 _LABEL_EDGE = 0.003
+# How far round a labelled thing the road is made wet again, as a fraction of
+# the diagonal: as far as the tests that find things by look and depth reach
+# past them.
+_HALO = 0.015
 
 # Spray: the optical depth of a plume at its densest, at full strength over
 # a soaked road; and how bright it is against the veil's own light, being
@@ -1693,6 +1700,20 @@ def _read_wet_ground(
     # standing, which is where the road is most nearly a mirror: the traffic
     # at the far end of a motorway was being painted out with sky.
     wetness *= 1.0 - small_things(linear_scene, wetness)
+    if labels is not None and paved is not None:
+        # And wet again right up to what is named. The two tests above find
+        # a vehicle by its look and its depth, both of which run a few
+        # pixels past it, its shadow and the soft edge of the depth map:
+        # they left the road dry in a ring round every car, which on a road
+        # gone dark with water is a pale halo. The labels say where the car
+        # ends, and the road beside it is road.
+        named_things = (class_weight(labels, _NO_FILM) > 0.5).astype(np.uint8)
+        ring = max(5, 2 * round(_HALO * float(np.hypot(*labels.shape))) + 1)
+        near = cv2.dilate(named_things, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring, ring)))
+        beside = (near > 0) & (named_things == 0) & (labels == int(SceneClass.ROAD))
+        wetness = np.where(beside, np.maximum(wetness, paved * near_enough), wetness).astype(
+            np.float32
+        )
     # Nothing above the ground's far end is level ground under the camera,
     # whatever way it faces: the water on a roof is not this road's.
     height = depth_m.shape[0]
