@@ -1,10 +1,11 @@
-# The road surface: lanes, wheel tracks, standing water and spray
+# The road surface: lanes, wheel tracks, standing water, spray and lamps
 
 Some of what happens on a road is laid out *along* it. Wheels wear two
 tracks down every lane of a snowy road. Water stands in the same ruts and
-along the kerb. A car on a wet road trails its spray behind it. None of
-that can be drawn from a mask of where the road is: it needs the road's own
-coordinates, and its lanes.
+along the kerb. A car on a wet road trails its spray behind it, and drives
+with its lamps on. None of that can be drawn from a mask of where the road
+is: it needs the road's own coordinates, its lanes, and which way each
+vehicle on it is going.
 
 [`surmentations.utils.road`](../src/surmentations/utils/road.py) reads
 both off the picture, and `RandomSnow` and `RandomRain` use them:
@@ -16,6 +17,8 @@ both off the picture, and `RandomSnow` and `RandomRain` use them:
 | A soaked road under cloud | `RandomRain`, with its wet road | on | nothing |
 | Tail lamps reflected in the road | `RandomRain`, with its wet road | on | scene labels |
 | Spray behind vehicles | `RandomRain(spray_range=...)` | `(0.0, 0.0)`: off | scene labels |
+| How fast the traffic is going | `RandomRain(traffic_speed_range_kmh=...)` | `(40.0, 130.0)` | with spray |
+| The traffic's lamps, lit | `RandomRain(vehicle_lamp_range=...)` | `(0.0, 0.0)`: off | scene labels |
 
 "Scene labels" means a provider built with `labels=`
 ([scene understanding](scene_understanding.md)): they say where the road
@@ -25,7 +28,13 @@ everything in the table that needs them is simply not drawn.
 ```python
 provider = SharedDepthProvider(DepthAnythingV2Estimator(), labels=SegmentationLabelEstimator())
 snow = RandomSnow(depth_provider=provider, wheel_track_range=(0.2, 0.8))
-rain = RandomRain(depth_provider=provider, wetness_probability=1.0, spray_range=(0.3, 0.8))
+rain = RandomRain(
+    depth_provider=provider,
+    wetness_probability=1.0,
+    spray_range=(0.3, 0.8),
+    traffic_speed_range_kmh=(90.0, 130.0),  # this camera looks at a motorway
+    vehicle_lamp_range=(0.6, 1.2),
+)
 ```
 
 ## Reading a road
@@ -44,8 +53,12 @@ flowchart TD
     GEO --> COMB
     COMB --> TRACKS["wheel tracks, ruts, gutters"]
     FIT --> DIR["the road's direction at every pixel"]
-    DIR --> SPRAY["spray plumes"]
-    LAMPS["each vehicle's own lamps: red = seen from behind"] --> SPRAY
+    DIR --> SPRAY["spray: tufts, wakes, mist"]
+    LENS["each vehicle's own picture:<br/>red lenses = seen from behind"] --> VOTE
+    OFF --> VOTE["one vote per road: one way,<br/>or two ways about its widest empty strip"]
+    VOTE --> SPRAY
+    SPEED["traffic speed, drawn:<br/>frame, road, vehicle"] --> SPRAY
+    VOTE --> LIT["lamps: head where coming on,<br/>tail where driving away"]
 ```
 
 **One model for the whole road.** On level ground, every line that runs
@@ -156,33 +169,117 @@ has three parts, and each is drawn:
   a motorway in rain looks like, and it is what the first version, a puff
   behind each car, did not have at all.
 
-Where each wake lies, and which way:
+Where each wake lies:
 
 - **Along the road's direction at the vehicle**, from the model above,
   turned to the vehicle's own outline where that is long and close to it.
-- **Behind the vehicle, which its own picture has to say.** A rear shows
-  red lenses, a pair of them at the corners of its near end: it is driving
-  away, and its wake is towards the camera, over its own wheels. A vehicle
-  large enough to show lenses and showing no red is seen from the front,
-  as is one with white lamps burning at night: its wake is behind it, up
-  the road. A red car says nothing. A vehicle that says nothing goes the
-  way of the nearest one across the road that does.
-- **One speed to a road.** How much is thrown up goes with the square of
-  the speed, and traffic on one carriageway moves at about one speed, drawn
-  per road, with a little either side for each vehicle.
+- **Behind the vehicle**, which is the next section.
 - **Some vehicles throw up nothing**: one lying across the road, which is
   crossing, turning or parked; and any on a scrap of road under a
   twentieth of the frame, whose direction is a guess.
+- **It is a thing in the scene.** Every part of a wake is hidden by the
+  vehicles that stand nearer the camera than it, and by no others. The
+  wake of a car coming on is behind that car, and over the bonnet of the
+  one that follows it. It used to be cut out round every vehicle in the
+  frame, which left each car in a cloud standing in a clear hole with a
+  hard edge. The mist over the road does the same by height: a sight line
+  that ends on a car has run through the less of the layer the higher up
+  the car it ends, and a roof is three quarters of the way up it, not
+  clear of it. And a branch, a post or a parapet much nearer the camera
+  than the vehicle hides its wake, by the scene's depth.
 
-Left, a soaked road; right, the same with `spray_range=(0.6, 0.6)`:
+### Which way the traffic is going
+
+The spray is behind the vehicle, so which end is the back has to be known,
+and a single frame says so only weakly.
+
+**What one vehicle shows** ([`vehicle_facing`](../src/surmentations/utils/road.py)):
+
+- *A rear has red lenses*: a few small patches of red, each a small part
+  of the vehicle. One is enough, the other being as often hidden or in
+  shade. Red here is red and not amber: an indicator is on the front of a
+  car too, and was being read as a tail lamp.
+- *A front has none.* A vehicle large enough to show lenses and showing no
+  red at all is seen from the front. This is weak: a rear in shade shows
+  none either.
+- *A red vehicle says nothing*; nor does an outline much wider than the
+  rest, which is several vehicles run together.
+- At night, white lamps burning are headlamps.
+
+**What a road's traffic says together**
+([`traffic_directions`](../src/surmentations/utils/road.py)). A road's
+vehicles are not independent. They all go one way; or one way on one side
+and the other way on the other, and what divides them is the widest strip
+across the road with no vehicle in it, where a reserve would be. Those are
+the only answers considered. Each vehicle's reading is a vote, weighted by
+its size, a rear seen counting three times a front; the answer most of the
+evidence agrees with is taken, two ways only when it explains more than
+one. So a red taxi goes the way of the cars about it, and two rears in
+shade among a carriageway's lanes do not turn their neighbours round. Where
+no vehicle of a road says anything, its direction is drawn.
+
+### How fast it is going
+
+A frame does not say, and spray is mostly a matter of speed.
+`traffic_speed_range_kmh` is the speed of the frame's traffic, drawn per
+call; give a camera's own range where it is known.
+
+- **Each road has its own mean**, a little either side of the frame's (a
+  standard deviation of 8 %): two carriageways never quite agree.
+- **Each vehicle's speed is normal about its road's mean**, with a spread
+  drawn between 11 and 18 % of it, the range reported for free-flowing
+  traffic (Leong, 1968, as cited in reviews of speed distributions). A
+  lorry, known by its width, keeps to 90 km/h.
+- **Spray goes with the 2.8th power of speed**
+  ([`spray_amount`](../src/surmentations/utils/road.py)): the Road Research
+  Laboratory's fit to spray density behind cars and lorries (1965). Traffic
+  at 55 km/h throws up a seventh of what it does at 110, and a queue none.
+  The mist over a road is the sum of what its vehicles throw up, so a slow
+  road has little and a standing one none.
+- **A wake is as long as its vehicle travels while the cloud hangs**,
+  three quarters of a second: twenty metres at 100 km/h, eight at 40.
+
+Both figures were met in summaries and not checked at source; they are
+used as the shape of the dependence, not as measurements of this model.
+
+Left, a soaked road; right, the same with `spray_range=(0.6, 0.6)`, the
+traffic's lamps lit, and each scene's traffic at its own speed (about 105
+km/h on the motorway, 85 on the city road, under 45 in the street and at
+the junction, where there is next to no spray to see):
 
 ![wet road and spray](assets/road_surface/wet_road_and_spray.jpg)
 
-It is off by default because of what one frame cannot say: how fast the
-traffic is moving, so a standing queue is given the spray of a moving one;
-and, where no lamp or lens shows, which way it is going. Lamps are not
-lit: real traffic in rain drives with its lights on, and their glow in the
-mist and their streaks down the road are most of what is still missing.
+Spray is off by default because of what one frame cannot say: how fast the
+traffic is moving, which is the caller's to give, and, on a road none of
+whose vehicles shows a lens, which way.
+
+## Lamps
+
+Traffic in rain drives with its lamps on, and a photograph taken in the
+dry has them off. `vehicle_lamp_range` lights them
+([`vehicle_lamps`](../src/surmentations/utils/road.py)):
+
+- **Which lamps** is the reading above: two headlamps on a vehicle coming
+  on, two tail lamps on one driving away.
+- **Where.** The end that is seen is the lower part of the outline, and
+  the pair is at one height on it, a little in from either side and a
+  quarter of the way up. A rear whose lenses can be seen is lit where they
+  are. A vehicle seen from the side, and an outline that is several
+  vehicles, has no such end, and only lenses that are seen are lit on it.
+- **How bright.** A lamp is far over full scale: a dipped headlamp about
+  six times it at a strength of 1 and a tail lamp about twice, each a
+  little more or less, halogen or LED in colour. One rear in eight is
+  braking. By day nine fronts in ten are lit and three rears in four,
+  daytime running lamps being at the front only; in a dark frame every
+  vehicle is, except those whose lamps the picture already shows burning.
+- **In wet air.** What rain and spray take out of a beam they scatter round
+  it: each lamp has a glow five times its size, a third of it there in rain
+  alone and all of it in thick spray. Spray that hides a car leaves its
+  lamps showing, as it does on a road.
+- **On the road.** The lamps are in the picture before the wet road is
+  drawn, and the road reflects them as it does any lamp: a streak down the
+  film towards the camera. Lamps the picture already shows burning are
+  given the same glow.
 
 ## Limits
 
@@ -206,7 +303,18 @@ mist and their streaks down the road are most of what is still missing.
 - **Junctions, squares and car parks have no lanes.** A ragged mask gets
   no road; a tidy one is read as a road.
 - **Touching vehicles are one vehicle** to a semantic mask, so dense
-  traffic gives fewer, wider plumes.
+  traffic gives fewer, wider plumes, and no lamps on the merged outline
+  unless its lenses are seen.
+- **Which way a vehicle faces is weak evidence pooled.** A one-way road
+  whose every rear is in shade and shows no red reads as coming on. Two
+  carriageways with an empty lane wider than their reserve are divided at
+  the lane. A road with no evidence at all has its direction drawn.
+- **Lamps are placed, not found.** A headlamp is put where a headlamp
+  usually is on an outline, which on an unusual vehicle or a partly hidden
+  one is not where it is.
+- **The traffic's speed is the caller's.** Nothing in a frame is read for
+  it; the default range covers a town and a motorway and is right for
+  neither.
 - **A pale rim** can still show round vehicles on a dark wet road, where
   the tests that keep the road off the vehicle reach a pixel or two past
   it.
@@ -222,6 +330,18 @@ mist and their streaks down the road are most of what is still missing.
 - Federal Highway Administration (2015). Assessing Pavement Surface Splash
   and Spray Impact on Road Users. TechBrief FHWA-HRT-15-062.
   [fhwa.dot.gov](https://www.fhwa.dot.gov/publications/research/infrastructure/pavements/ltpp/15062/index.cfm)
+- Road Research Laboratory (1965). Measurements of the spray thrown up by
+  vehicles on wet roads, reported in Commercial Motor, 23 July 1965,
+  "Cutting down the spray".
+  [archive.commercialmotor.com](https://archive.commercialmotor.com/article/23rd-july-1965/47/cutting-down-the-spray)
+  (spray density as the 2.8th power of speed, above 45 mph. Read in a
+  summary of a scanned article whose text is garbled; not checked at
+  source.)
+- Leong, H. J. W. (1968). The distribution and trend of free speeds on
+  two-lane two-way rural highways in New South Wales. Proc. Australian
+  Road Research Board 4. (Free speeds normal, with a coefficient of
+  variation of 0.11 to 0.18. Known here only as cited in later reviews of
+  speed distributions; not read at source.)
 - von Bernuth, A., Volk, G., Bringmann, O. (2021). Augmenting Image Data
   Sets With Water Spray Caused by Vehicles on Wet Roads. IEEE Intelligent
   Transportation Systems Conference (ITSC).
