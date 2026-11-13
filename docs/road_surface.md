@@ -356,10 +356,17 @@ provider knows where the points are
   further than in daylight rain because the camera has opened up for the
   dark, and they bloom. They are white whichever end they are on: with the
   infrared-cut filter out, a red lamp is a bright lamp and no more.
-- **Each lit vehicle throws its beam** on the road ahead of it: along the
-  road from its front, widening, half as strong at fourteen metres and
-  gone by seventy-five, and cut off above the height of a bonnet, as a
-  dipped beam is.
+- **Each lit vehicle throws its beam** on the road ahead of it: from its
+  front, widening, several times what a street lamp puts under itself,
+  half as strong at fourteen metres and gone by seventy-five, and cut off
+  above the height of a bonnet, as a dipped beam is. Which way it points
+  is which end is seen: away from the camera for a vehicle seen from
+  behind, whose beam shows as the road lit beyond it and to either side,
+  and at the camera for one seen from the front. Where the outline is
+  long, as seen from above, its long way is the heading. Where a
+  vehicle's lamps sit on its outline is not used: on a car seen from
+  behind at a low angle they are above its middle, and beams taken from
+  that were thrown back at the camera.
 
 Lamps are added as light, after the illuminator's falloff and the
 auto-exposure, so neither dims them, and whatever follows in a pipeline,
