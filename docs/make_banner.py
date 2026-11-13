@@ -14,9 +14,17 @@ Every cell is a render of the same reference photograph, so the road runs
 on unbroken from strip to strip while the weather, the lens and the camera
 change across it: which is what the library does, shown once.
 
-Nothing here is rendered afresh. Regenerate the gallery first
-(``python docs/generate_examples.py``) if the effects have changed, then
-run this. It needs Pillow for the lettering, which the gallery does not;
+One strip is rendered here and not taken from the gallery: packet loss.
+A gallery cell shows a whole frame, and where the damage falls in it is
+the draw's business; in the cells that exist it is either outside the
+strip or a block of solid green that shouts over the rest of the banner.
+So that strip is one fixed draw (:data:`PACKET_LOSS`) of a moderate loss,
+concealed by the decoder, whose smear lies across the part of the road the
+strip shows. It needs what ``TransmissionFaults`` needs, ffmpeg or PyAV.
+
+Regenerate the gallery first (``python docs/generate_examples.py``) if the
+effects have changed, then run this. It needs Pillow for the lettering,
+which the gallery does not;
 the typeface is DejaVu Sans, found where Linux distributions install it,
 with Pillow's built-in face as the fallback.
 """
@@ -36,13 +44,27 @@ OUT = DOCS / "assets" / "social_banner.png"
 WIDTH, HEIGHT = 1280, 640
 # How far the foot of each strip is to the left of its head, in pixels.
 SLANT = 90
+# The name of the strip that is rendered here, and the draw it is: the
+# arguments of ``TransmissionFaults`` and the seed. A fifth of the packets
+# lost a few frames after a keyframe, every loss concealed from the frame
+# before and none left as the green of an unfinished frame.
+RENDERED = "packet loss, rendered"
+PACKET_LOSS: dict[str, object] = {
+    "packet_loss_range": (0.12, 0.2),
+    "scene_motion_range": (0.03, 0.05),
+    "missing_reference_probability": 0.0,
+    "concealment_probability": 1.0,
+    "slices_range": (4, 6),
+    "frames_since_keyframe_range": (2, 4),
+}
+PACKET_LOSS_SEED = 13
 # Each strip: the gallery cell it is cut from, and what it is called.
 STRIPS = [
     ("00_base_scene", "clean"),
     ("rain_4", "rain"),
     ("ground_fog_2", "ground fog"),
     ("snow_3", "snow"),
-    ("transmission_faults_3", "packet loss"),
+    (RENDERED, "packet loss"),
     ("foliage_intrusion_3", "foliage"),
     ("night_ir_1", "night IR"),
     ("spider_web_3", "web"),
@@ -65,9 +87,26 @@ def _font(name: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default(size)
 
 
+def _packet_loss() -> np.ndarray:
+    """The reference photograph after the banner's one draw of packet loss, as BGR."""
+    # Imported here: the rest of the banner needs neither the library nor a codec.
+    from surmentations.camera import TransmissionFaults
+
+    base = cv2.imread(str(EXAMPLES / "00_base_scene.png"))
+    if base is None:
+        raise FileNotFoundError(f"00_base_scene.png is not in {EXAMPLES}")
+    faults = TransmissionFaults(p=1.0, **PACKET_LOSS)
+    faults.set_random_seed(PACKET_LOSS_SEED)
+    lossy: np.ndarray = faults(image=cv2.cvtColor(base, cv2.COLOR_BGR2RGB))["image"]
+    return cv2.cvtColor(lossy, cv2.COLOR_RGB2BGR)
+
+
 def _cell(name: str) -> np.ndarray:
-    """A gallery cell, enlarged to the banner's width and cropped to its height."""
-    image = cv2.imread(str(EXAMPLES / f"{name}.png"))
+    """A gallery cell, enlarged to the banner's width and cropped to its height.
+
+    Or, for :data:`RENDERED`, the draw of packet loss made here.
+    """
+    image = _packet_loss() if name == RENDERED else cv2.imread(str(EXAMPLES / f"{name}.png"))
     if image is None:
         raise FileNotFoundError(f"{name}.png is not in {EXAMPLES}; regenerate the gallery first")
     scale = WIDTH / image.shape[1]
