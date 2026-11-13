@@ -107,8 +107,11 @@ _LAMP_BLOOM = 0.3
 # same lamp, and the camera has opened up for the dark by about this much.
 _NIGHT_LAMP_OVER = 8.0
 # A dipped beam on the road just ahead of its vehicle, in unit exposures,
-# at a lamp strength of 1.
-_BEAM_LEVEL = 1.2
+# at a lamp strength of 1: several times what a street lamp puts under
+# itself, as the pool ahead of a car is on a lit road.
+_BEAM_LEVEL = 4.0
+# An outline this many times longer than wide has a long way to go by.
+_LONG_OUTLINE = 1.3
 # The field of view a frame is taken to have where nothing says: the
 # lighting needs the scene in space, and is not sensitive to it.
 _ASSUMED_FOV_DEG = 60.0
@@ -481,21 +484,21 @@ class NightIrMode(CameraTransform):
                     emitted += burning
                     glowing += halo
                 beams = []
-                for vehicle, places in lit:
-                    # Its front points from its middle to its lamps where
-                    # it is coming on, and the other way where it is seen
-                    # from behind.
-                    at_x = float(np.mean([x for x, _y in places]))
-                    at_y = float(np.mean([y for _x, y in places]))
-                    ahead = np.array(
-                        [at_x - float(vehicle.columns.mean()), at_y - float(vehicle.rows.mean())]
+                for vehicle, _places in lit:
+                    # The long way of its outline, where it has one: seen
+                    # from above, that is the way it points.
+                    offsets = np.stack(
+                        [
+                            vehicle.columns - vehicle.columns.mean(),
+                            vehicle.rows - vehicle.rows.mean(),
+                        ]
                     )
-                    if vehicle.away > 0.0:
-                        ahead = -ahead
-                    long = float(np.hypot(*ahead))
-                    ahead = ahead / long if long > 1e-3 else np.array([0.0, -vehicle.away])
+                    values, vectors = np.linalg.eigh(np.cov(offsets) + 1e-6 * np.eye(2))
+                    long_way = None
+                    if values[1] > _LONG_OUTLINE**2 * values[0]:
+                        long_way = (float(vectors[0, 1]), float(vectors[1, 1]))
                     foot = (float(vehicle.foot[1]), float(vehicle.foot[0]))
-                    beams.append((foot, (float(ahead[0]), float(ahead[1])), vehicle.away > 0.0))
+                    beams.append((foot, long_way, vehicle.away > 0.0))
                 if beams:
                     reaching += np.float32(_BEAM_LEVEL * lamps) * headlamp_light(
                         points, middle, up, focal, (height, width), beams
@@ -567,7 +570,7 @@ class NightIrMode(CameraTransform):
         reference_level = percentile(signal, 80.0)
         if reference_level > 1e-6:
             level = target_level / reference_level
-            if lamp_exposure is not None and road is not None:
+            if lamp_exposure is not None:
                 # A scene lit from a few points is mostly dark, and its
                 # 80th percentile is in the dark. Exposed for that, the
                 # lit road is a white sheet; a camera holds its highlights.

@@ -678,17 +678,20 @@ def test_infrared_night_lights_the_lamps_a_reader_found_and_only_then() -> None:
         change = lit - plain
         on_cars = labels == int(SceneClass.VEHICLE)
         assert float(change[on_cars].max()) > 100.0, "no lamp lit on a dark car"
-        # Half way down each car, where the reader put them.
-        # The level depth of this scene has no cars standing in it, so a
-        # beam runs on over the car ahead: the lamps are the brightest of
-        # what changed, and are looked for at that.
-        on_a_car = on_cars & (change.max(axis=2) > 0.9 * change[on_cars].max())
-        rows, columns = np.nonzero(on_a_car)
-        assert {int(row) for row in rows} <= set(range(96, 114)) | set(range(156, 174))
-        # White, whichever end: the three channels differ only by the
-        # sensor's residual tint.
-        brightest = lit[rows, columns]
-        assert float((brightest.max(axis=1) - brightest.min(axis=1)).max()) < 20.0
+        # Half way down each car and a quarter of the way in from either
+        # side, where the reader put them: on a lit car both are at full
+        # scale, and white, whichever end, the three channels differing
+        # only by the sensor's residual tint. (Not looked for as the
+        # brightest of what changed: the level depth of this scene has no
+        # cars standing in it, and a beam runs on over the car ahead.)
+        cars_lit = 0
+        for left, top in ((96, 150), (196, 90)):
+            lamps = [lit[top + 15, left + 7], lit[top + 15, left + 21]]
+            if min(float(lamp.min()) for lamp in lamps) < 235.0:
+                continue
+            cars_lit += 1
+            assert max(float(lamp.max() - lamp.min()) for lamp in lamps) < 20.0
+        assert cars_lit == drew["vehicles_lit"]
         off, drew = infrared(reader, vehicle_lamp_range=(0.0, 0.0))
         assert drew["vehicles_read"] == 0 and float(np.abs(off - plain).max()) == 0.0
 

@@ -62,6 +62,10 @@ _BEAM_REACH_M = 75.0
 _BEAM_HIGH_M = 1.2
 # How long a vehicle is, for where the front of one seen from behind is.
 _VEHICLE_LENGTH_M = 4.5
+# An outline's long way is its vehicle's heading when it lies within this
+# cosine of the line from the camera: further off, the outline is long
+# for some other reason, two vehicles in one or a lorry seen side on.
+_HEADING_AGREES = 0.5
 # How much of the day's light and shade is taken off a road, and over what
 # share of the frame's diagonal the light is taken to have varied.
 _EVEN = 0.8
@@ -194,18 +198,32 @@ def headlamp_light(
     up: np.ndarray,
     focal_px: float,
     shape: tuple[int, int],
-    vehicles: list[tuple[tuple[float, float], tuple[float, float], bool]],
+    vehicles: list[tuple[tuple[float, float], tuple[float, float] | None, bool]],
 ) -> np.ndarray:
     """How much of the traffic's headlamps reaches each point, ``(h, w)`` float32.
 
     ``vehicles`` are those whose lamps are lit, each as the place in the
     picture where it stands on the road (column and row of the middle of
-    its foot), the way its front points in the picture, and whether it is
-    seen from behind. A beam starts at the vehicle's front, which for one
-    seen from behind is a vehicle's length further on; it runs along the
-    road, widens as it goes, is 1 at the vehicle and falls to half in
-    fourteen metres; and it lights the road and what stands low on it, not
-    what is above it: a dipped beam is cut off at the horizontal.
+    its foot), the long way of its outline in the picture where it has
+    one, and whether it is seen from behind.
+
+    **Which way a vehicle points** is which end of it is seen. One seen
+    from behind is driving away from the camera and one seen from the
+    front is coming at it: along the ground, on the line from the camera
+    to the vehicle. That is exact for a vehicle seen end on, and where its
+    outline is long, as it is seen from above, the outline's own long way
+    is its heading, taken in the sense that agrees. Where its lamps are on
+    its outline says nothing: on a car seen from behind at a low angle the
+    tail lamps are above the middle of it, and a heading taken from them
+    threw its beam back at the camera.
+
+    A beam starts at the vehicle's front, which for one seen from behind
+    is a vehicle's length further on; it runs along the road, widens as it
+    goes, is 1 at the vehicle and falls to half in fourteen metres; and it
+    lights the road and what stands low on it, not what is above it: a
+    dipped beam is cut off at the horizontal. Most of the beam of a
+    vehicle seen from behind is hidden by the vehicle; what shows is the
+    road lit beyond it and to either side.
     """
     height, width = shape
     light = np.zeros(points.shape[:2], dtype=np.float32)
@@ -223,30 +241,38 @@ def headlamp_light(
     above = x * up[0] + y * up[1] + z * up[2]
     low = np.clip(1.5 - above / _BEAM_HIGH_M, 0.0, 1.0)
     step = 0.02 * float(np.hypot(height, width))
-    for (column, row), (ahead_x, ahead_y), from_behind in vehicles:
+    for (column, row), long_way, from_behind in vehicles:
         here = _on_ground(
             np.array([(column - 0.5 * width) / focal_px, (row - 0.5 * height) / focal_px, 1.0]),
             middle,
             up,
         )
-        there = _on_ground(
-            np.array(
-                [
-                    (column + step * ahead_x - 0.5 * width) / focal_px,
-                    (row + step * ahead_y - 0.5 * height) / focal_px,
-                    1.0,
-                ]
-            ),
-            middle,
-            up,
-        )
-        if here is None or there is None or here[2] <= 0.0 or there[2] <= 0.0:
+        if here is None or here[2] <= 0.0:
             continue
-        heading = there - here
-        length = float(np.linalg.norm(heading))
+        # Away from the camera along the ground, or towards it.
+        away = here - float(here @ up) * up
+        length = float(np.linalg.norm(away))
         if length < 1e-4:
             continue
-        heading = heading / length
+        heading = (away / length) * (1.0 if from_behind else -1.0)
+        if long_way is not None:
+            there = _on_ground(
+                np.array(
+                    [
+                        (column + step * long_way[0] - 0.5 * width) / focal_px,
+                        (row + step * long_way[1] - 0.5 * height) / focal_px,
+                        1.0,
+                    ]
+                ),
+                middle,
+                up,
+            )
+            if there is not None and there[2] > 0.0:
+                own = there - here
+                long = float(np.linalg.norm(own))
+                agrees = float(own @ heading) / max(long, 1e-6)
+                if long > 1e-4 and abs(agrees) > _HEADING_AGREES:
+                    heading = own / long * (1.0 if agrees > 0.0 else -1.0)
         front = here + (_VEHICLE_LENGTH_M * heading if from_behind else 0.0) - middle
         ahead = (float(heading @ first), float(heading @ second))
         du = along_first - np.float32(front @ first)
