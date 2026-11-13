@@ -48,6 +48,8 @@ and its lamps (`spray_range`, `vehicle_lamp_range`), which are off by default
 and which only a provider that knows the road and its vehicles can draw. That
 provider also has a vehicle reader, which says which end of each vehicle is
 seen and where its lamps are; see [the road surface](../../../road_surface.md).
+With that reader `night_ir` lights the traffic's lamps too, as it does whenever
+a provider has one.
 
 | `rain` without | `rain` with |
 | --- | --- |

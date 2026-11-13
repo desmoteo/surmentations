@@ -1,13 +1,15 @@
 """Draw the figures of ``docs/road_surface.md``.
 
-Four pictures, made from the photographs the galleries use, with a
+Five pictures, made from the photographs the galleries use, with a
 provider that carries scene labels and an estimated geometry:
 
 * the roads as the library reads them: painted lines, lane lines and the
   wheel tracks laid in the lanes;
 * settled snow without wheel tracks and with them;
 * each scene's vehicles as a network reads them: which end, and its lamps;
-* a soaked road as it was, and with its traffic's spray and lamps.
+* a soaked road as it was, and with its traffic's spray and lamps;
+* infrared night without a vehicle reader and with one, which lights the
+  traffic's lamps.
 
 Run from the repository root, on a machine with a CUDA GPU::
 
@@ -30,6 +32,7 @@ sys.path.insert(0, str(REPO))
 
 from docs.generate_scene_examples import SCENES, SCENES_DIR, _load  # noqa: E402
 from surmentations.atmosphere import RandomRain, RandomSnow  # noqa: E402
+from surmentations.camera.night_ir import NightIrMode  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
 from surmentations.perception import (  # noqa: E402
     GroundPlaneGeometryEstimator,
@@ -200,8 +203,25 @@ def compare(
     _save("wheel_tracks.jpg" if effect == "snow" else "wet_road_and_spray.jpg", tiles, 2)
 
 
+def night_lamps(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
+    """Two scenes as an infrared night camera sees them: without a vehicle reader, and with one.
+
+    The same draw both times. A daylight photograph has its traffic's lamps
+    off; the reader says which end of each vehicle is seen and where its
+    lamps are, and they are lit.
+    """
+    tiles = []
+    for name in ("urban_road_day", "underpass_from_above"):
+        for reader in (None, vehicles):
+            provider = _provider(name, depth, labels, reader)
+            night = NightIrMode(depth_provider=provider, p=1.0)
+            night.set_random_seed(5)
+            tiles.append(night(image=images[name])["image"])
+    _save("night_lamps.jpg", tiles, 2)
+
+
 def main() -> None:
-    """Make the four figures."""
+    """Make the five figures."""
     depth, labels = DepthAnythingV2Estimator(), SegmentationLabelEstimator()
     images = {name: _photograph(name) for name in SHOWN}
     vehicles = OpenVocabularyVehicleEstimator()
@@ -210,6 +230,7 @@ def main() -> None:
     read_vehicles(images, providers)
     compare(images, providers, "snow")
     compare(images, providers, "rain")
+    night_lamps(images, depth, labels, vehicles)
     print(f"Wrote the figures to {OUT_DIR}")
 
 

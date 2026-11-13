@@ -286,8 +286,11 @@ transform = surveillance(provider)
 
 The weather then falls through one camera, the wet road and the settled
 snow keep off what stands on them, and the infrared branch's illuminator
-works over the scene's real distances. See
-[`scene_understanding.md`](scene_understanding.md).
+works over the scene's real distances. A provider that also has a vehicle
+reader (`vehicles=OpenVocabularyVehicleEstimator()`) has `NightIrMode`
+light the traffic's lamps on that branch. `RandomRain`'s spray and its
+daytime lamps are parameters of its own, off by default, and the pipelines
+leave them off. See [`scene_understanding.md`](scene_understanding.md).
 
 ### Why `NightIrMode` is `p=1.0` *inside* its branch
 

@@ -61,7 +61,7 @@ than exposed.
 - **[`docs/examples/scenes/`](docs/examples/scenes/README.md)** — every
   effect over eight photographs of different scenes, one page each, with
   the effects that read the scene shown side by side without and with scene
-  labels and geometry.
+  labels, geometry and the vehicle reader.
 - **[`plan.md`](plan.md)** — design record and roadmap.
 
 ---
@@ -163,45 +163,83 @@ With no CUDA device, constructing `DepthAnythingV2Estimator` raises a
 `RuntimeError` immediately with an actionable message, rather than silently
 falling back to a CPU path slow enough to blow a training-step budget.
 
-### Scene labels and installation geometry — optional
+### What a provider can read — optional
 
-Depth says how far away a pixel is, not what it is, and not where the
-camera stands. The same provider can work out both, once per scene:
+Depth says how far away a pixel is. It does not say what the pixel is,
+where the camera stands, or which way a car is facing. The same provider
+can read each of those, once per scene, and every transform given that
+provider uses whatever it has. Each reader is optional and independent of
+the others, except that the vehicle reader needs the labels to say where
+the vehicles are; a provider given none behaves as it always did.
+
+| Reader | Argument | What it says | Shipped estimator | Cost per new scene |
+| --- | --- | --- | --- | --- |
+| Depth | first argument | how far each pixel is | `DepthAnythingV2Estimator` (Apache-2.0) | 11–15 ms |
+| Scene labels | `labels=` | what each pixel is: road, sky, vegetation, vehicle, person … | `SegmentationLabelEstimator` (UperNet/ConvNeXt, MIT) | 33 ms |
+| Installation geometry | `geometry=` | the camera's field of view, tilt, roll and height | `GroundPlaneGeometryEstimator`, or an `InstallationGeometry` you give | 5 ms |
+| Vehicle views | `vehicles=` | each vehicle apart from its neighbours, which end of it is seen, where its lamps are | `OpenVocabularyVehicleEstimator` (OWLv2, Apache-2.0) | 130–200 ms |
 
 ```python
+from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
 from surmentations.perception import (
     GroundPlaneGeometryEstimator,
     InstallationGeometry,
+    OpenVocabularyVehicleEstimator,
     SegmentationLabelEstimator,
 )
 
 depth_provider = SharedDepthProvider(
     DepthAnythingV2Estimator(),
-    labels=SegmentationLabelEstimator(),        # road, sky, vegetation, vehicles ...
-    geometry=GroundPlaneGeometryEstimator(),    # horizon, tilt and height, from the frame
+    labels=SegmentationLabelEstimator(),          # road, sky, vegetation, vehicles ...
+    geometry=GroundPlaneGeometryEstimator(),      # horizon, tilt and height, from the frame
+    vehicles=OpenVocabularyVehicleEstimator(),    # which end of each vehicle, and its lamps
 )
 
 # A fixed camera whose mounting is known is better given than estimated:
 geometry = InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_m=6.5)
+
+# What the provider read off a frame:
+labels = depth_provider.get_labels(image)        # (H, W) uint8 of SceneClass
+camera = depth_provider.settle_camera(image)     # field of view, pitch, roll, height
+views = depth_provider.get_vehicles(image)       # one VehicleView per vehicle
 ```
 
-A third reader, `vehicles=OpenVocabularyVehicleEstimator()`, says which end
-of each vehicle is seen and where its lamps are, for the spray and the lit
-lamps of [`docs/road_surface.md`](docs/road_surface.md).
-
-With labels, a wet road stays off the vehicles on it and snow settles by
-name as well as by shape; the sky is the sky; foliage is bright in infrared
-night whatever colour it photographed as. With a geometry, every transform
-sees the frame through one camera in place of a field of view and a pitch
-drawn by each; a wet road mirrors about the true horizon; and where the
-camera's height is known, depth is in metres measured from it and
-`depth_range_m` is not needed. Both are evidence and not a verdict, and a
-provider given neither behaves as before.
-[`docs/scene_understanding.md`](docs/scene_understanding.md) has the
-figures, what the estimator can and cannot tell, and the licences of the
-networks.
+**Labels and geometry.** With labels, a wet road stays off the vehicles on
+it and snow settles by name as well as by shape; the sky is the sky; foliage
+is bright in infrared night whatever colour it photographed as. With a
+geometry, every transform sees the frame through one camera in place of a
+field of view and a pitch drawn by each; a wet road mirrors about the true
+horizon; and where the camera's height is known, depth is in metres measured
+from it and `depth_range_m` is not needed. Each scene below with its labels
+and the horizon the estimator found:
 
 ![what the provider reads off each sample scene](docs/assets/scene_understanding/labels_and_horizon.jpg)
+
+**Vehicle views.** A semantic mask runs touching vehicles together and
+says nothing of which way they face. The vehicle reader tells them apart,
+says which end of each is seen (green outlines are fronts, red are rears)
+and finds its lamps (yellow):
+
+![vehicles as the reader sees them](docs/assets/road_surface/vehicle_views.jpg)
+
+That is what `RandomRain` needs to lay spray behind each vehicle and light
+its lamps (`spray_range`, `vehicle_lamp_range`, `traffic_speed_range_kmh`),
+left as the road was and right with both:
+
+![a soaked road without and with its traffic's spray and lamps](docs/assets/road_surface/wet_road_and_spray.jpg)
+
+and what `NightIrMode` needs to light the traffic's lamps at night, which a
+daylight photograph has switched off. The same draw without the vehicle
+reader and with it:
+
+![infrared night without and with the vehicle reader](docs/assets/road_surface/night_lamps.jpg)
+
+All of these are evidence and not a verdict: an effect weighs what a reader
+says against what it reads from depth and colour itself.
+[`docs/scene_understanding.md`](docs/scene_understanding.md) has what each
+estimator can and cannot tell, its cost and the licences of the networks;
+[`docs/road_surface.md`](docs/road_surface.md) has the lanes, wheel tracks,
+standing water, spray and lamps that are drawn along a road.
 
 ---
 
@@ -248,7 +286,7 @@ parameters, samples and references. The tables here are the overview.
 
 | Transform | Models | Needs depth |
 | --- | --- | --- |
-| [`NightIrMode`](docs/transforms/NightIrMode.md) | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise | yes |
+| [`NightIrMode`](docs/transforms/NightIrMode.md) | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise; with a vehicle reader on the provider, the traffic's lamps lit | yes |
 | [`AcFlicker`](docs/transforms/AcFlicker.md) | Mains banding. Cancels exactly when the exposure is a whole number of flicker periods — the basis of a camera's anti-flicker setting | no |
 | [`RollingShutter`](docs/transforms/RollingShutter.md) | Row-dependent shear and wobble from camera motion during readout. One of the two transforms that move pixels, with `CameraVibration`, so masks, boxes and keypoints move with it | no |
 | [`SensorNoise`](docs/transforms/SensorNoise.md) | Shot and read noise in photoelectrons, set by sensor gain, drawn on the Bayer mosaic and demosaiced, so the grain is coarse and coloured as in a real low-light frame | no |
@@ -319,7 +357,7 @@ and the physics behind it.
 | `LensTamper` | `kinds` (spray, tape, cover), `coverage_range`, `opacity_range`, `shade_range` (by day), `glow_range` (infrared ring on) |
 | `FoliageIntrusion` | `branch_count_range`, `distance_range_m`, `leaf_length_range_mm`, `reach_range`, `sway_speed_range_m_s`, `illuminator_gain_range` (0 by day; at night also set `leaf_light_range` to 0), `beam_falloff_range` |
 | `FocusShift` | `focus_distance_range_m` (where the lens is in fact focused; nearer is worse), `aperture_diameter_range_mm`, `depth_provider` (optional) |
-| `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range` |
+| `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range`, `vehicle_lamp_range` (the traffic's lamps, lit where the provider's vehicle reader found them; nothing without one) |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
 | `RollingShutter` | `pan_shift_range_px`, `wobble_amplitude_range_px`, `wobble_cycles_range` |
 | `SensorNoise` | `gain_range_db` (the knob: how few electrons make a full-scale picture), `full_well_range_e`, `read_noise_range_e` |
