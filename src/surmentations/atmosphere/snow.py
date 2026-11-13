@@ -134,6 +134,7 @@ from surmentations.utils.precipitation import (
     snow_physical_diameter,
     width_cut_for_budget,
 )
+from surmentations.utils.road import road_frame, road_lanes, wheel_tracks
 from surmentations.utils.sky import (
     extinction_for_visibility,
     lift_sky,
@@ -373,6 +374,22 @@ _VEHICLE_WIDTH = 0.09
 # them: what is a vehicle, what nothing settles on, what is a tree's crown
 # and what is a lawn. And how soft a labelled region's edge is taken to be,
 # as a fraction of the diagonal.
+# What is on a road and is part of it for finding its sides: a road with its
+# traffic cut out of it has a hole wherever a vehicle is.
+_ON_THE_ROAD = (SceneClass.VEHICLE, SceneClass.PERSON)
+# Wheel tracks. Half the width of one track as a share of its lane, and the
+# share of the snow in it that is gone, and how much of a track is left
+# where the road has been driven over least, each from the least traffic to
+# the most; the scales, in metres, over which a track strays and over which it
+# is worn more and less; and how much darker the road is where snow has
+# been worn off it, being wet.
+_TRACK_BAND = (0.045, 0.2)
+_TRACK_CLEARED = (0.45, 0.97)
+_TRACK_WEAR_FLOOR = (0.2, 0.9)
+_TRACK_RAGGED_M = 4.0
+_TRACK_WORN_M = 9.0
+_TRACK_WETTING = 0.35
+
 _NAMED: dict[str, tuple[SceneClass, ...]] = {
     "vehicle": (SceneClass.VEHICLE,),
     "bare": (SceneClass.PERSON, SceneClass.SKY, SceneClass.WATER),
@@ -528,6 +545,20 @@ class RandomSnow(CameraTransform):
             blown clear or melted. Kept low by default: the patches are
             noise on the ground, not tyre tracks, and at high values a
             covered road reads as cloud.
+        wheel_track_range: how far traffic has worn the settled snow, drawn
+            per call. Wheels run in the same two lines down every lane, and
+            a snowed-in road that is driven on shows them before it shows
+            anything else: 0 is untouched snow, 0.3 two dark ruts a tyre
+            wide in each lane, 1 lanes worn bare with snow left between
+            them and along the verges. The tracks follow the road, bends
+            included, and pass under the vehicles on it, whose positions
+            are where the lanes are read from
+            (:mod:`surmentations.utils.road`). They are drawn only where
+            the picture holds a road with two sides to follow, and only
+            with scene labels on the
+            provider (:mod:`surmentations.perception.labels`), which say
+            where the road and its vehicles are: without them there is no
+            road to follow and no tracks are drawn.
         accumulation_falloff: exponent applied to the cosine term. The
             cosine alone is the *rate* at which snow arrives, but whether it
             **stays** has a threshold — snow slides off anything much past
@@ -664,6 +695,11 @@ class RandomSnow(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        wheel_track_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.0)),
+        ]
         accumulation_falloff_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -696,6 +732,7 @@ class RandomSnow(CameraTransform):
         accumulation_strength_range: tuple[float, float] = (0.1, 1.0),
         camera_pitch_range_deg: tuple[float, float] = (0.0, 22.0),
         accumulation_patchiness_range: tuple[float, float] = (0.0, 0.3),
+        wheel_track_range: tuple[float, float] = (0.0, 0.9),
         vehicle_cover_range: tuple[float, float] = (0.0, 0.6),
         accumulation_falloff_range: tuple[float, float] = (2.0, 5.0),
         overcast_range: tuple[float, float] = (0.7, 1.0),
@@ -732,6 +769,7 @@ class RandomSnow(CameraTransform):
         self.accumulation_strength_range = accumulation_strength_range
         self.camera_pitch_range_deg = camera_pitch_range_deg
         self.accumulation_patchiness_range = accumulation_patchiness_range
+        self.wheel_track_range = wheel_track_range
         self.vehicle_cover_range = vehicle_cover_range
         self.accumulation_falloff_range = accumulation_falloff_range
         self.overcast_range = overcast_range
@@ -893,6 +931,7 @@ class RandomSnow(CameraTransform):
         )
 
         settled = np.zeros((height, width), dtype=np.float32)
+        road = on_road = None
         if draw_accumulation:
             # Lambert's cosine law for falling snow: what a surface collects
             # goes as the cosine of the angle between its normal and "up".
@@ -917,8 +956,16 @@ class RandomSnow(CameraTransform):
                 soften = max(1.0, _LABEL_EDGE * float(np.hypot(height, width)))
                 for name, classes in _NAMED.items():
                     named[name] = class_weight(labels, classes, soften_px=soften)
+                # The road and what is on it, by name, for the wheel tracks.
+                on_road = class_weight(labels, _ON_THE_ROAD) > 0.5
+                road = on_road | (labels == int(SceneClass.ROAD))
                 vehicles = np.maximum(vehicles, named["vehicle"])
                 as_read = as_read * (1.0 - named["bare"])
+            # Without labels there is no road to follow. Level ground that
+            # is not green was tried in its place: it takes in the pavements
+            # and the verges, the islands of level surface that pass for
+            # vehicles give lanes a third of their width, and the result was
+            # a washboard across everything flat.
             level = fill_to_edges(as_read * (1.0 - vehicles), linear_scene)
             level = level + vehicle_cover * as_read * vehicles
             # Foliage has no surface to read a normal from, and from above a
@@ -1020,7 +1067,7 @@ class RandomSnow(CameraTransform):
             vehicle_cover=vehicle_cover,
         )
 
-        return {
+        drawn = {
             "flakes": flakes,
             "blade_rotation": self.py_random.uniform(0, 2 * np.pi),
             "blades": self.py_random.randint(*self.aperture_blades_range),
@@ -1033,6 +1080,38 @@ class RandomSnow(CameraTransform):
             "settled": settled.astype(np.float32),
             "accumulation_strength": accumulation_strength,
         }
+
+        # Wheel tracks, last: what is drawn for them comes after every other
+        # draw, so that a frame with none is the frame it was before there
+        # were any.
+        traffic = self.py_random.uniform(*self.wheel_track_range)
+        cleared = None
+        if road is not None and traffic > 0.0:
+            frame = road_frame(road)
+            if frame is not None:
+                lanes = road_lanes(frame, on_road, rng)
+                ragged = ground_noise(depth_pm, focal, camera_pitch, _TRACK_RAGGED_M, rng)
+                worn = ground_noise(depth_pm, focal, camera_pitch, _TRACK_WORN_M, rng)
+                low, high = _TRACK_BAND
+                band = low + (high - low) * traffic
+                low, high = _TRACK_WEAR_FLOOR
+                floor = low + (high - low) * traffic
+                tracks = wheel_tracks(frame, lanes, band, rng, ragged, worn, floor)
+                # On the road, not on what stands on it: the lanes run
+                # under the vehicles, and the snow on a roof has no ruts.
+                tracks = tracks * (1.0 - cv2.GaussianBlur(on_road.astype(np.float32), (0, 0), 1.0))
+                low, high = _TRACK_CLEARED
+                cleared = tracks * np.float32(low + (high - low) * traffic)
+                # How much snow went from each pixel, which is how much of
+                # the wet road under it now shows.
+                drawn["tracks"] = (cleared * np.clip(settled, 0.0, 1.0)).astype(np.float32)
+                drawn["settled"] = (settled * (1.0 - cleared)).astype(np.float32)
+        record_draw(
+            wheel_tracks=traffic,
+            wheel_tracks_drawn=cleared is not None,
+            road_share=lambda: 0.0 if road is None else float(road.mean()),
+        )
+        return drawn
 
     def apply(
         self,
@@ -1047,6 +1126,7 @@ class RandomSnow(CameraTransform):
         accumulation_strength: float,
         sky: np.ndarray | None = None,
         overcast: float = 0.0,
+        tracks: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Relight the frame for overcast, veil it, draw the flakes, and lay the settled snow.
@@ -1145,6 +1225,10 @@ class RandomSnow(CameraTransform):
             mean_luma = max(float(luminance(mean_colour.reshape(1, 1, -1)).ravel()[0]), 1e-6)
             tint = 1.0 + cast * (mean_colour / mean_luma - 1.0)
 
+            if tracks is not None:
+                # Where wheels have cleared the snow the road is wet with
+                # it, and darker than it was dry.
+                out = out * (1.0 - np.float32(_TRACK_WETTING) * tracks[..., None])
             # `settled` is already the share of each pixel under snow.
             coverage = np.clip(settled * _SNOW_OPACITY, 0.0, 1.0)[..., None]
             snow = snow_albedo * tint.reshape(1, 1, -1).astype(np.float32) * shading

@@ -17,6 +17,7 @@ surmentations.utils.noise
 surmentations.utils.overcast
 surmentations.utils.photometry
 surmentations.utils.precipitation
+surmentations.utils.road
 surmentations.utils.sky
 surmentations.utils.sources
 surmentations.utils.spectral
