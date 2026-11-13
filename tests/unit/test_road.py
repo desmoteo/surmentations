@@ -593,9 +593,6 @@ def test_a_plume_lies_behind_its_vehicle_along_the_road() -> None:
         spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed))
         assert spray.shape == (HEIGHT, WIDTH) and spray.dtype == np.float32
         above, below = float(spray[40:95, 130:190].sum()), float(spray[135:200, 130:190].sum())
-        if above + below == 0.0:
-            seen.add("none")
-            continue
         seen.add("towards" if below > above else "away")
         assert min(above, below) < 0.05 * max(above, below), "a plume on both sides of a car"
         # Not out to the sides, and not on the far side of the frame.
@@ -605,7 +602,7 @@ def test_a_plume_lies_behind_its_vehicle_along_the_road() -> None:
         else:
             # Hidden by the vehicle that threw it.
             assert float(spray[105:125, 150:170].max()) < 0.05
-    assert seen == {"towards", "away", "none"}, "the direction and the speed are not drawn"
+    assert seen == {"towards", "away"}, "the direction is not drawn"
 
 
 def test_no_dry_rim_is_left_round_a_labelled_vehicle() -> None:
@@ -731,3 +728,59 @@ def test_a_car_seen_from_the_front_trails_its_spray_away_from_the_camera() -> No
         assert towards <= 0.05 * away + 1e-6, "spray off the front of a car that is coming on"
         thrown += away
     assert thrown > 0.0
+
+
+def test_spray_hangs_over_a_busy_road_and_thickens_with_distance() -> None:
+    """What one vehicle throws up the next drives through: a layer of mist
+    over the carriageway, which a sight line runs through more of the
+    further off it meets the road. Near cars are clear and far traffic is
+    gone from the wheels up, its roofs last."""
+    from surmentations.utils.road import road_mist
+
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    rows = np.arange(HEIGHT, dtype=np.float32)[:, None]
+    depth = np.broadcast_to(20.0 + 2.0 * (HEIGHT - 1 - rows), (HEIGHT, WIDTH)).astype(np.float32)
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    for top, left in ((30, 80), (60, 180), (100, 120), (150, 200), (190, 90), (120, 220)):
+        vehicles[top : top + 24, left : left + 20] = True
+    mist = road_mist(frame, vehicles, depth)
+    assert mist.shape == (HEIGHT, WIDTH) and mist.dtype == np.float32
+    assert float(mist[:, :50].max()) < 0.01, "mist off the road"
+    far, near = float(mist[20, 150]), float(mist[230, 150])
+    assert far > 3.0 * near > 0.0
+    # On a vehicle, thick at its wheels and thin at its roof.
+    assert float(mist[82, 190]) > 3.0 * float(mist[61, 190])
+    # An empty road has none, and a road with one car on it little.
+    assert float(road_mist(frame, np.zeros_like(vehicles), depth).max()) == 0.0
+    alone = np.zeros_like(vehicles)
+    alone[100:124, 120:140] = True
+    assert float(road_mist(frame, alone, depth)[20, 150]) < 0.25 * far
+
+
+def test_a_wake_is_long_and_bigger_behind_a_bigger_vehicle() -> None:
+    """Some lengths long, thinning all the way, and several cars' worth
+    behind a lorry."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    traffic = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    for left in (80, 150, 215):
+        traffic[60:84, left : left + 16] = True
+    lorry = traffic.copy()
+    lorry[52:84, 144:172] = True
+    behind_car, behind_lorry, lengths = 0.0, 0.0, []
+    for seed in range(30):
+        cars = vehicle_spray(frame, traffic, np.random.default_rng(seed))
+        if float(cars[90:].sum()) < 1.0:
+            continue
+        column = cars[90:, 150:166].mean(axis=1)
+        lengths.append(int((column > 0.1 * column.max()).sum()))
+        assert float(column[:10].mean()) > float(column[40:60].mean()), "a wake that does not thin"
+        behind_car += float(cars[90:, 140:176].sum())
+        behind_lorry += float(
+            vehicle_spray(frame, lorry, np.random.default_rng(seed))[90:, 140:176].sum()
+        )
+    assert lengths and float(np.median(lengths)) > 2.0 * 24, "a wake shorter than two car lengths"
+    assert behind_lorry > 1.5 * behind_car
