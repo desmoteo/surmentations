@@ -41,9 +41,9 @@ than exposed.
   along a road: its lanes, read off the paint and the vehicles; wheel tracks
   in settled snow; water in the ruts and gutters; spray behind vehicles, by
   their heading and their speed; their lamps, lit.
-- **[`docs/scene_understanding.md`](docs/scene_understanding.md)** — the two
-  things a provider can work out besides depth: what each pixel is, and how
-  the camera is mounted. What they change in each effect, how the geometry
+- **[`docs/scene_understanding.md`](docs/scene_understanding.md)** — the
+  things a provider can work out besides depth: what each pixel is, how
+  the camera is mounted, and which end of each vehicle is seen. What they change in each effect, how the geometry
   is estimated and how far to trust it.
 - **[`docs/physical_review.md`](docs/physical_review.md)** — a critical audit
   of whether the implementation lives up to that, including where it did not.
@@ -184,6 +184,10 @@ depth_provider = SharedDepthProvider(
 # A fixed camera whose mounting is known is better given than estimated:
 geometry = InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_m=6.5)
 ```
+
+A third reader, `vehicles=OpenVocabularyVehicleEstimator()`, says which end
+of each vehicle is seen and where its lamps are, for the spray and the lit
+lamps of [`docs/road_surface.md`](docs/road_surface.md).
 
 With labels, a wet road stays off the vehicles on it and snow settles by
 name as well as by shape; the sky is the sky; foliage is bright in infrared

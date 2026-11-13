@@ -1,11 +1,12 @@
 """Draw the figures of ``docs/road_surface.md``.
 
-Three pictures, made from the photographs the galleries use, with a
+Four pictures, made from the photographs the galleries use, with a
 provider that carries scene labels and an estimated geometry:
 
 * the roads as the library reads them: painted lines, lane lines and the
   wheel tracks laid in the lanes;
 * settled snow without wheel tracks and with them;
+* each scene's vehicles as a network reads them: which end, and its lamps;
 * a soaked road as it was, and with its traffic's spray and lamps.
 
 Run from the repository root, on a machine with a CUDA GPU::
@@ -32,6 +33,7 @@ from surmentations.atmosphere import RandomRain, RandomSnow  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
 from surmentations.perception import (  # noqa: E402
     GroundPlaneGeometryEstimator,
+    OpenVocabularyVehicleEstimator,
     SceneClass,
     SegmentationLabelEstimator,
 )
@@ -65,11 +67,15 @@ def _photograph(name: str) -> np.ndarray:
     return _load(SCENES_DIR / f"{name}.jpg")
 
 
-def _provider(name: str, depth: Any, labels: Any) -> SharedDepthProvider:
-    """A provider for a scene that reads its labels and geometry."""
+def _provider(name: str, depth: Any, labels: Any, vehicles: Any) -> SharedDepthProvider:
+    """A provider for a scene that reads its labels, its geometry and its vehicles."""
     far = SCENES[name].depth_range_m if name in SCENES else (3.0, 300.0)
     return SharedDepthProvider(
-        depth, depth_range_m=far, labels=labels, geometry=GroundPlaneGeometryEstimator()
+        depth,
+        depth_range_m=far,
+        labels=labels,
+        geometry=GroundPlaneGeometryEstimator(),
+        vehicles=vehicles,
     )
 
 
@@ -130,6 +136,30 @@ def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPr
     _save("lanes.jpg", tiles, 2)
 
 
+def read_vehicles(
+    images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]
+) -> None:
+    """Each scene's vehicles as read: outlined green for a front and red for a rear, lamps boxed.
+
+    Grey is an outline the network leans neither way on.
+    """
+    tiles = []
+    for name, image in images.items():
+        out = image.copy()
+        for view in providers[name].get_vehicles(image) or []:
+            left, top, wide, tall = view.box
+            colour = (150, 150, 150)
+            if abs(view.facing) >= 0.03:
+                colour = (255, 60, 60) if view.facing > 0.0 else (60, 255, 60)
+            cv2.rectangle(out, (left, top), (left + wide, top + tall), colour, 1)
+            for x, y, half_wide, half_tall, _score in view.lamps.tolist():
+                first = (round(x - half_wide), round(y - half_tall))
+                last = (round(x + half_wide), round(y + half_tall))
+                cv2.rectangle(out, first, last, (255, 255, 0), 1)
+        tiles.append(out)
+    _save("vehicle_views.jpg", tiles, 2)
+
+
 def compare(
     images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider], effect: str
 ) -> None:
@@ -168,11 +198,13 @@ def compare(
 
 
 def main() -> None:
-    """Make the three figures."""
+    """Make the four figures."""
     depth, labels = DepthAnythingV2Estimator(), SegmentationLabelEstimator()
     images = {name: _photograph(name) for name in SHOWN}
-    providers = {name: _provider(name, depth, labels) for name in SHOWN}
+    vehicles = OpenVocabularyVehicleEstimator()
+    providers = {name: _provider(name, depth, labels, vehicles) for name in SHOWN}
     read_roads(images, providers)
+    read_vehicles(images, providers)
     compare(images, providers, "snow")
     compare(images, providers, "rain")
     print(f"Wrote the figures to {OUT_DIR}")

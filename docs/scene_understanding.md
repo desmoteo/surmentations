@@ -1,7 +1,8 @@
-# Scene understanding: labels and installation geometry
+# Scene understanding: labels, installation geometry and vehicle views
 
 Depth tells a transform how far away each pixel is. Two more things can be
-worked out alongside it, once per scene, and shared the same way:
+worked out alongside it, once per scene, and shared the same way (and a
+third, for roads with traffic on them: [vehicle views](#vehicle-views)):
 
 - **what each pixel is**: road, sky, vegetation, a vehicle
   ([`surmentations.perception.labels`](../src/surmentations/perception/labels.py));
@@ -101,8 +102,10 @@ down on it:
 ![ground fog](assets/scene_understanding/ground_fog.jpg)
 
 With labels the library can also follow the road itself: its lanes, wheel
-tracks in snow, water in the ruts and spray behind vehicles are in
-[`road_surface.md`](road_surface.md).
+tracks in snow, water in the ruts, spray behind vehicles and their lamps
+are in [`road_surface.md`](road_surface.md). The last two need to know
+which end of each vehicle is seen, which is a third thing a provider can
+read: [vehicle views](#vehicle-views).
 
 ## Scene labels
 
@@ -301,6 +304,67 @@ kilometres can blank a frame; `visibility_range_scene` and
 `depth_scale` still uses it. To keep `depth_range_m` for every frame, give
 no height and pass `estimate_height=False`.
 
+## Vehicle views
+
+Spray lies behind a vehicle and its lamps are white at one end and red at
+the other, so an effect that draws either has to know which end faces the
+camera, and where on it the lamps are. Colour says it poorly: a rear in
+shade shows no red, a red car is red all over, and none of it says where a
+headlamp is. A provider given a reader asks a network, once per scene:
+
+```python
+from surmentations.perception import OpenVocabularyVehicleEstimator
+
+provider = SharedDepthProvider(
+    DepthAnythingV2Estimator(),
+    labels=SegmentationLabelEstimator(),          # says where the vehicles are
+    vehicles=OpenVocabularyVehicleEstimator(),    # says which end, and where the lamps are
+)
+views = provider.get_vehicles(image)              # one VehicleView per outline
+```
+
+**How.** Each connected piece of the vehicle label is cut out of the frame
+and the cuts are laid out as one square mosaic, sixteen to a pass. An
+open-vocabulary detector, OWLv2, is asked for two things by name, "a car
+headlight" and "a car tail light". Which of the two it is surer of on a
+vehicle says which end is seen; where it found them is where the lamps
+are. Boxes that are a large part of the vehicle are not lamps, and of the
+small ones the best pair, apart across the vehicle and at one level, is
+kept, which leaves out a number plate and a badge. A
+[`VehicleView`](../src/surmentations/perception/vehicles.py) holds the
+outline's box, the two scores and the lamps.
+
+Green outlines are read as fronts and red as rears; the lamps found are
+boxed in yellow:
+
+![vehicles as read](assets/road_surface/vehicle_views.jpg)
+
+**How good.** On the 22 single vehicles of these sample scenes, labelled
+by eye:
+
+| | Right | Wrong | Silent |
+| --- | --- | --- | --- |
+| Red lenses by colour (`vehicle_facing`) | 12 | 3 | 7 |
+| CLIP ViT-B/16, "the front / rear / side of a car" | 21 | 1 | 0 |
+| OWLv2, headlight against tail light | 22 | 0 | 0 |
+
+Four scenes are not a benchmark. They say the network is much the better
+reader, not how good it is on yours.
+
+**Why this network.** A classifier of views does nearly as well at which
+end and says nothing of where the lamps are. Networks trained on car
+keypoints say both, and the ones published with weights are under licences
+this library cannot take on: OpenPifPaf's, trained on ApolloCar3D, is
+AGPL. Classical tail-lamp detection, red by colour and paired by symmetry
+(O'Malley et al., 2010; Skodras et al., 2012), is what the colour test
+already is, and has no counterpart for an unlit headlamp by day. OWLv2 is
+Apache-2.0.
+
+**What uses it.** `RandomRain`'s spray and lamps
+([`road_surface.md`](road_surface.md)). A vehicle the network is sure of
+keeps its own reading; the rest go with their road's traffic; one it did
+not read is read by colour as before. Without a reader nothing changes.
+
 ## What it costs
 
 On one CPU core and a laptop GPU (RTX PRO 1000), once per new frame; from
@@ -311,6 +375,13 @@ On one CPU core and a laptop GPU (RTX PRO 1000), once per new frame; from
 | Depth | 11 ms | 15 ms |
 | Scene labels | 33 ms | 33 ms |
 | Geometry | 5 ms | 6 ms |
+| Vehicle views, per 16 vehicles | 90 ms | 90 ms |
+
+Vehicle views are timed apart, on the sample scenes at 1024 px: 90 ms for
+a scene of up to sixteen vehicles and 170 ms for the motorway's seventeen,
+in fast mode, which runs the network in half precision; 300 ms and 610 ms
+in exact mode. A scene with no vehicle labelled is not shown to the
+network. It needs about 1.2 GB of GPU memory and a 620 MB download.
 
 They are made together, when the first transform asks for the scene's
 depth, from the frame the pipeline was given. A pipeline in which no
@@ -343,7 +414,7 @@ depth-conditioned transform fires on a frame pays for none of them.
 
 ## Writing your own
 
-Both estimators are small interfaces:
+The estimators are small interfaces:
 
 ```python
 class SceneLabelEstimator:
@@ -351,7 +422,13 @@ class SceneLabelEstimator:
 
 class GeometryEstimator:
     def estimate(self, image, disparity, labels) -> InstallationGeometry: ...
+
+class VehicleViewEstimator:
+    def estimate(self, image, vehicles) -> list[VehicleView]: ...   # one per outline read
 ```
+
+A dataset that annotates each vehicle's heading, or a keypoint network you
+are licensed to use, would be a `VehicleViewEstimator`.
 
 A single-image calibration network that estimates the field of view as well
 would be a `GeometryEstimator`. A depth backend makes the geometry
@@ -363,6 +440,30 @@ geometry, the settled camera, the metric scale and the share of each class.
 
 ## References
 
+- Minderer, M., Gritsenko, A., Houlsby, N. (2023). Scaling Open-Vocabulary
+  Object Detection. NeurIPS 2023.
+  [arXiv:2306.09683](https://arxiv.org/abs/2306.09683) (OWLv2; the
+  checkpoint is
+  [google/owlv2-base-patch16-ensemble](https://huggingface.co/google/owlv2-base-patch16-ensemble),
+  Apache-2.0)
+- Radford, A., et al. (2021). Learning Transferable Visual Models From
+  Natural Language Supervision. ICML 2021.
+  [arXiv:2103.00020](https://arxiv.org/abs/2103.00020) (CLIP, the
+  classifier compared against)
+- Song, X., et al. (2019). ApolloCar3D: A Large 3D Car Instance
+  Understanding Benchmark for Autonomous Driving. CVPR 2019.
+  [arXiv:1811.12222](https://arxiv.org/abs/1811.12222) (car keypoints,
+  with the lamps among them; the
+  [OpenPifPaf plugin](https://openpifpaf.github.io/plugins_apollocar3d.html)
+  trained on it is AGPL)
+- O'Malley, R., Jones, E., Glavin, M. (2010). Rear-Lamp Vehicle Detection
+  and Tracking in Low-Exposure Color Video for Night Conditions. IEEE
+  Trans. Intelligent Transportation Systems 11(2), 453–462.
+  [doi:10.1109/TITS.2010.2045375](https://doi.org/10.1109/TITS.2010.2045375)
+  (red by colour, paired by symmetry. Read as an abstract only.)
+- Skodras, E., et al. (2012). Rear lights vehicle detection for collision
+  avoidance. IWSSIP 2012. (Colour with radial symmetry. Read as an
+  abstract only.)
 - Xiao, T., Liu, Y., Zhou, B., Jiang, Y., Sun, J. (2018). Unified
   Perceptual Parsing for Scene Understanding. ECCV 2018, 432–448. [doi:10.1007/978-3-030-01228-1_26](https://doi.org/10.1007/978-3-030-01228-1_26)
 - Liu, Z., Mao, H., Wu, C.-Y., Feichtenhofer, C., Darrell, T., Xie, S.
