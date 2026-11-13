@@ -65,6 +65,7 @@ from surmentations.perception.labels import GROUND, VEGETATION, SceneClass, clas
 from surmentations.utils.channels import percentile
 from surmentations.utils.grids import on_coarse_grid, pixel_grid
 from surmentations.utils.night_light import (
+    BeamSource,
     even_road,
     fit_ground,
     headlamp_light,
@@ -110,6 +111,19 @@ _NIGHT_LAMP_OVER = 8.0
 # at a lamp strength of 1: several times what a street lamp puts under
 # itself, as the pool ahead of a car is on a lit road.
 _BEAM_LEVEL = 4.0
+# What a road in a beam sends back at the least, as a share of the middle
+# value of the frame's road.
+_BEAM_ROAD = 0.7
+# What stands on the ground and is never the ground itself, whatever its
+# depth is against the ground's.
+_STANDING = (
+    SceneClass.VEHICLE,
+    SceneClass.PERSON,
+    SceneClass.POLE,
+    SceneClass.LAMP,
+    SceneClass.FOLIAGE,
+    SceneClass.SKY,
+)
 # An outline this many times longer than wide has a long way to go by.
 _LONG_OUTLINE = 1.3
 # The field of view a frame is taken to have where nothing says: the
@@ -483,8 +497,8 @@ class NightIrMode(CameraTransform):
                     burning, halo = lamp_heads((height, width), posts, street)
                     emitted += burning
                     glowing += halo
-                beams = []
-                for vehicle, _places in lit:
+                beams: list[BeamSource] = []
+                for vehicle, places in lit:
                     # The long way of its outline, where it has one: seen
                     # from above, that is the way it points.
                     offsets = np.stack(
@@ -498,14 +512,33 @@ class NightIrMode(CameraTransform):
                     if values[1] > _LONG_OUTLINE**2 * values[0]:
                         long_way = (float(vectors[0, 1]), float(vectors[1, 1]))
                     foot = (float(vehicle.foot[1]), float(vehicle.foot[0]))
-                    beams.append((foot, long_way, vehicle.away > 0.0))
+                    lean = None
+                    if len(places) == 2:
+                        apart = abs(places[1][0] - places[0][0])
+                        between = 0.5 * (places[0][0] + places[1][0])
+                        if apart >= 2.0:
+                            lean = (float(vehicle.columns.mean()) - between) / apart
+                    pair = tuple(sorted(places)) if lean is not None else ()
+                    beams.append(BeamSource(foot, vehicle.away > 0.0, lean, long_way, pair))
                 if beams:
-                    reaching += np.float32(_BEAM_LEVEL * lamps) * headlamp_light(
-                        points, middle, up, focal, (height, width), beams
+                    stood = np.isin(small, [int(one) for one in _STANDING])
+                    beamed = headlamp_light(
+                        points, middle, up, focal, (height, width), beams, stood
+                    )
+                    reaching += np.float32(_BEAM_LEVEL * lamps) * beamed
+                    drawn["beam"] = cv2.resize(
+                        np.minimum(beamed, 1.0), (width, height), interpolation=cv2.INTER_LINEAR
                     )
                 thrown = cv2.resize(reaching, (width, height), interpolation=cv2.INTER_LINEAR)
         if thrown is not None:
             drawn["lamp_exposure"] = thrown
+            if "beam" in drawn:
+                # What a road in a beam sends back at the least: the road's
+                # own middle value, where there is a road to take it from.
+                paved = labels == int(SceneClass.ROAD)
+                if int(paved.sum()) > 50:
+                    linear = to_linear_unit(first_frame(scene))[0]
+                    drawn["road_level"] = float(np.median(linear[paved] @ _NIR_RESPONSE))
             if len(posts):
                 # Lit by street lamps, the road is a road at night: the
                 # day's light and shade go, and the camera exposes for the
@@ -540,6 +573,8 @@ class NightIrMode(CameraTransform):
         lamp_glow: np.ndarray | None = None,
         lamp_exposure: np.ndarray | None = None,
         road: np.ndarray | None = None,
+        beam: np.ndarray | None = None,
+        road_level: float | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the frame as the near-infrared camera sees it at night.
@@ -558,6 +593,12 @@ class NightIrMode(CameraTransform):
             # no lamp explains, and takes the pools and the beams.
             if road is not None:
                 reflectance = even_road(reflectance, road)
+            if beam is not None and road_level is not None:
+                # A beam falls on a road, and a road in the day's deep
+                # shade photographed as black: lit, it would stay black.
+                # The shade was the light and not the road, so where a
+                # beam falls the road sends back most of what a road does.
+                reflectance = np.maximum(reflectance, np.float32(_BEAM_ROAD * road_level) * beam)
             arriving = arriving + lamp_exposure
         signal = reflectance * arriving
         if night_sky is not None:
