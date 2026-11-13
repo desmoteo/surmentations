@@ -43,6 +43,12 @@ the plain provider and the by-eye values above, on the right with the provider
 that read the scene. The parameters and the seed are the same, so what differs
 is what the labels and the geometry changed.
 
+`rain` and `wet_ground` have one thing more on the right: the traffic's spray
+and its lamps (`spray_range`, `vehicle_lamp_range`), which are off by default
+and which only a provider that knows the road and its vehicles can draw. That
+provider also has a vehicle reader, which says which end of each vehicle is
+seen and where its lamps are; see [the road surface](../../../road_surface.md).
+
 | `fog` without | `fog` with |
 | --- | --- |
 | ![`fog` without](effects/fog.jpg) | ![`fog` with](aware/fog.jpg) |

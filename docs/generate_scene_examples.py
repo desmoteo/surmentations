@@ -13,7 +13,8 @@ Output goes to ``docs/examples/scenes/<scene>/``::
     original.jpg             the scene as rendered from, 800 px wide
     reading.jpg              its labels and horizon, as a provider reads them
     effects/<effect>.jpg     one representative draw per effect
-    aware/<effect>.jpg       the same draw with scene labels and geometry
+    aware/<effect>.jpg       the same draw with scene labels and geometry; for rain
+                             and wet ground, with the traffic's spray and lamps too
     pipelines/<name>_<n>.jpg draws of the pipeline that fits the scene
     pipelines_aware/...      the same draws with scene labels and geometry
     README.md                the same images as a browsable page
@@ -82,6 +83,7 @@ from surmentations.camera.codec import ffmpeg_path  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
 from surmentations.perception import (  # noqa: E402
     GroundPlaneGeometryEstimator,
+    OpenVocabularyVehicleEstimator,
     SceneClass,
     SegmentationLabelEstimator,
 )
@@ -186,6 +188,9 @@ class Scene:
         sheltered: under a roof, so nothing falls on it and the sun is not in it.
         sky_in_frame: whether the frame shows any sky. Where it does not, the
             dirt on the glass is still lit by it.
+        traffic_speed_kmh: how fast the traffic in it is taken to be going,
+            slowest and fastest. A frame does not say, and how much spray a
+            wet road's traffic throws up is mostly a matter of speed.
     """
 
     depth_range_m: tuple[float, float]
@@ -193,22 +198,34 @@ class Scene:
     night: bool = False
     sheltered: bool = False
     sky_in_frame: bool = True
+    traffic_speed_kmh: tuple[float, float] = (40.0, 130.0)
 
 
 SCENES: dict[str, Scene] = {
-    "crosswalk_day": Scene((12.0, 30.0), 70.0, sky_in_frame=False),
-    "parking_garage": Scene((2.0, 45.0), 4.0, sheltered=True, sky_in_frame=False),
+    "crosswalk_day": Scene((12.0, 30.0), 70.0, sky_in_frame=False, traffic_speed_kmh=(20.0, 40.0)),
+    "parking_garage": Scene(
+        (2.0, 45.0), 4.0, sheltered=True, sky_in_frame=False, traffic_speed_kmh=(5.0, 15.0)
+    ),
     # Both this and `urban_road_day` look slightly *up*: the horizon is below
     # the middle of the frame. They were first put down as 5 and 10 degrees
     # of downward pitch, by eye and by habit, and the geometry estimator
     # disagreed, rightly.
-    "street_night": Scene((3.0, 150.0), -6.0, night=True),
-    "underpass_from_above": Scene((8.0, 160.0), 25.0, sky_in_frame=False),
+    "street_night": Scene((3.0, 150.0), -6.0, night=True, traffic_speed_kmh=(30.0, 50.0)),
+    "underpass_from_above": Scene(
+        (8.0, 160.0), 25.0, sky_in_frame=False, traffic_speed_kmh=(40.0, 55.0)
+    ),
     "wooded_hills": Scene((40.0, 6000.0), 6.0),
     "mountain": Scene((25.0, 3000.0), 0.0),
-    "urban_road_day": Scene((8.0, 900.0), -3.0),
-    "urban_street_wet": Scene((6.0, 250.0), 30.0),
+    "urban_road_day": Scene((8.0, 900.0), -3.0, traffic_speed_kmh=(75.0, 95.0)),
+    "urban_street_wet": Scene((6.0, 250.0), 30.0, traffic_speed_kmh=(30.0, 45.0)),
 }
+
+# What the provider that read the scene is also asked for, in the pictures
+# of rain: the traffic's spray and its lamps. They are off by default and
+# need the scene's labels, so the plain provider's pictures cannot have
+# them; with the vehicle reader each vehicle has its own.
+ROAD_TRAFFIC = {"spray_range": (0.6, 0.6), "vehicle_lamp_range": (1.0, 1.0)}
+WITH_TRAFFIC = ("rain", "wet_ground")
 
 
 def _overrides(effect: str, scene: Scene) -> dict[str, Any]:
@@ -532,6 +549,12 @@ def _scene_readme(
         "that read the scene. The parameters and the seed are the same, so what differs",
         "is what the labels and the geometry changed.",
         "",
+        "`rain` and `wet_ground` have one thing more on the right: the traffic's spray",
+        "and its lamps (`spray_range`, `vehicle_lamp_range`), which are off by default",
+        "and which only a provider that knows the road and its vehicles can draw. That",
+        "provider also has a vehicle reader, which says which end of each vehicle is",
+        "seen and where its lamps are; see [the road surface](../../../road_surface.md).",
+        "",
     ]
     compared = [effect for effect in effects if effect in COMPARED]
     for effect in compared:
@@ -685,6 +708,7 @@ def main() -> None:
 
     estimator = DepthAnythingV2Estimator()
     labeller = SegmentationLabelEstimator()
+    reader = OpenVocabularyVehicleEstimator()
     names = [n for n in EFFECTS if n not in _NEEDS_FFMPEG or ffmpeg_path() is not None]
     if len(names) != len(EFFECTS):
         print("ffmpeg not found; skipping the video-codec examples")
@@ -739,12 +763,21 @@ def main() -> None:
             depth_range_m=scene.depth_range_m,
             labels=labeller,
             geometry=GroundPlaneGeometryEstimator(),
+            vehicles=reader,
         )
         picture, reading = _reading(image, aware, scene)
         _save(out / "reading.jpg", picture)
         for effect, overrides, before, seed in twins:
             twin_rng = np.random.default_rng()
             twin_rng.bit_generator.state = before
+            if effect in WITH_TRAFFIC:
+                # Drawn after everything else the transform draws, so the
+                # rest of the picture is still the plain provider's draw.
+                overrides = {
+                    **overrides,
+                    **ROAD_TRAFFIC,
+                    "traffic_speed_range_kmh": scene.traffic_speed_kmh,
+                }
             twin = _build(effect, SEVERITY_LEVEL, VARIANT, twin_rng, aware, overrides)
             twin.set_random_seed(seed)
             again = twin(image=_base(effect, image, aware, scene))["image"]
