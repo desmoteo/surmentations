@@ -24,12 +24,13 @@ flowchart TD
     DRAW --> OCC["occupancy layer"]
     OCC --> ALPHA["coverage = 1 - e^-occupancy"]
     RATE --> VIS["visibility to beta to e^-beta z"]
-    VIS --> COMP["composite: veil, then streaks"]
-    ALPHA --> COMP
-    COMP --> WET{"wet ground?"}
-    WET -->|yes| FRESNEL["darken diffuse, plus Fresnel mirror about the road's far end"]
-    WET -->|no| DONE([output])
-    FRESNEL --> DONE
+    VIS --> VEIL["veil over the scene"]
+    VEIL --> WET{"wet ground?"}
+    WET -->|yes| FRESNEL["darken diffuse, plus Fresnel mirror about the road's far end;<br/>the traffic's lamps and spray"]
+    WET -->|no| LAST
+    FRESNEL --> LAST["streaks over everything, last"]
+    ALPHA --> LAST
+    LAST --> DONE([output])
 ```
 
 ## Model

@@ -329,3 +329,48 @@ def test_a_binding_flake_budget_keeps_the_widest_flakes_not_a_random_subset() ->
     assert kept.min() == pytest.approx(threshold, rel=0.2)
     # A random quarter of the field would have the field's own median.
     assert np.median(kept) > 1.3 * np.median(everything)
+
+
+def test_a_flake_is_drawn_in_front_of_the_snow_that_has_settled(
+    provider: SharedDepthProvider, scene: np.ndarray
+) -> None:
+    """A falling flake is in the air between the lens and the ground. It
+    looks the same in front of settled snow as in front of anything else,
+    and is not buried under it: flakes used to be drawn first and the
+    settled snow laid over them."""
+    snow = RandomSnow(
+        depth_provider=provider,
+        p=1.0,
+        max_flakes=0,
+        accumulation_probability=1.0,
+        accumulation_strength_range=(0.9, 0.9),
+    )
+    snow.set_random_seed(0)
+    params = snow.get_params_dependent_on_data({"shape": scene.shape}, {"image": scene})
+    height, width = scene.shape[:2]
+    covered = np.argwhere(params["settled"] > 0.9)
+    bare = np.argwhere(params["settled"] < 0.01)
+    assert len(covered) and len(bare), "the scene has no snow-covered ground, or nothing else"
+    margin = 12
+
+    def inside(points: np.ndarray) -> np.ndarray:
+        """The first of some points that is well inside the frame, as row and column."""
+        ok = (
+            (points[:, 0] > margin)
+            & (points[:, 0] < height - margin)
+            & (points[:, 1] > margin)
+            & (points[:, 1] < width - margin)
+        )
+        return points[ok][len(points[ok]) // 2]
+
+    on_snow, off_snow = inside(covered), inside(bare)
+    flakes = {name: np.zeros(2, dtype=values.dtype) for name, values in params["flakes"].items()}
+    flakes["y"][:] = (on_snow[0], off_snow[0])
+    flakes["x"][:] = (on_snow[1], off_snow[1])
+    flakes["radius"][:] = 6.0
+    flakes["dir_y"][:] = 1.0
+    out = snow.apply(scene, **{**params, "flakes": flakes}).astype(np.float32)
+    without = snow.apply(scene, **params).astype(np.float32)
+    over_snow, over_the_rest = out[tuple(on_snow)], out[tuple(off_snow)]
+    assert float(np.abs(over_snow - over_the_rest).max()) <= 2.0
+    assert float(np.abs(over_the_rest - without[tuple(off_snow)]).max()) > 10.0, "no flake drawn"

@@ -1037,12 +1037,23 @@ class RandomRain(CameraTransform):
         lamp_glow: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
-        """Relight the frame for overcast, veil it, draw the streaks, and wet the road.
+        """Relight the frame for overcast, veil it, wet the road, and draw the streaks last.
 
         In linear light. The streaks image the sky, so they take the
         illuminant's radiance; the veil is scattered skylight and saturates at
-        the sky's own. The frame's mean is restored afterwards, as the
+        the sky's own. The frame's mean is restored after the veil, as the
         camera's auto-exposure would, before the wet road is drawn.
+
+        The order is that of the scene, from the far end to the lens. The
+        veil is the rain too far off to resolve, between the camera and the
+        scene. The wet road, the traffic's lamps and its spray are in the
+        scene. The streaks are the drops near enough to see one by one,
+        most of them within a few metres of the lens, and nothing in the
+        scene is in front of them: they are drawn over everything else.
+        They used to be drawn with the veil, and then the road was wetted
+        and the spray laid over them, so rain in front of a wet road was
+        darkened and mirrored with it, and rain in front of spray was
+        painted out.
         """
         height, width = img.shape[:2]
         linear, scale, is_integer = to_linear_unit(img)
@@ -1078,7 +1089,6 @@ class RandomRain(CameraTransform):
         # Distant rain that no longer resolves into individual streaks
         # scatters into a veil, the same Koschmieder compositing as fog but
         # with the rain's own (sky-coloured) radiance.
-        # Time-averaged streaks: I = (1-a)*I_bg + a*L_streak.
         streak_light: np.ndarray = streak_radiance
         if lamp_glint > 0.0:
             # At night the frame's bright end is the lamps themselves, and
@@ -1087,17 +1097,13 @@ class RandomRain(CameraTransform):
             streak_light = airlight[None, None, :] + (
                 lamp_glint * _DROP_GLINT_SHARE * _lamp_light(linear)
             )
-        # The veil and the streaks over it are one compiled pass where there
-        # is one, with the arithmetic of the two expressions below in their
-        # order: the same floats without ten frame-sized results on the way.
-        blended = _native.veil_blend(
-            linear, veil_transmission, airlight, alpha_layer, streak_light
-        )
+        # The veil now and the streaks at the very end, each one compiled
+        # pass where there is one, with the arithmetic of the expressions
+        # beside them in their order: the same floats.
+        blended = _native.veil_blend(linear, veil_transmission, airlight)
         if blended is None:
             t = veil_transmission[..., None]
-            a = alpha_layer[..., None]
             out = linear * t + airlight[None, None, :] * (1.0 - t)
-            out = out * (1.0 - a) + streak_light * a
         else:
             out = blended
 
@@ -1106,9 +1112,15 @@ class RandomRain(CameraTransform):
         # ground and not after it: a wet road is darker than a dry one in
         # the finished picture too, and correcting for it here handed most
         # of the darkening straight back whenever the road filled the frame.
-        new_mean = float(out.mean())
+        # The camera exposes for the streaks as well, which are not drawn
+        # yet: their share of the frame's light is what they cover of it
+        # times what they are lit by, and they are exposed with the rest.
+        covered = float(alpha_layer.mean())
+        new_mean = float(out.mean()) * (1.0 - covered) + float(streak_light.mean()) * covered
+        exposure = np.float32(1.0)
         if new_mean > 1e-5:
-            out *= np.clip(original_mean / new_mean, 0.75, 1.25)
+            exposure = np.float32(np.clip(original_mean / new_mean, 0.75, 1.25))
+            out *= exposure
 
         through = veil_transmission[..., None]
         if lamp_light is not None:
@@ -1150,6 +1162,19 @@ class RandomRain(CameraTransform):
                 through = through * (1.0 - spray[..., None])
                 wet_air = _GLOW_IN_RAIN + (1.0 - _GLOW_IN_RAIN) * spray[..., None]
             out = out + (lamp_light - np.minimum(lamp_light, 1.0)) * through + lamp_glow * wet_air
+
+        # The streaks, last: the drops near the lens, in front of the road,
+        # the traffic, its lamps and its spray.
+        # Time-averaged streaks: I = (1-a)*I_bg + a*L_streak.
+        streak_light = streak_light * exposure
+        over = _native.veil_blend(
+            out, np.ones((height, width), dtype=np.float32), airlight, alpha_layer, streak_light
+        )
+        if over is None:
+            a = alpha_layer[..., None]
+            out = out * (1.0 - a) + streak_light * a
+        else:
+            out = over
 
         return from_linear_unit(out, scale, is_integer, img.dtype)
 
