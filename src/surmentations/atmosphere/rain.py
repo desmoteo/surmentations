@@ -127,6 +127,7 @@ from surmentations.utils.road import (
     road_vehicles,
     vehicle_lamps,
     vehicle_spray,
+    vehicles_as_seen,
     wheel_tracks,
 )
 from surmentations.utils.sky import (
@@ -421,9 +422,12 @@ class RandomRain(CameraTransform):
             lit already, and the lamps the picture shows burning are given
             the same glow. It needs scene labels and a road, like the
             spray. On a provider built with ``vehicles=`` the lamps are
-            lit where a network found them on each vehicle; without, they
-            are put where lamps usually are on an outline. See
-            :func:`~surmentations.utils.road.vehicle_lamps`.
+            lit where a network found them on each vehicle, and on every
+            vehicle it read, road or no road; without, they are put where
+            lamps usually are on an outline. For a frame that is to be a
+            night one, light them in
+            :class:`~surmentations.camera.night_ir.NightIrMode` and not
+            here. See :func:`~surmentations.utils.road.vehicle_lamps`.
         lamp_glint_range: at night, how many times full scale the lamps in
             the frame are taken to be when they light the rain, drawn per
             call. Zero — the default — leaves every streak lit by the
@@ -990,8 +994,15 @@ class RandomRain(CameraTransform):
                 thickness = np.float32(spray * film) * (wakes + hanging)
                 drawn["spray"] = (1.0 - np.exp(-thickness)).astype(np.float32)
                 sprayed = True
-        if lamps > 0.0 and road is not None and traffic:
-            light, glow, cores = vehicle_lamps(road, traffic, rng, lamps, linear_scene)
+        if lamps > 0.0 and road is None and named_vehicles is not None:
+            # No road was read, at a junction seen from above or with the
+            # ground left dry. A vehicle a network read still shows which
+            # end it shows, and its lamps are lit by that alone.
+            traffic = vehicles_as_seen(named_vehicles, self.depth_provider.get_vehicles(scene))
+        if lamps > 0.0 and traffic:
+            light, glow, cores = vehicle_lamps(
+                road, traffic, rng, lamps, linear_scene, shape=(height, width)
+            )
             if float(cores.max()) > 0.0:
                 # Lamps the picture already shows burning glow in the wet
                 # air as the ones lit here do.

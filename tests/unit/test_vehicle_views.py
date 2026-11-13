@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from surmentations.atmosphere import RandomRain
+from surmentations.camera.night_ir import NightIrMode
 from surmentations.depth.estimator import DepthEstimator
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import recording
@@ -34,7 +35,13 @@ from surmentations.perception.vehicles import (
     split_outlines,
     vehicle_outlines,
 )
-from surmentations.utils.road import road_frame, road_vehicles, vehicle_lamps, vehicle_spray
+from surmentations.utils.road import (
+    road_frame,
+    road_vehicles,
+    vehicle_lamps,
+    vehicle_spray,
+    vehicles_as_seen,
+)
 
 HEIGHT, WIDTH = 240, 320
 BOX = (100, 80, 60, 50)
@@ -593,6 +600,121 @@ def test_a_wake_ends_where_its_road_does() -> None:
         thrown += float(spray[121:150].sum())
         assert float(spray[185:].max()) < 0.02 * float(spray.max())
     assert thrown > 0.0
+
+
+def test_vehicles_a_network_read_can_be_lit_with_no_road_under_them() -> None:
+    """A junction seen from above, a car park: no road is read, and a
+    vehicle still shows which end it shows. Those the network read and
+    leans on are taken at their word; the rest are left out."""
+    _frame, vehicles, scene, boxes = _traffic_scene()
+    views = [
+        _view(boxes[0], 0.4),
+        _view(boxes[1], -0.4),
+        _view(boxes[2], 0.01),  # leans neither way
+        VehicleView(boxes[3], 0.0, 0.0, np.zeros((0, 5), np.float32)),  # not read
+    ]
+    seen = vehicles_as_seen(vehicles, views)
+    assert sorted((vehicle.foot[1], vehicle.away) for vehicle in seen) == [(92, 1.0), (112, -1.0)]
+    assert all(vehicle.road == 0 and vehicle.lamps is not None for vehicle in seen)
+    assert vehicles_as_seen(vehicles, None) == []
+    rng = np.random.default_rng(0)
+    light, _glow, cores = vehicle_lamps(
+        None, seen, rng, 1.0, scene, shape=vehicles.shape, lit_share=(1.0, 1.0)
+    )
+    for (left, top, wide, tall), lit in zip(boxes, (True, True, False, False), strict=True):
+        assert (float(light[top : top + tall, left : left + wide].max()) > 1.0) is lit
+    assert float(cores.max()) > 0.0
+    with pytest.raises(ValueError, match="frame or the picture's shape"):
+        vehicle_lamps(None, seen, rng, 1.0)
+
+
+def test_lamps_a_night_picture_already_shows_burning_are_not_lit_again() -> None:
+    """A photograph taken at night has its traffic's lamps in it: a few
+    pixels at full scale on a dark car. That car is left as it is; one
+    beside it with its lamps off is lit, and at night every one is."""
+    _frame, vehicles, _scene_, boxes = _traffic_scene()
+    night = np.full((HEIGHT, WIDTH, 3), 0.01, dtype=np.float32)
+    left, top, _wide, _tall = boxes[0]
+    night[top + 14 : top + 16, left + 5 : left + 8] = 1.0
+    night[top + 14 : top + 16, left + 18 : left + 21] = 1.0
+    seen = vehicles_as_seen(vehicles, [_view(box, 0.4) for box in boxes])
+    for seed in range(6):
+        rng = np.random.default_rng(seed)
+        light, _glow, _cores = vehicle_lamps(None, seen, rng, 1.0, night, shape=vehicles.shape)
+        for index, (left, top, wide, tall) in enumerate(boxes):
+            lit = float(light[top : top + tall, left : left + wide].max()) > 1.0
+            assert lit is (index != 0), "a burning lamp lit again, or a dark car left dark at night"
+
+
+def _night_scene() -> tuple[np.ndarray, np.ndarray]:
+    """The two-car scene in daylight, its cars dark grey, and its labels."""
+    image, labels = _scene()
+    image[labels == int(SceneClass.VEHICLE)] = (50, 52, 55)
+    return image, labels
+
+
+def test_infrared_night_lights_the_lamps_a_reader_found_and_only_then() -> None:
+    """A daylight photograph has its traffic's lamps off, and by night they
+    are the brightest things in the frame. With a vehicle reader on the
+    provider they are lit where it found them, white whichever end they are
+    on; without one the frame is what it always was."""
+    image, labels = _night_scene()
+
+    def infrared(provider: SharedDepthProvider, **settings: object) -> tuple[np.ndarray, dict]:
+        """The scene as the night camera sees it, and what the transform drew."""
+        night = NightIrMode(depth_provider=provider, p=1.0, **settings)  # type: ignore[arg-type]
+        night.set_random_seed(3)
+        with recording() as log:
+            out = night(image=image)["image"].astype(np.float32)
+        return out, log[0]["drew"]
+
+    plain, drew = infrared(SharedDepthProvider(_Level(), labels=_Labels(labels)))
+    assert drew["vehicles_read"] == 0
+    for facing in (1.0, -1.0):
+        reader = SharedDepthProvider(_Level(), labels=_Labels(labels), vehicles=_Told(facing))
+        lit, drew = infrared(reader)
+        assert drew["vehicles_read"] == 2 and drew["vehicle_lamps"] > 0.0
+        change = lit - plain
+        on_cars = labels == int(SceneClass.VEHICLE)
+        assert float(change[on_cars].max()) > 100.0, "no lamp lit on a dark car"
+        # Half way down each car, where the reader put them.
+        rows, columns = np.nonzero(change.max(axis=2) > 0.7 * change.max())
+        assert {int(row) for row in rows} <= set(range(98, 112)) | set(range(158, 172))
+        # White, whichever end: the three channels differ only by the
+        # sensor's residual tint.
+        brightest = lit[rows, columns]
+        assert float((brightest.max(axis=1) - brightest.min(axis=1)).max()) < 20.0
+        # Away from the cars the frame is the one without a reader.
+        far = np.ones((HEIGHT, WIDTH), dtype=bool)
+        far[70:200, 70:250] = False
+        assert float(np.abs(change[far]).max()) < 1.0
+        off, drew = infrared(reader, vehicle_lamp_range=(0.0, 0.0))
+        assert drew["vehicles_read"] == 0 and float(np.abs(off - plain).max()) == 0.0
+
+
+def test_rain_lights_a_reader_s_lamps_where_no_road_was_read() -> None:
+    """With the ground left dry no road is read, and the traffic's lamps are
+    lit all the same from what the reader saw. Without a reader there is
+    nothing to light them by."""
+    image, labels = _scene()
+    settings: dict[str, object] = {
+        "max_streaks": 0,
+        "wetness_probability": 0.0,
+        "rain_rate_range_mm_h": (2.0, 2.0),
+        "vehicle_lamp_range": (1.0, 1.0),
+    }
+    lit = {}
+    for name, extra in (("reader", {"vehicles": _Told(-1.0)}), ("none", {})):
+        provider = SharedDepthProvider(_Level(), labels=_Labels(labels), **extra)  # type: ignore[arg-type]
+        rain = RandomRain(depth_provider=provider, p=1.0, **settings)  # type: ignore[arg-type]
+        count = 0
+        for seed in range(6):
+            rain.set_random_seed(seed)
+            with recording() as log:
+                rain(image=image)
+            count += bool(log[0]["drew"]["lamps_lit"])
+        lit[name] = count
+    assert lit["reader"] >= 4 and lit["none"] == 0
 
 
 requires_cuda = pytest.mark.skipif(
