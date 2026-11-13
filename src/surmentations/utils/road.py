@@ -57,10 +57,13 @@ the way it was read; nothing catches the rest.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import NamedTuple
 
 import cv2
 import numpy as np
+
+from surmentations.perception.vehicles import VehicleView
 
 # The longer side, in pixels, of the copy a road's frame is worked out on:
 # a road's sides are long, and their curves are smooth.
@@ -714,6 +717,11 @@ _STANDS_NEARER = 0.7
 # either.
 _SEVERAL_VEHICLES = 1.5
 _FRONT_COUNTS = 0.3
+# A network's reading of a vehicle leans one way when it is this much surer
+# of one kind of lamp than the other, and is believed over the vehicle's
+# road when it is this much surer.
+_VIEW_LEANS = 0.03
+_VIEW_SURE = 0.15
 # The most spray counted in front of one pixel, in plumes at their densest:
 # ten cars abreast do not make ten times the mist of one.
 _MOST_SPRAY = 2.5
@@ -853,6 +861,10 @@ class RoadVehicle(NamedTuple):
       has been heard together: 1 away from the camera, its rear to it, and
       -1 coming on.
     * ``speed_kmh``: how fast it is taken to be going.
+    * ``lamps``: where a network found the lamps of the end it shows
+      (:class:`~surmentations.perception.vehicles.VehicleView`), one to a
+      row as column, row, half width, half height and score; ``None`` where
+      none was asked or it found the lamps of the other end.
     """
 
     road: int
@@ -863,6 +875,7 @@ class RoadVehicle(NamedTuple):
     shows: float
     away: float
     speed_kmh: float
+    lamps: np.ndarray | None = None
 
 
 def spray_amount(speed_kmh: float) -> float:
@@ -883,6 +896,7 @@ def road_vehicles(
     rng: np.random.Generator,
     linear_rgb: np.ndarray | None = None,
     speed_kmh: float = 100.0,
+    views: Sequence[VehicleView] | None = None,
 ) -> list[RoadVehicle]:
     """The vehicles on a frame's roads: where each stands, which way it goes and how fast.
 
@@ -896,6 +910,14 @@ def road_vehicles(
     wider than the rest is several vehicles run together or a lorry far
     off, whose lenses are under a pixel each, so its showing no red is not
     heard at all.
+
+    With ``views`` (:mod:`surmentations.perception.vehicles`) a network has
+    looked at each vehicle for its lamps, and what it found is heard in
+    place of the colour: a front and a rear alike, each by how much surer
+    the network is of one than of the other. A vehicle it is sure of keeps
+    its own reading whatever its road says, which is what a junction needs,
+    where the traffic of one road goes three ways; the rest go with their
+    road. A vehicle the network did not read is read by colour as before.
 
     **How fast** is drawn about ``speed_kmh``, the speed of the frame's
     traffic. Each road's own mean is a little either side of it, as two
@@ -912,6 +934,8 @@ def road_vehicles(
     order = [index for index in order if stats[index, cv2.CC_STAT_AREA] >= _FEWEST_SPRAY_PIXELS]
     night = linear_rgb is not None and float(linear_rgb.mean()) < _NIGHT_FRAME
     found: list[tuple[int, np.ndarray, np.ndarray, tuple[int, int], float, float]] = []
+    read: list[VehicleView | None] = []
+    seen = {} if views is None else {tuple(view.box): view for view in views}
     for index in order[:_MOST_SPRAYING]:
         left, top, wide, tall, _area = (int(value) for value in stats[index])
         rows, columns = np.nonzero(parts[top : top + tall, left : left + wide] == index)
@@ -940,30 +964,49 @@ def road_vehicles(
         across = float(np.percentile(np.abs(offsets @ np.array([-way[1], way[0]])), 90.0))
         girth = across / max(float(frame.width_px[row, column]), 1.0)
         shows = None
-        if linear_rgb is not None:
+        view = seen.get((left, top, wide, tall))
+        if view is None and linear_rgb is not None:
             shows = vehicle_facing(linear_rgb[rows, columns], rows, columns, night)
         found.append((road, rows, columns, (row, column), girth, 0.0 if shows is None else shows))
+        read.append(view)
     if not found:
         return []
     typical = float(np.median([girth for _road, _rows, _columns, _foot, girth, _shows in found]))
     traffic: list[RoadVehicle] = []
     for road in sorted({one[0] for one in found}):
-        here = [one for one in found if one[0] == road]
+        members = [index for index, one in enumerate(found) if one[0] == road]
+        here = [found[index] for index in members]
+        looked = [read[index] for index in members]
         at = np.array([float(frame.across[one[3]]) for one in here])
         girths = np.array([one[4] for one in here])
         said = np.array([one[5] for one in here])
         said[(said < 0.0) & (girths > _SEVERAL_VEHICLES * typical)] = 0.0
         weight = np.array([float(np.sqrt(len(one[1]))) for one in here])
         weight = weight * np.where(said < 0.0, _FRONT_COUNTS, 1.0)
+        sure = np.zeros(len(here), dtype=bool)
+        for index, view in enumerate(looked):
+            if view is None:
+                continue
+            # A network's reading: which lamp it is surer of, and by how much.
+            lean = abs(view.facing)
+            said[index] = 0.0 if lean < _VIEW_LEANS else float(np.sign(view.facing))
+            weight[index] = float(np.sqrt(len(here[index][1]))) * min(1.0, lean / _VIEW_SURE)
+            sure[index] = lean >= _VIEW_SURE and girths[index] <= _SEVERAL_VEHICLES * typical
         ways = traffic_directions(at, said, weight, rng)
+        ways = np.where(sure, said, ways)
         mean = speed_kmh * float(np.clip(rng.normal(1.0, _ROADS_DIFFER), 0.7, 1.3))
         spread = float(rng.uniform(*_SPEED_SPREAD)) * mean
         speeds = np.clip(rng.normal(mean, spread, size=len(here)), 0.0, None)
         speeds = np.where(girths > _LORRY_GIRTH * typical, np.minimum(speeds, _LORRY_KMH), speeds)
-        for one, shown, away, speed in zip(here, said, ways, speeds, strict=True):
+        for one, view, shown, away, speed in zip(here, looked, said, ways, speeds, strict=True):
+            # Its lamps as found, where the end they are on is the end it
+            # is taken to show.
+            lamps = None
+            if view is not None and len(view.lamps) and view.facing * away > 0.0:
+                lamps = view.lamps
             traffic.append(
                 RoadVehicle(
-                    one[0], one[1], one[2], one[3], one[4], float(shown), float(away), speed
+                    one[0], one[1], one[2], one[3], one[4], float(shown), float(away), speed, lamps
                 )
             )
     return traffic
@@ -1199,6 +1242,67 @@ def vehicle_spray(
     return np.minimum(spray, np.float32(_MOST_SPRAY))
 
 
+def _placed_lamps(
+    vehicle: RoadVehicle,
+    colour: np.ndarray | None,
+    shape: tuple[float, float],
+    alone: bool,
+) -> list[tuple[float, float, tuple[float, float]]]:
+    """Where a vehicle's two lamps are put when no network has found them.
+
+    Each as its column, its row and its size across and up the picture.
+    The end that is seen is the lower part of the outline, and its two
+    lamps are at one height on that, either side: a line across a road is
+    level in the picture, near enough. So they are placed by the picture's
+    rows and columns, and not along the long way of the outline, which for
+    a box seen from above runs corner to corner. Each is at its own height
+    above the outline's lower edge, which is the slant a vehicle off to one
+    side is seen with.
+
+    ``colour`` is the vehicle's pixels in linear light where it shows its
+    rear: red lenses that can be seen are lit where they are. A vehicle
+    seen from the side, and one that is not ``alone`` in its outline, has
+    no near end to put a pair on, and only lenses that are seen are lit on
+    it. ``shape`` is a lamp's width and height against its size.
+    """
+    rows, columns = vehicle.rows, vehicle.columns
+    top, bottom = int(rows.min()), int(rows.max())
+    tall = bottom - top + 1
+    level = bottom - _LAMP_UP * tall
+    band = np.abs(rows - level) <= max(1.0, 0.06 * tall)
+    if int(band.sum()) < 4:
+        return []
+    left, right = (float(value) for value in np.percentile(columns[band], [4.0, 96.0]))
+    half_wide = max(1.5, 0.5 * (right - left))
+    size = max(0.6, _LAMP_SIZE * half_wide)
+    radii = (shape[0] * size, shape[1] * size)
+    lenses = None
+    if colour is not None:
+        lenses = (colour[:, 0] > _LENS_LEVEL) & (
+            colour[:, 0] > _LENS_RED * colour[:, 1:].max(axis=1)
+        )
+        if float(lenses.mean()) > _LENS_SHARE[1]:
+            lenses = None
+    broad = float(np.ptp(np.percentile(columns, [2.0, 98.0]))) / max(tall, 1)
+    placed = alone and broad < _END_ON
+    middle = 0.5 * (left + right)
+    places = []
+    for which in (-1.0, 1.0):
+        x = middle + which * (1.0 - 2.0 * _LAMP_INSET) * half_wide
+        below = np.abs(columns - x) <= max(1.0, 0.16 * half_wide)
+        y = (float(rows[below].max()) if below.any() else float(bottom)) - _LAMP_UP * tall
+        found = placed
+        if lenses is not None:
+            seen = (
+                lenses & ((columns - middle) * which > 0.3 * half_wide) & (rows > top + 0.3 * tall)
+            )
+            if int(seen.sum()) >= 2:
+                x, y, found = float(columns[seen].mean()), float(rows[seen].mean()), True
+        if found:
+            places.append((x, y, radii))
+    return places
+
+
 # Lamps. The smallest vehicle given any, in pixels. Where a lamp is on the
 # end of the outline nearer the camera: this share of the outline's height
 # up from its lower edge, and this share of its width in from either side.
@@ -1211,7 +1315,11 @@ _LAMP_INSET = 0.14
 _END_ON = 1.6
 # A lamp's size, as a share of the vehicle's half width, and the glow round
 # it in the wet air as a multiple of that and as a share of its light.
-_LAMP_SIZE = 0.075
+_LAMP_SIZE = 0.06
+# A lamp a network found is lit over this share of the box it was found in.
+_FOUND_SIZE = 0.5
+# And no larger than this share of the smaller side of its vehicle's outline.
+_LARGEST_LAMP = 0.06
 _GLOW_SIZE = 5.0
 _GLOW_SHARE = 0.025
 # How far over full scale a dipped headlamp and a tail lamp are at their
@@ -1246,12 +1354,15 @@ def vehicle_lamps(
     headlamps where it is coming on, two tail lamps where it is driving
     away, which is the same reading that lays its spray.
 
-    **Where.** The end that is seen is the lower part of the outline, and
-    the pair is at one height on it, a little in from either side and a
-    quarter of the way up. A rear whose red lenses can be seen in the
-    picture (``linear_rgb``) has its lamps lit where they are. A vehicle
-    seen from the side, and an outline that is several vehicles, has no
-    such end, and only lenses that are seen are lit on it.
+    **Where.** Where a network found them, for a vehicle that comes with
+    its ``lamps`` (:mod:`surmentations.perception.vehicles`): as many as it
+    found, each as large as it found it. Otherwise they are placed. The
+    end that is seen is the lower part of the outline, and the pair is at
+    one height on it, a little in from either side and a quarter of the way
+    up. A rear whose red lenses can be seen in the picture
+    (``linear_rgb``) has its lamps lit where they are. A vehicle seen from
+    the side, and an outline that is several vehicles, has no such end, and
+    only lenses that are seen are lit on it.
 
     **How bright.** Far over full scale, as a lamp is: a dipped headlamp
     several times it and a tail lamp about twice, at a ``strength`` of 1,
@@ -1318,64 +1429,41 @@ def vehicle_lamps(
                 continue
         if not night and float(rng.uniform()) > _LIT_BY_DAY[1 if rear else 0]:
             continue
-        # The end of it that is seen is the lower part of its outline, and
-        # its two lamps are at one height on that, either side: a line
-        # across a road is level in the picture, near enough. So they are
-        # placed by the picture's rows and columns, and not along the long
-        # way of the outline, which for a box seen from above runs corner
-        # to corner.
-        top, bottom = int(rows.min()), int(rows.max())
-        tall = bottom - top + 1
-        level = bottom - _LAMP_UP * tall
-        band = np.abs(rows - level) <= max(1.0, 0.06 * tall)
-        if int(band.sum()) < 4:
-            continue
-        left, right = (float(value) for value in np.percentile(columns[band], [4.0, 96.0]))
-        half_wide = max(1.5, 0.5 * (right - left))
-        size = max(0.6, _LAMP_SIZE * half_wide)
         if rear:
             tint = np.array(_TAIL, dtype=np.float32)
             peak = _TAIL_PEAK * (_BRAKE[0] if float(rng.uniform()) < _BRAKE[1] else 1.0)
-            radii = (1.3 * size, 0.7 * size)
+            shape = (1.3, 0.7)
         else:
             tint = np.array(_LED if float(rng.uniform()) < 0.5 else _HALOGEN, dtype=np.float32)
             peak = _HEAD_PEAK
-            radii = (size, size)
+            shape = (1.0, 1.0)
         peak = strength * peak * float(rng.uniform(0.7, 1.3))
-        lenses = None
-        if rear and colour is not None:
-            lenses = (colour[:, 0] > _LENS_LEVEL) & (
-                colour[:, 0] > _LENS_RED * colour[:, 1:].max(axis=1)
-            )
-            if float(lenses.mean()) > _LENS_SHARE[1]:
-                lenses = None
-        # Seen from the side, or several vehicles in one outline: there is
-        # no near end to put a pair on, and only lenses that are seen are lit.
-        broad = float(np.ptp(np.percentile(columns, [2.0, 98.0]))) / max(tall, 1)
-        placed = broad < _END_ON and vehicle.girth <= _SEVERAL_VEHICLES * typical
-        middle = 0.5 * (left + right)
-        for which in (-1.0, 1.0):
-            x = middle + which * (1.0 - 2.0 * _LAMP_INSET) * half_wide
-            # Each at its own height above the outline's lower edge, which
-            # is the slant a vehicle off to one side is seen with.
-            below = np.abs(columns - x) <= max(1.0, 0.16 * half_wide)
-            y = (float(rows[below].max()) if below.any() else float(bottom)) - _LAMP_UP * tall
-            found = placed
-            if lenses is not None:
-                seen = (
-                    lenses
-                    & ((columns - middle) * which > 0.3 * half_wide)
-                    & (rows > top + 0.3 * tall)
+        places: list[tuple[float, float, tuple[float, float]]] = []
+        if vehicle.lamps is not None:
+            # Found by a network that looked for them: lit where they are
+            # and as large as they are, one where only one is seen.
+            # No larger than a lamp is against its vehicle: in a far
+            # outline of several cars the box found is half the outline.
+            most = _LARGEST_LAMP * float(min(np.ptp(vehicle.columns), np.ptp(vehicle.rows)) + 1)
+            for x, y, half_wide, half_tall, _score in vehicle.lamps.tolist():
+                radii = (
+                    float(np.clip(_FOUND_SIZE * half_wide, 0.6, max(0.6, most))),
+                    float(np.clip(_FOUND_SIZE * half_tall, 0.6, max(0.6, most))),
                 )
-                if int(seen.sum()) >= 2:
-                    x, y, found = float(columns[seen].mean()), float(rows[seen].mean()), True
-            if not found:
-                continue
-            if (
-                not (0 <= int(y) < height and 0 <= int(x) < width)
-                or whose[int(y), int(x)] != number
-            ):
-                continue
+                places.append((x, y, radii))
+        else:
+            places = _placed_lamps(
+                vehicle,
+                colour if rear else None,
+                shape,
+                vehicle.girth <= _SEVERAL_VEHICLES * typical,
+            )
+            places = [
+                (x, y, radii)
+                for x, y, radii in places
+                if 0 <= int(y) < height and 0 <= int(x) < width and whose[int(y), int(x)] == number
+            ]
+        for x, y, radii in places:
             spot(light, (x, y), radii, tint * peak)
             wide = (_GLOW_SIZE * radii[0], _GLOW_SIZE * radii[1])
             spot(glow, (x, y), wide, tint * peak * _GLOW_SHARE)

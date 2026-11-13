@@ -390,7 +390,10 @@ class RandomRain(CameraTransform):
             on, and does nothing without. Off by default because of what a
             single frame cannot say: how fast the traffic is moving, which
             ``traffic_speed_range_kmh`` is for, and, where no lens shows on
-            any vehicle of a road, which way. See
+            any vehicle of a road, which way. A provider built with
+            ``vehicles=`` (:mod:`surmentations.perception.vehicles`) has a
+            network say which way, and is much surer of it than colour
+            is. See
             :func:`~surmentations.utils.road.vehicle_spray` and
             :func:`~surmentations.utils.road.road_mist`.
         traffic_speed_range_kmh: how fast the frame's traffic is taken to
@@ -417,7 +420,10 @@ class RandomRain(CameraTransform):
             most vehicles are lit and not all; by night all that are not
             lit already, and the lamps the picture shows burning are given
             the same glow. It needs scene labels and a road, like the
-            spray. See :func:`~surmentations.utils.road.vehicle_lamps`.
+            spray. On a provider built with ``vehicles=`` the lamps are
+            lit where a network found them on each vehicle; without, they
+            are put where lamps usually are on an outline. See
+            :func:`~surmentations.utils.road.vehicle_lamps`.
         lamp_glint_range: at night, how many times full scale the lamps in
             the frame are taken to be when they light the rain, drawn per
             call. Zero — the default — leaves every streak lit by the
@@ -970,7 +976,8 @@ class RandomRain(CameraTransform):
         traffic = None
         named_vehicles = None if labels is None else labels == int(SceneClass.VEHICLE)
         if (spray > 0.0 or lamps > 0.0) and road is not None and named_vehicles is not None:
-            traffic = road_vehicles(road, named_vehicles, rng, linear_scene, traffic_speed)
+            views = self.depth_provider.get_vehicles(scene)
+            traffic = road_vehicles(road, named_vehicles, rng, linear_scene, traffic_speed, views)
         if spray > 0.0 and road is not None and film > 0.0 and named_vehicles is not None:
             plumes = vehicle_spray(road, named_vehicles, rng, linear_scene, traffic, depth_pm)
             mist = road_mist(road, named_vehicles, depth_pm, traffic)

@@ -1,6 +1,6 @@
 # Perception
 
-What each pixel of a scene is and how the camera is mounted over it: the scene labels, the installation geometry, and the estimators of both.
+What each pixel of a scene is, how the camera is mounted over it, and which end of each vehicle it shows: the scene labels, the installation geometry, the vehicle views, and the estimators of each.
 
 ```{toctree}
 :maxdepth: 1
@@ -8,4 +8,5 @@ What each pixel of a scene is and how the camera is mounted over it: the scene l
 surmentations.perception
 surmentations.perception.labels
 surmentations.perception.geometry
+surmentations.perception.vehicles
 ```
