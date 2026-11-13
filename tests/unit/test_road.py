@@ -23,7 +23,13 @@ from surmentations.utils.road import (
     read_road,
     road_frame,
     road_lanes,
+    road_mist,
+    road_vehicles,
+    spray_amount,
     straighten,
+    traffic_directions,
+    vehicle_facing,
+    vehicle_lamps,
     vehicle_spray,
     wheel_tracks,
 )
@@ -685,16 +691,18 @@ def test_a_vehicle_lying_across_the_road_and_one_on_a_scrap_of_road_get_no_plume
 
 
 def test_a_plume_is_a_low_cloud_as_wide_as_its_vehicle() -> None:
-    """Not a jet: at its tail it is about the vehicle's width, and it does
-    not reach far beyond a length and a half."""
+    """Not a jet: at its tail it is about the vehicle's width, and at town
+    speed it does not reach far beyond a length and a half."""
     mask, _lanes = _straight_lanes()
     frame = road_frame(mask)
     assert frame is not None
     vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
     vehicles[90:130, 148:172] = True
     for seed in range(40):
-        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed))
-        if float(spray[131:].sum()) < 1.0:
+        rng = np.random.default_rng(seed)
+        slow = road_vehicles(frame, vehicles, rng, speed_kmh=45.0)
+        spray = vehicle_spray(frame, vehicles, rng, traffic=slow)
+        if float(spray[131:].sum()) < 0.2:
             continue
         row = spray[136]
         wide = int((row > 0.5 * row.max()).sum())
@@ -735,8 +743,6 @@ def test_spray_hangs_over_a_busy_road_and_thickens_with_distance() -> None:
     over the carriageway, which a sight line runs through more of the
     further off it meets the road. Near cars are clear and far traffic is
     gone from the wheels up, its roofs last."""
-    from surmentations.utils.road import road_mist
-
     mask, _lanes = _straight_lanes()
     frame = road_frame(mask)
     assert frame is not None
@@ -750,8 +756,9 @@ def test_spray_hangs_over_a_busy_road_and_thickens_with_distance() -> None:
     assert float(mist[:, :50].max()) < 0.01, "mist off the road"
     far, near = float(mist[20, 150]), float(mist[230, 150])
     assert far > 3.0 * near > 0.0
-    # On a vehicle, thick at its wheels and thin at its roof.
-    assert float(mist[82, 190]) > 3.0 * float(mist[61, 190])
+    # On a vehicle, thick at its wheels and thinner at its roof, which is
+    # most of the way up the layer and not clear of it.
+    assert float(mist[82, 190]) > 2.0 * float(mist[61, 190]) > 0.0
     # An empty road has none, and a road with one car on it little.
     assert float(road_mist(frame, np.zeros_like(vehicles), depth).max()) == 0.0
     alone = np.zeros_like(vehicles)
@@ -784,3 +791,328 @@ def test_a_wake_is_long_and_bigger_behind_a_bigger_vehicle() -> None:
         )
     assert lengths and float(np.median(lengths)) > 2.0 * 24, "a wake shorter than two car lengths"
     assert behind_lorry > 1.5 * behind_car
+
+
+def _car(colour: tuple[float, float, float], lenses: tuple[float, float, float] | None) -> tuple:
+    """A car of 30 by 26 pixels, as its colours and where they are, with a pair of lamps or none."""
+    rows, columns = np.mgrid[0:30, 0:26]
+    picture = np.empty((30, 26, 3), dtype=np.float32)
+    picture[:] = colour
+    if lenses is not None:
+        picture[22:25, 2:6] = lenses
+        picture[22:25, 20:24] = lenses
+    return picture.reshape(-1, 3), rows.ravel(), columns.ravel()
+
+
+def test_a_rear_is_known_by_its_lenses_and_not_by_red_paint_or_an_indicator() -> None:
+    """Small patches of red are tail lamps. A red car is red all over and
+    says nothing; an amber indicator is on the front of a car too; and a
+    car with no red at all, large enough to show it, is seen from the front."""
+    grey = (0.3, 0.32, 0.35)
+    assert vehicle_facing(*_car(grey, (0.6, 0.04, 0.04)), night=False) == 1.0
+    assert vehicle_facing(*_car(grey, None), night=False) == -1.0
+    assert vehicle_facing(*_car((0.5, 0.04, 0.04), None), night=False) is None
+    assert vehicle_facing(*_car(grey, (0.9, 0.4, 0.02)), night=False) != 1.0
+    # One lens is enough: the other is as often hidden or in shade.
+    colour, rows, columns = _car(grey, (0.6, 0.04, 0.04))
+    colour = colour.reshape(30, 26, 3).copy()
+    colour[22:25, 20:24] = grey
+    assert vehicle_facing(colour.reshape(-1, 3), rows, columns, night=False) == 1.0
+    # Too small to show a lens, a car with none says nothing.
+    few = rows < 6
+    assert vehicle_facing(_car(grey, None)[0][few], rows[few], columns[few], night=False) is None
+    # At night, white lamps burning are headlamps.
+    dark = _car((0.01, 0.01, 0.01), (0.95, 0.95, 0.9))
+    assert vehicle_facing(*dark, night=True) == -1.0
+
+
+def test_a_road_s_traffic_is_heard_together() -> None:
+    """One way, or two ways divided at the widest empty strip across the
+    road: a few vehicles' evidence decides for all of them, and one misread
+    among a carriageway's lanes does not turn its neighbours round."""
+    rng = np.random.default_rng(0)
+    at = np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+    even = np.ones(6)
+    # One rear seen, on a road with no divide to speak of: all drive away.
+    ways = traffic_directions(at, np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0]), even, rng)
+    assert (ways == 1.0).all()
+    # Fronts on one side of the gap and rears on the other: two ways.
+    ways = traffic_directions(at, np.array([-1.0, -1.0, 0.0, 0.0, 1.0, 1.0]), even, rng)
+    assert ways.tolist() == [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]
+    # A front misread among the rears is outvoted, not obeyed.
+    ways = traffic_directions(at, np.array([-1.0, -1.0, 0.0, -1.0, 1.0, 1.0]), even, rng)
+    assert ways.tolist() == [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]
+    # And the divide is the widest gap, not wherever suits a misreading:
+    # this used to cut the right-hand carriageway in two.
+    ways = traffic_directions(
+        at, np.array([0.0, 0.0, 0.0, -1.0, 1.0, 1.0]), np.array([1.0, 1.0, 1.0, 0.3, 1.0, 1.0]), rng
+    )
+    assert (ways[3:] == 1.0).all()
+    # With nothing said the road's one direction is drawn, either way.
+    drawn = {
+        float(traffic_directions(at, np.zeros(6), even, np.random.default_rng(seed))[0])
+        for seed in range(20)
+    }
+    assert drawn == {-1.0, 1.0}
+    for seed in range(5):
+        ways = traffic_directions(at, np.zeros(6), even, np.random.default_rng(seed))
+        assert len(set(ways.tolist())) == 1
+
+
+def _two_carriageways() -> tuple:
+    """Fronts on the left of a road and rears on its right, with the picture of them."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    for left, top, rear in (
+        (80, 100, False),
+        (100, 170, False),
+        (200, 100, True),
+        (215, 170, True),
+    ):
+        vehicles[top : top + 30, left : left + 26] = True
+        scene[top : top + 30, left : left + 26] = (0.3, 0.32, 0.35)
+        if rear:
+            scene[top + 22 : top + 25, left + 2 : left + 6] = (0.6, 0.04, 0.04)
+            scene[top + 22 : top + 25, left + 20 : left + 24] = (0.6, 0.04, 0.04)
+    return frame, vehicles, scene
+
+
+def test_each_side_of_a_road_trails_its_spray_its_own_way() -> None:
+    """Oncoming traffic on one side and departing on the other, as a divided
+    road has: each vehicle's spray is behind it."""
+    frame, vehicles, scene = _two_carriageways()
+    for seed in range(8):
+        traffic = road_vehicles(frame, vehicles, np.random.default_rng(seed), scene)
+        assert len(traffic) == 4
+        for vehicle in traffic:
+            assert vehicle.away == (1.0 if vehicle.foot[1] > 160 else -1.0)
+        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed), scene, traffic)
+        # Coming on, on the left: nothing off the bonnet of the nearer car,
+        # below it, and its wake up the road behind it.
+        assert float(spray[203:232, 96:130].sum()) < 0.05 * float(spray[135:168, 96:130].sum())
+        # Driving away, on the right: nothing ahead of it, above the car.
+        assert float(spray[60:98, 198:228].sum()) < 0.05 * float(spray[132:165, 198:228].sum())
+
+
+def test_spray_goes_with_speed() -> None:
+    """With nearly its cube: half the speed is a seventh of the spray, a
+    queue throws up none, and a wake is as long as its vehicle goes while
+    the cloud hangs."""
+    assert spray_amount(0.0) == 0.0
+    assert spray_amount(110.0) == pytest.approx(1.0)
+    assert spray_amount(55.0) == pytest.approx(0.5**2.8)
+    assert spray_amount(40.0) < spray_amount(80.0) < spray_amount(120.0)
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    vehicles[60:84, 150:166] = True
+    scene[78:81, 151:154] = scene[78:81, 162:165] = (0.6, 0.04, 0.04)
+    thrown, reach = [], []
+    for speed in (0.0, 40.0, 80.0, 120.0):
+        total, far = 0.0, 0.0
+        for seed in range(6):
+            rng = np.random.default_rng(seed)
+            traffic = road_vehicles(frame, vehicles, rng, scene, speed)
+            spray = vehicle_spray(frame, vehicles, rng, scene, traffic)
+            total += float(spray.sum())
+            far += float(spray[150:].sum())
+        thrown.append(total)
+        reach.append(far)
+    assert thrown[0] == 0.0, "spray behind a standing car"
+    assert thrown[1] < 0.3 * thrown[2] < 0.3 * thrown[3]
+    assert reach[1] < 0.05 * reach[3], "a wake as long at town speed as on a motorway"
+
+
+def test_speeds_are_spread_about_each_road_s_mean_and_a_lorry_keeps_to_its_limit() -> None:
+    """Normal about the road's mean, with a spread of a ninth to a fifth of
+    it, and the road's mean a little either side of the frame's."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    for top in (70, 100, 130, 160, 190):
+        for left in (75, 110, 145, 180, 215):
+            vehicles[top : top + 18, left : left + 14] = True
+    means, spreads = [], []
+    for seed in range(40):
+        traffic = road_vehicles(frame, vehicles, np.random.default_rng(seed), speed_kmh=80.0)
+        speeds = np.array([vehicle.speed_kmh for vehicle in traffic])
+        assert len(speeds) == 25 and (speeds >= 0.0).all()
+        means.append(float(speeds.mean()))
+        spreads.append(float(speeds.std() / speeds.mean()))
+    assert 74.0 < float(np.mean(means)) < 86.0
+    assert 2.0 < float(np.std(means)) < 12.0, "every road at the frame's own speed"
+    assert 0.09 < float(np.median(spreads)) < 0.2
+    # A lorry, twice as wide as the cars about it, on a fast road.
+    vehicles[100:118, 138:166] = True
+    for seed in range(10):
+        traffic = road_vehicles(frame, vehicles, np.random.default_rng(seed), speed_kmh=130.0)
+        widest = max(traffic, key=lambda vehicle: vehicle.girth)
+        assert widest.speed_kmh <= 90.0
+        assert max(vehicle.speed_kmh for vehicle in traffic) > 100.0
+
+
+def test_a_wake_covers_what_follows_and_is_hidden_by_what_stands_nearer() -> None:
+    """Spray is a thing in the scene. The wake of a car coming on lies up the
+    road behind it, over the wheels and the bonnet of the car that follows,
+    and that car is not a clear hole in it; the car that threw it stands in
+    front of it. And a branch much nearer the camera than the cars hides it."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    for top in (95, 160):
+        vehicles[top : top + 30, 147:173] = True
+        scene[top : top + 30, 147:173] = (0.3, 0.32, 0.35)
+    rows = np.arange(HEIGHT, dtype=np.float32)[:, None]
+    depth = np.broadcast_to(20.0 + 2.0 * (HEIGHT - 1 - rows), (HEIGHT, WIDTH)).astype(np.float32)
+    branch = depth.copy()
+    branch[130:150, 100:220] = 5.0
+    covered = 0
+    for seed in range(8):
+        rng = np.random.default_rng(seed)
+        traffic = road_vehicles(frame, vehicles, rng, scene, 110.0)
+        assert all(vehicle.away == -1.0 for vehicle in traffic)
+        spray = vehicle_spray(frame, vehicles, np.random.default_rng(seed), scene, traffic, depth)
+        own = float(spray[170:185, 152:168].mean())
+        follower = float(spray[114:124, 152:168].mean())
+        between = float(spray[132:150, 152:168].mean())
+        assert own < 0.1 * between, "a car hidden by its own wake, which is behind it"
+        covered += follower > 0.25 * between
+        hidden = vehicle_spray(frame, vehicles, np.random.default_rng(seed), scene, traffic, branch)
+        assert float(hidden[130:150, 100:220].max()) == 0.0
+        assert float(hidden[60:90].sum()) > 0.0
+    assert covered >= 6, "the car that follows stands in a clear hole in the wake it drives through"
+
+
+def test_no_mist_hangs_over_a_queue() -> None:
+    """The mist over a road is what its traffic throws up, and standing
+    traffic throws up nothing."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    rows = np.arange(HEIGHT, dtype=np.float32)[:, None]
+    depth = np.broadcast_to(20.0 + 2.0 * (HEIGHT - 1 - rows), (HEIGHT, WIDTH)).astype(np.float32)
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    for top, left in ((30, 80), (60, 180), (100, 120), (150, 200), (190, 90), (120, 220)):
+        vehicles[top : top + 24, left : left + 20] = True
+    rng = np.random.default_rng(0)
+    queue = road_vehicles(frame, vehicles, rng, speed_kmh=0.0)
+    slow = road_vehicles(frame, vehicles, rng, speed_kmh=50.0)
+    fast = road_vehicles(frame, vehicles, rng, speed_kmh=120.0)
+    assert float(road_mist(frame, vehicles, depth, queue).max()) == 0.0
+    assert (
+        0.0
+        < float(road_mist(frame, vehicles, depth, slow).sum())
+        < 0.3 * float(road_mist(frame, vehicles, depth, fast).sum())
+    )
+
+
+def test_lamps_are_lit_by_which_end_of_a_vehicle_is_seen() -> None:
+    """Two headlamps on a vehicle coming on and two tail lamps on one driving
+    away, on the lower part of its outline, either side of its middle, far
+    over full scale; with a glow wider than the lamp, and a weight of where
+    they are for the road to reflect."""
+    frame, vehicles, scene = _two_carriageways()
+    lit_fronts = lit_rears = 0
+    for seed in range(40):
+        rng = np.random.default_rng(seed)
+        traffic = road_vehicles(frame, vehicles, rng, scene)
+        light, glow, cores = vehicle_lamps(frame, traffic, rng, 1.0, scene)
+        assert light.shape == glow.shape == (HEIGHT, WIDTH, 3) and cores.shape == (HEIGHT, WIDTH)
+        assert float(cores.max()) <= 1.0 and float(light.min()) >= 0.0
+        assert float(light[~vehicles].max(initial=0.0)) < 0.5 * float(light.max()), (
+            "lamps off the cars"
+        )
+        for left, top, rear in (
+            (80, 100, False),
+            (100, 170, False),
+            (200, 100, True),
+            (215, 170, True),
+        ):
+            car = light[top : top + 30, left : left + 26]
+            if float(car.max()) == 0.0:
+                continue
+            # On the lower part of it, and one either side.
+            assert float(car[:12].max()) < 0.05 * float(car.max())
+            assert float(car[:, :10].max()) > 1.0 and float(car[:, 16:].max()) > 1.0
+            assert float(car[:, 11:15].max()) < 0.5 * float(car.max())
+            red, green, _blue = (float(car[..., channel].sum()) for channel in range(3))
+            if rear:
+                lit_rears += 1
+                assert green < 0.1 * red, "a tail lamp that is not red"
+            else:
+                lit_fronts += 1
+                assert green > 0.8 * red, "a headlamp that is not white"
+            halo = glow[top : top + 30, left - 6 : left + 32]
+            assert float(halo.max()) < 0.2 * float(car.max())
+            assert int((halo.max(axis=2) > 0.2 * halo.max()).sum()) > int(
+                (car.max(axis=2) > 0.2 * car.max()).sum()
+            )
+    # Most are lit by day, not all, and fewer rears than fronts.
+    assert 48 <= lit_rears < lit_fronts <= 80
+
+
+def test_a_lit_rear_shows_its_lamps_where_its_lenses_are() -> None:
+    """Lenses that can be seen are lit where they are, wherever on the
+    outline that is."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    scene = np.full((HEIGHT, WIDTH, 3), 0.1, dtype=np.float32)
+    vehicles[120:150, 147:173] = True
+    scene[120:150, 147:173] = (0.3, 0.32, 0.35)
+    scene[133:136, 148:152] = scene[133:136, 168:172] = (0.6, 0.04, 0.04)
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        traffic = road_vehicles(frame, vehicles, rng, scene)
+        light, _glow, _cores = vehicle_lamps(frame, traffic, rng, 1.0, scene)
+        if float(light.max()) == 0.0:
+            continue
+        rows, columns = np.nonzero(light[..., 0] > 0.9 * light[..., 0].max())
+        assert 132 <= int(rows.min()) and int(rows.max()) <= 136
+        return
+    raise AssertionError("no lamp lit in twenty draws")
+
+
+def test_rain_lights_the_traffic_s_lamps_only_when_asked_and_the_road_reflects_them() -> None:
+    plain, drew = _rained()
+    assert drew["vehicle_lamps"] == 0.0 and not drew["lamps_lit"]
+    lit, drew = _rained(vehicle_lamp_range=(1.0, 1.0))
+    assert drew["vehicle_lamps"] == 1.0 and drew["lamps_lit"]
+    change = lit - plain
+    on_cars = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    on_cars[150:180, 96:124] = on_cars[90:120, 196:224] = True
+    assert float(change[on_cars].max()) > 100.0, "no lamp was lit on either car"
+    assert float(np.abs(change[:60]).max()) < 2.0, "lamps in the sky"
+    # Down the wet road below a lit car there is more light than there was.
+    below = change[181:215, 96:124].mean() + change[121:150, 196:224].mean()
+    assert float(below) > 0.3
+    # Without labels there is no traffic to light.
+    _out, drew = _rained(labelled=False, vehicle_lamp_range=(1.0, 1.0))
+    assert not drew["lamps_lit"]
+
+
+def test_the_traffic_s_speed_is_drawn_from_its_range() -> None:
+    """Per call, and what it is drawn as is what the spray is made with."""
+    speeds = []
+    for seed in range(8):
+        _out, drew = _rained(
+            seed=seed, spray_range=(0.8, 0.8), traffic_speed_range_kmh=(30.0, 60.0)
+        )
+        speeds.append(drew["traffic_speed_kmh"])
+        assert 30.0 <= drew["traffic_speed_kmh"] <= 60.0
+    assert len({round(speed, 3) for speed in speeds}) > 4
+    fast, _ = _rained(spray_range=(0.8, 0.8), traffic_speed_range_kmh=(120.0, 120.0))
+    slow, _ = _rained(spray_range=(0.8, 0.8), traffic_speed_range_kmh=(30.0, 30.0))
+    still, _ = _rained(spray_range=(0.8, 0.8), traffic_speed_range_kmh=(0.0, 0.0))
+    none, _ = _rained()
+    assert float(np.abs(still - none).max()) < 1.0, "spray over a standing queue"
+    assert float(np.abs(fast - none).mean()) > 3.0 * float(np.abs(slow - none).mean()) > 0.0

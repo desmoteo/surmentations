@@ -124,6 +124,8 @@ from surmentations.utils.road import (
     RoadFrame,
     read_road,
     road_mist,
+    road_vehicles,
+    vehicle_lamps,
     vehicle_spray,
     wheel_tracks,
 )
@@ -386,10 +388,36 @@ class RandomRain(CameraTransform):
             0.3 it is a haze, at 1 a motorway in a downpour. It needs scene
             labels on the provider, for the vehicles and the road they are
             on, and does nothing without. Off by default because of what a
-            single frame cannot say: how fast the traffic is moving, and,
-            where no lamp or lens shows, which way. See
+            single frame cannot say: how fast the traffic is moving, which
+            ``traffic_speed_range_kmh`` is for, and, where no lens shows on
+            any vehicle of a road, which way. See
             :func:`~surmentations.utils.road.vehicle_spray` and
             :func:`~surmentations.utils.road.road_mist`.
+        traffic_speed_range_kmh: how fast the frame's traffic is taken to
+            be moving, in km/h, drawn per call. A frame does not say, and
+            spray is mostly a matter of speed: it goes with the 2.8th power
+            of it, so traffic at 50 km/h throws up a ninth of what it does
+            at 110, and a queue none. About the drawn speed each road gets
+            a mean of its own, and each vehicle a speed normally
+            distributed about its road's mean, with a spread of 11 to 18 %
+            of it; a lorry keeps to 90. The wake behind each vehicle is as
+            long as it travels in the three quarters of a second the cloud
+            hangs. Give a camera's own range where it is known: a city
+            street is ``(20, 60)``, a motorway ``(90, 130)``. See
+            :func:`~surmentations.utils.road.road_vehicles`.
+        vehicle_lamp_range: how brightly the lamps of the traffic on a wet
+            road are lit, drawn per call. 0, the default, leaves them as
+            the photograph has them, which in one taken in the dry is off.
+            Above it each vehicle on a road is given the pair of lamps its
+            near end carries, headlamps where it is coming on and tail
+            lamps where it is driving away, by the same reading that lays
+            its spray: bright points far over full scale, with a glow in
+            the rain that is larger in spray, and reflected down the wet
+            road as any lamp in the picture is. 1 is dipped beams. By day
+            most vehicles are lit and not all; by night all that are not
+            lit already, and the lamps the picture shows burning are given
+            the same glow. It needs scene labels and a road, like the
+            spray. See :func:`~surmentations.utils.road.vehicle_lamps`.
         lamp_glint_range: at night, how many times full scale the lamps in
             the frame are taken to be when they light the rain, drawn per
             call. Zero — the default — leaves every streak lit by the
@@ -532,6 +560,16 @@ class RandomRain(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 1.0)),
         ]
+        traffic_speed_range_kmh: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 250.0)),
+        ]
+        vehicle_lamp_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 2.0)),
+        ]
 
     def __init__(
         self,
@@ -561,6 +599,8 @@ class RandomRain(CameraTransform):
         lamp_glint_range: tuple[float, float] = (0.0, 0.0),
         puddle_coverage_range: tuple[float, float] = (0.0, 0.45),
         spray_range: tuple[float, float] = (0.0, 0.0),
+        traffic_speed_range_kmh: tuple[float, float] = (40.0, 130.0),
+        vehicle_lamp_range: tuple[float, float] = (0.0, 0.0),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -596,6 +636,8 @@ class RandomRain(CameraTransform):
         self.lamp_glint_range = lamp_glint_range
         self.puddle_coverage_range = puddle_coverage_range
         self.spray_range = spray_range
+        self.traffic_speed_range_kmh = traffic_speed_range_kmh
+        self.vehicle_lamp_range = vehicle_lamp_range
 
     def _veil_beta_bounds(self, rain_rate_mm_h: float) -> tuple[float, float]:
         """Veil extinction range, derived from the rain rate unless overridden."""
@@ -922,11 +964,16 @@ class RandomRain(CameraTransform):
 
         # Spray, last: what is drawn for it comes after every other draw.
         spray = self.py_random.uniform(*self.spray_range)
-        sprayed = False
-        if spray > 0.0 and road is not None and film > 0.0 and labels is not None:
-            named_vehicles = labels == int(SceneClass.VEHICLE)
-            plumes = vehicle_spray(road, named_vehicles, rng, linear_scene)
-            mist = road_mist(road, named_vehicles, depth_pm)
+        traffic_speed = self.py_random.uniform(*self.traffic_speed_range_kmh)
+        lamps = self.py_random.uniform(*self.vehicle_lamp_range)
+        sprayed = lit = False
+        traffic = None
+        named_vehicles = None if labels is None else labels == int(SceneClass.VEHICLE)
+        if (spray > 0.0 or lamps > 0.0) and road is not None and named_vehicles is not None:
+            traffic = road_vehicles(road, named_vehicles, rng, linear_scene, traffic_speed)
+        if spray > 0.0 and road is not None and film > 0.0 and named_vehicles is not None:
+            plumes = vehicle_spray(road, named_vehicles, rng, linear_scene, traffic, depth_pm)
+            mist = road_mist(road, named_vehicles, depth_pm, traffic)
             if float(plumes.max()) > 0.0 or float(mist.max()) > 0.0:
                 # Mist is not even: it is torn by the air the vehicles drag,
                 # in rags a few metres across.
@@ -936,7 +983,28 @@ class RandomRain(CameraTransform):
                 thickness = np.float32(spray * film) * (wakes + hanging)
                 drawn["spray"] = (1.0 - np.exp(-thickness)).astype(np.float32)
                 sprayed = True
-        record_draw(spray=spray, spray_drawn=sprayed)
+        if lamps > 0.0 and road is not None and traffic:
+            light, glow, cores = vehicle_lamps(road, traffic, rng, lamps, linear_scene)
+            if float(cores.max()) > 0.0:
+                # Lamps the picture already shows burning glow in the wet
+                # air as the ones lit here do.
+                burning = drawn.get("lights")
+                if burning is not None and float(burning.max()) > 0.0:
+                    lit_already = linear_scene * burning[..., None]
+                    reach = _BURNING_GLOW_REACH * float(np.hypot(height, width))
+                    glow += np.float32(_BURNING_GLOW) * cv2.GaussianBlur(
+                        lit_already, (0, 0), sigmaX=max(reach, 1.0)
+                    )
+                    cores = np.maximum(cores, burning)
+                drawn["lamp_light"], drawn["lamp_glow"], drawn["lights"] = light, glow, cores
+                lit = True
+        record_draw(
+            spray=spray,
+            spray_drawn=sprayed,
+            traffic_speed_kmh=traffic_speed,
+            vehicle_lamps=lamps,
+            lamps_lit=lit,
+        )
         return drawn
 
     def apply(
@@ -958,6 +1026,8 @@ class RandomRain(CameraTransform):
         spray: np.ndarray | None = None,
         puddle_ripple: float = 1.0,
         lights: np.ndarray | None = None,
+        lamp_light: np.ndarray | None = None,
+        lamp_glow: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Relight the frame for overcast, veil it, draw the streaks, and wet the road.
@@ -1033,6 +1103,14 @@ class RandomRain(CameraTransform):
         if new_mean > 1e-5:
             out *= np.clip(original_mean / new_mean, 0.75, 1.25)
 
+        through = veil_transmission[..., None]
+        if lamp_light is not None:
+            # The traffic's lamps, lit, through the rain between them and
+            # the camera. Up to full scale here, which is what the road
+            # below reflects as it does any lamp in the picture; the rest
+            # of their light is added once the road and the spray are drawn.
+            out = out + np.minimum(lamp_light, 1.0) * through
+
         if draw_wetness:
             out = _apply_ground_wetness(
                 out,
@@ -1054,6 +1132,17 @@ class RandomRain(CameraTransform):
             # own veil is.
             share = spray[..., None]
             out = out * (1.0 - share) + airlight[None, None, :] * np.float32(_SPRAY_ALBEDO) * share
+
+        if lamp_light is not None and lamp_glow is not None:
+            # A lamp is many times full scale, and spray that hides a car
+            # leaves its lamps showing; and what the spray and the rain
+            # take out of the beam they scatter round it, as a glow that is
+            # the larger the more of them there is.
+            wet_air: np.ndarray | float = _GLOW_IN_RAIN
+            if spray is not None:
+                through = through * (1.0 - spray[..., None])
+                wet_air = _GLOW_IN_RAIN + (1.0 - _GLOW_IN_RAIN) * spray[..., None]
+            out = out + (lamp_light - np.minimum(lamp_light, 1.0)) * through + lamp_glow * wet_air
 
         return from_linear_unit(out, scale, is_integer, img.dtype)
 
@@ -1341,6 +1430,13 @@ _SPRAY_DENSITY = 0.9
 # one, at full strength.
 _MIST_DENSITY = 1.0
 _SPRAY_ALBEDO = 0.9
+# The glow round a lit lamp: the share of it there is in rain alone, with
+# no spray in front of the lamp; and, for lamps the picture already shows
+# burning, how far it reaches as a fraction of the diagonal and how strong
+# it is against the lamp's recorded light.
+_GLOW_IN_RAIN = 0.35
+_BURNING_GLOW_REACH = 0.012
+_BURNING_GLOW = 1.5
 # Rain on a puddle: the rate at which its reflection is twice as blurred as
 # still water's, and the most it is blurred by.
 _RIPPLE_RATE_MM_H = 15.0
