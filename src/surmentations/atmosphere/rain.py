@@ -122,8 +122,7 @@ from surmentations.utils.precipitation import (
 from surmentations.utils.road import (
     Lanes,
     RoadFrame,
-    road_frame,
-    road_lanes,
+    read_road,
     vehicle_spray,
     wheel_tracks,
 )
@@ -384,9 +383,12 @@ class RandomRain(CameraTransform):
             labels on the provider, for the vehicles and the road they are
             on, and does nothing without. Off by default because of what a
             single frame cannot say: which vehicles are moving, and which
-            way. Each road's direction of travel is drawn, and each vehicle
-            is given its own share of spray or none; a parked car may get a
-            plume, and a plume may trail the wrong way. See
+            way. Each plume lies along its own vehicle's heading, read off
+            its outline. Which end is the tail is read off tail lamps where
+            they show, and otherwise each road's direction of travel is
+            drawn; each vehicle is given its own share of spray or none. A
+            parked car may get a plume, and a plume may trail the wrong
+            way. See
             :func:`~surmentations.utils.road.vehicle_spray`.
         lamp_glint_range: at night, how many times full scale the lamps in
             the frame are taken to be when they light the rain, drawn per
@@ -828,9 +830,15 @@ class RandomRain(CameraTransform):
         road = lanes = lie = None
         if draw_wetness and labels is not None:
             on_road = class_weight(labels, _ON_THE_ROAD) > 0.5
-            road = road_frame(on_road | (labels == int(SceneClass.ROAD)))
-            if road is not None:
-                lanes = road_lanes(road, on_road, rng)
+            read = read_road(
+                linear_scene,
+                labels == int(SceneClass.ROAD),
+                on_road,
+                labels == int(SceneClass.VEHICLE),
+                rng,
+            )
+            if read is not None:
+                road, lanes = read
                 lie = water_lie(road, lanes, rng)
 
         puddle_coverage = self.py_random.uniform(*self.puddle_coverage_range)
@@ -906,11 +914,14 @@ class RandomRain(CameraTransform):
             "puddle_ripple": 1.0 + min(rain_rate / _RIPPLE_RATE_MM_H, _RIPPLE_MOST - 1.0),
         }
 
+        if draw_wetness and labels is not None:
+            drawn["lights"] = vehicle_lights(linear_scene, labels)
+
         # Spray, last: what is drawn for it comes after every other draw.
         spray = self.py_random.uniform(*self.spray_range)
         sprayed = False
         if spray > 0.0 and road is not None and film > 0.0 and labels is not None:
-            plumes = vehicle_spray(road, labels == int(SceneClass.VEHICLE), rng)
+            plumes = vehicle_spray(road, labels == int(SceneClass.VEHICLE), rng, linear_scene)
             if float(plumes.max()) > 0.0:
                 # Mist is not even: it is torn by the air the vehicle drags.
                 torn = value_noise(height, width, rng=rng, octaves=5, base_cells=6)
@@ -938,6 +949,7 @@ class RandomRain(CameraTransform):
         mirror_px: float | None = None,
         spray: np.ndarray | None = None,
         puddle_ripple: float = 1.0,
+        lights: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Relight the frame for overcast, veil it, draw the streaks, and wet the road.
@@ -1025,6 +1037,7 @@ class RandomRain(CameraTransform):
                 puddles=puddles,
                 mirror_px=mirror_px,
                 puddle_ripple=puddle_ripple,
+                lights=lights,
             )
 
         if spray is not None:
@@ -1311,7 +1324,7 @@ _LABEL_EDGE = 0.003
 # Spray: the optical depth of a plume at its densest, at full strength over
 # a soaked road; and how bright it is against the veil's own light, being
 # close to the ground and under the vehicle that throws it.
-_SPRAY_DENSITY = 1.5
+_SPRAY_DENSITY = 1.1
 _SPRAY_ALBEDO = 0.9
 # Rain on a puddle: the rate at which its reflection is twice as blurred as
 # still water's, and the most it is blurred by.
@@ -1348,10 +1361,10 @@ _PUDDLE_SCALE_M = 1.2
 # the noise the puddles are cut from, which runs from 0 to 1: enough that
 # most of a light covering of water is in the ruts and the gutters, and not
 # so much that a puddle cannot lie anywhere else.
-_PUDDLE_LIE = 0.3
+_PUDDLE_LIE = 0.45
 # Half the width of a puddle's edge on the same scale. Water has an edge: a
 # puddle that fades out over half its width is a stain.
-_PUDDLE_EDGE = 0.012
+_PUDDLE_EDGE = 0.02
 
 
 def _puddle_map(
@@ -1384,6 +1397,43 @@ def _puddle_map(
     level = float(np.quantile(ground, coverage))
     edge = _PUDDLE_EDGE
     return np.clip((level + edge - noise) / (2.0 * edge), 0.0, 1.0).astype(np.float32)
+
+
+# A vehicle's lamp that is lit: from this level in its brightest channel, in
+# linear light, and all of one from the second; no larger than this share
+# of the frame, which a white car's sunlit roof is; and taken to be this
+# many times full scale when a wet road reflects it.
+_VEHICLE_LIGHT_LEVEL = (0.7, 0.9)
+_VEHICLE_LIGHT_AREA = 0.0006
+_VEHICLE_LIGHT_OVER = 8.0
+# The mean linear level of a frame above which it is day, and how many
+# times its other channels a lamp's red has to be to be a tail lamp.
+_DAYLIGHT_LEVEL = 0.08
+_TAIL_RED = 2.0
+
+
+def vehicle_lights(linear_rgb: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """``[0, 1]`` weight of the vehicle lamps that are lit, ``(H, W)`` float32.
+
+    What is bright, small and on something labelled a vehicle: a tail lamp,
+    a headlamp, a brake light. Not a pale car in the sun, whose bright part
+    is a roof and not a point; by day only the red ones, since a white
+    point on a car in daylight is the sun on its glass; and nothing at all
+    where the lamps are off, since a dull red lens is not bright.
+    """
+    low, high = _VEHICLE_LIGHT_LEVEL
+    bright = np.clip((linear_rgb.max(axis=2) - low) / (high - low), 0.0, 1.0)
+    bright = bright * (labels == int(SceneClass.VEHICLE))
+    if float(linear_rgb.mean()) > _DAYLIGHT_LEVEL:
+        # By day a small bright thing on a car is the sun on its glass far
+        # more often than a headlamp. A red one is a tail lamp.
+        bright = bright * (linear_rgb[..., 0] > _TAIL_RED * linear_rgb[..., 1:].max(axis=2))
+    count, parts, stats, _centroids = cv2.connectedComponentsWithStats(
+        (bright > 0.0).astype(np.uint8), connectivity=8
+    )
+    small = stats[:, cv2.CC_STAT_AREA] <= max(4.0, _VEHICLE_LIGHT_AREA * labels.size)
+    small[0] = False
+    return (bright * small[parts]).astype(np.float32)
 
 
 # Where water collects on a road: against either kerb, within this share of
@@ -1896,6 +1946,7 @@ def _apply_ground_wetness(
     puddles: np.ndarray | None = None,
     mirror_px: float | None = None,
     puddle_ripple: float = 1.0,
+    lights: np.ndarray | None = None,
 ) -> np.ndarray:
     """Wet ground: a darker diffuse base plus a Fresnel-weighted mirror image.
 
@@ -1932,6 +1983,12 @@ def _apply_ground_wetness(
     factor a lamp's clipped pixels are raised by before they are reflected.
     A lamp's, and not every clipped pixel's: the lit road and the leaves
     round a lamp are clipped too and were not that bright.
+
+    ``lights`` is the weight of the vehicle lamps that are lit in the frame,
+    ``(H, W)``, where the scene's labels say what is a vehicle
+    (:func:`vehicle_lights`). A tail lamp is a few pixels at or near
+    clipping, and its long red reflection is the commonest thing on a wet
+    road in traffic.
 
     ``puddle_ripple`` is how much rougher than still water the puddles are,
     1 for still: every drop that lands in one sets rings going, and under
@@ -1970,6 +2027,18 @@ def _apply_ground_wetness(
     about_horizon, about_foot = about_horizon[band], about_foot[band]
     under_object = under_object[band]
     lamps = lamp_mask(linear)[..., None] if lamp_gain > 1.0 else None
+    if lights is not None and float(lights.max()) > 0.0:
+        # A vehicle's lamps, lit: reflected as a lamp is, at their own
+        # smaller over-range, by day as well as by night.
+        # Weighted so that it is in the long streak that they are this far
+        # over full scale, and close under the vehicle hardly at all: the
+        # streak takes every lamp many times higher (`_STREAK_LAMP_OVER`),
+        # and at a street lamp's strength the road under every car in
+        # daylight was a column of glare.
+        lamp_gain = max(lamp_gain, 2.0)
+        over = (_VEHICLE_LIGHT_OVER - 1.0) / (lamp_gain * _STREAK_LAMP_OVER - 1.0)
+        shining = (lights * np.float32(over))[..., None]
+        lamps = shining if lamps is None else np.maximum(lamps, shining)
     band_shape = (band_bottom - band_top, width)
 
     # A reflection that looks above the top of the frame sees something the
