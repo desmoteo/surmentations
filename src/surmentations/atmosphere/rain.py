@@ -109,9 +109,11 @@ from surmentations.utils.noise import value_noise
 from surmentations.utils.overcast import apply_overcast, cloud_cover
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
+    far_field_texture,
     focal_length_px,
     frustum_volume,
     gamma_dsd_slope,
+    marshall_palmer_slope,
     rain_extinction_coefficient,
     rain_number_density,
     raindrop_terminal_velocity,
@@ -409,6 +411,21 @@ class RandomRain(CameraTransform):
             hangs. Give a camera's own range where it is known: a city
             street is ``(20, 60)``, a motorway ``(90, 130)``. See
             :func:`~surmentations.utils.road.road_vehicles`.
+        distant_rain_range: how much of its grain the rain beyond the
+            drawn streaks keeps, drawn per call. The streaks are the drops
+            within ``distance_range_m``; the rest is a veil, and at 0 the
+            veil is an even grey, as fog is, which it was before. At 1 it
+            varies as a count of drops does: coarse and plain just beyond
+            the last streak drawn, where a pixel looks through a handful
+            of them, finer and fainter with distance, and smooth where
+            there are thousands. The grain is as long as those drops fall
+            during the exposure, it slants with the wind, and each
+            distance's share of it is in front of only what lies beyond
+            that distance, so the rain has the scene's depth in it: none
+            in front of a near wall but what was drawn there, all of it
+            in front of the far end of a road. Over that, the far veil
+            hangs in sheets. See
+            :func:`~surmentations.utils.precipitation.far_field_texture`.
         vehicle_lamp_range: how brightly the lamps of the traffic on a wet
             road are lit, drawn per call. 0, the default, leaves them as
             the photograph has them, which in one taken in the dry is off.
@@ -580,6 +597,11 @@ class RandomRain(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 2.0)),
         ]
+        distant_rain_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 2.0)),
+        ]
 
     def __init__(
         self,
@@ -611,6 +633,7 @@ class RandomRain(CameraTransform):
         spray_range: tuple[float, float] = (0.0, 0.0),
         traffic_speed_range_kmh: tuple[float, float] = (40.0, 130.0),
         vehicle_lamp_range: tuple[float, float] = (0.0, 0.0),
+        distant_rain_range: tuple[float, float] = (0.7, 1.2),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -648,6 +671,7 @@ class RandomRain(CameraTransform):
         self.spray_range = spray_range
         self.traffic_speed_range_kmh = traffic_speed_range_kmh
         self.vehicle_lamp_range = vehicle_lamp_range
+        self.distant_rain_range = distant_rain_range
 
     def _veil_beta_bounds(self, rain_rate_mm_h: float) -> tuple[float, float]:
         """Veil extinction range, derived from the rain rate unless overridden."""
@@ -954,7 +978,9 @@ class RandomRain(CameraTransform):
                 "blur_sigma": (self.definition_softness * blur_radius).astype(np.float32),
             },
             "angle": wind_angle,
-            "veil_transmission": np.exp(-veil_beta * lift_sky(depth_pm, sky)).astype(np.float32),
+            # The depth of air in front of each pixel for now: the veil is
+            # made of it at the end, once its grain is drawn.
+            "veil_transmission": lift_sky(depth_pm, sky),
             "sky": sky,
             "overcast": overcast,
             "lamp_glint": self.py_random.uniform(*self.lamp_glint_range),
@@ -1016,7 +1042,31 @@ class RandomRain(CameraTransform):
                     cores = np.maximum(cores, burning)
                 drawn["lamp_light"], drawn["lamp_glow"], drawn["lights"] = light, glow, cores
                 lit = True
+        # The rain too far off to draw drop by drop, last of all the draws:
+        # not an even grey, but the grain of a count of drops, in front of
+        # each thing by as much as there is air in front of it.
+        distant = self.py_random.uniform(*self.distant_rain_range)
+        distant_seed = self.py_random.randint(0, 2**31 - 1)
+        thickness = np.float32(veil_beta) * drawn["veil_transmission"]
+        if distant > 0.0 and veil_beta > 0.0:
+            slope = marshall_palmer_slope(rain_rate)
+            falls = float(raindrop_terminal_velocity(_VEIL_DROP_SLOPES / slope))
+            thickness *= far_field_texture(
+                drawn["veil_transmission"],
+                np.random.default_rng(distant_seed),
+                rain_number_density(rain_rate, 0.0),
+                focal,
+                self.distance_range_m[1],
+                focal * falls * exposure,
+                wind_angle,
+                distant,
+            )
+        np.negative(thickness, out=thickness)
+        drawn["veil_transmission"] = np.exp(thickness, out=thickness).astype(
+            np.float32, copy=False
+        )
         record_draw(
+            distant_rain=distant,
             spray=spray,
             spray_drawn=sprayed,
             traffic_speed_kmh=traffic_speed,
@@ -1473,6 +1523,10 @@ _SPRAY_DENSITY = 0.9
 # one, at full strength.
 _MIST_DENSITY = 1.0
 _SPRAY_ALBEDO = 0.9
+# The drop that stands for the veil's: the mean diameter weighted by what
+# each drop takes out of a beam, in units of one over the distribution's
+# slope. It sets how far the far rain's grain is smeared.
+_VEIL_DROP_SLOPES = 3.0
 # The glow round a lit lamp: the share of it there is in rain alone, with
 # no spray in front of the lamp; and, for lamps the picture already shows
 # burning, how far it reaches as a fraction of the diagonal and how strong

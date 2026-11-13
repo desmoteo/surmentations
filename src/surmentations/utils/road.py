@@ -1442,6 +1442,7 @@ def vehicle_lamps(
     linear_rgb: np.ndarray | None = None,
     shape: tuple[int, int] | None = None,
     lit_share: tuple[float, float] | None = None,
+    lit: list[tuple[RoadVehicle, list[tuple[float, float]]]] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The lamps of a road's traffic, lit: their light, their glow, and where they are.
 
@@ -1475,7 +1476,10 @@ def vehicle_lamps(
 
     ``frame`` is the road the traffic is on, and may be ``None`` for
     vehicles that were read without one (:func:`vehicles_as_seen`); the
-    frame's ``shape`` is then given in its place.
+    frame's ``shape`` is then given in its place. A list given as ``lit``
+    has each vehicle that was lit added to it, with the column and row of
+    each of its lamps: for a caller with more to do with a lit vehicle
+    than draw its lamps, as throwing its beam on the road.
 
     Three things come back, each the size of the frame: the lamps' own
     light, linear RGB over the scene's; the glow each throws into wet air,
@@ -1580,6 +1584,8 @@ def vehicle_lamps(
                 for x, y, radii in places
                 if 0 <= int(y) < height and 0 <= int(x) < width and whose[int(y), int(x)] == number
             ]
+        if lit is not None and places:
+            lit.append((vehicle, [(x, y) for x, y, _radii in places]))
         for x, y, radii in places:
             spot(light, (x, y), radii, tint * peak)
             wide = (_GLOW_SIZE * radii[0], _GLOW_SIZE * radii[1])

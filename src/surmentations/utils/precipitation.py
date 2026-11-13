@@ -38,7 +38,10 @@ ones instead of evenly-sized confetti.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
+
+from surmentations import mode
 
 # Marshall-Palmer slope: Lambda = MP_SLOPE_COEFF * R**MP_SLOPE_EXPONENT, in
 # mm^-1 for a rain rate R in mm/h.
@@ -90,9 +93,7 @@ def gamma_dsd_slope(rain_rate_mm_h: float, shape_mu: float = DEFAULT_DSD_SHAPE) 
     return float((3.67 + shape_mu) / median_volume_diameter)
 
 
-def _gamma_dsd_weights(
-    diameter_mm: np.ndarray, slope: float, shape_mu: float
-) -> np.ndarray:
+def _gamma_dsd_weights(diameter_mm: np.ndarray, slope: float, shape_mu: float) -> np.ndarray:
     """Unnormalised ``N(D)`` on a grid, guarding ``0^0`` at the origin."""
     safe = np.maximum(diameter_mm, 1e-6)
     return safe**shape_mu * np.exp(-slope * safe)
@@ -361,7 +362,14 @@ def width_cut_for_budget(
             slope, d_min, d_max, near_m, far_m, focal_px, width, size_scale, shape_mu=shape_mu
         )
         base = resolvable_fraction(
-            slope, d_min, d_max, near_m, far_m, focal_px, floor_width_px, size_scale,
+            slope,
+            d_min,
+            d_max,
+            near_m,
+            far_m,
+            focal_px,
+            floor_width_px,
+            size_scale,
             shape_mu=shape_mu,
         )
         if base <= 0.0:
@@ -619,7 +627,14 @@ def sample_resolvable_particles(
         return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=np.float32)
 
     acceptance = resolvable_fraction(
-        slope, d_min, d_max, near_m, far_m, focal_px, min_width_px, size_scale,
+        slope,
+        d_min,
+        d_max,
+        near_m,
+        far_m,
+        focal_px,
+        min_width_px,
+        size_scale,
         shape_mu=shape_mu,
     )
     acceptance = max(acceptance, 1e-4)
@@ -656,3 +671,213 @@ def sample_resolvable_particles(
     all_d = np.concatenate(diameters)[:count]
     all_z = np.concatenate(distances)[:count]
     return all_d.astype(np.float32), all_z.astype(np.float32)
+
+
+# The far field. Bands of distance double from one to the next, and the
+# texture is worked out for this many of them at most; a band whose texture
+# would vary by less than this share of its own veil is smooth, and so is
+# everything beyond it.
+_FAR_BANDS = 5
+# Lit from the lens, the first band returns half the light and the second a
+# quarter: the grain is theirs, and the rest is drawn even.
+_LIT_BANDS = 2
+_FAR_SMOOTH = 0.05
+# The side of the tile a band's grain is made on in fast mode.
+_FAR_TILE = 512
+# The lens and the pixel spread a point over about this many pixels, as the
+# sigma of a Gaussian: a drop far smaller than a pixel is seen through it.
+_FAR_PSF_PX = 0.7
+# A band with fewer particles than this to a pixel is counted out, particle
+# by particle; one with more varies as a smooth quantity does.
+_FAR_COUNTED = 0.75
+# Of the particles in a volume, the share that makes its veil: extinction
+# goes with the square of the diameter, and for an exponential distribution
+# of sizes the effective number is a sixth of the count.
+_FAR_EFFECTIVE = 1.0 / 6.0
+# Rain and snow come in sheets. How much the far veil's thickness varies
+# from one to the next, and how many sheets there are across the frame.
+_SHEET_DEPTH = 0.22
+_SHEET_CELLS = 5
+
+
+def far_field_texture(
+    depth_m: np.ndarray,
+    rng: np.random.Generator,
+    number_density: float,
+    focal_px: float,
+    near_m: float,
+    fall_px_at_1m: float,
+    angle_deg: float = 0.0,
+    strength: float = 1.0,
+    lit_from_lens: bool = False,
+) -> np.ndarray:
+    """How the veil of distant rain or snow varies across a frame, as a multiple of its mean.
+
+    ``(H, W)`` float32, about 1: the optical depth of the veil in front of
+    each pixel is its smooth value times this.
+
+    A transform draws the particles near the lens one by one and leaves the
+    rest to a veil, which is their average: the same grey in front of every
+    pixel at one distance. It is the average of a countable number of
+    things. Between the last particle drawn and the distance at which there
+    are thousands in front of every pixel, the air holds a few, then tens,
+    and their number varies from pixel to pixel as a count does, by its own
+    square root. That variation is the fine streaked grain of rain against
+    a dark doorway and the speckle of snow against a wood, and a veil
+    without it is fog.
+
+    It is drawn in bands of distance, each twice as deep as the one before,
+    from ``near_m``, where the transform's own particles stop. In a band
+    at distance ``z`` and of depth ``dz`` a pixel looks down a column of
+    air ``(z / f)^2 dz`` in volume, holding
+    ``number_density * (z / f)^2 * dz`` particles; the veil there varies by
+    one over the square root of the effective number of them. The grain is
+    as long as the band's particles fall during the exposure,
+    ``fall_px_at_1m / z`` pixels along ``angle_deg`` from straight down,
+    and as wide as the lens makes a point. Nearer bands are coarse and
+    strong, far ones fine and faint, until there is nothing left to see.
+
+    **It is in the scene.** Each band counts only for the part of it that
+    lies in front of what the pixel shows (``depth_m``): there is no rain
+    between the camera and a wall three metres off but what was drawn
+    there, and the full depth of it in front of a hillside. A veil
+    textured this way has the scene's own depth in it, where particles
+    drawn over the frame have none.
+
+    **And it comes in sheets**: over all of it, the far veil is thicker in
+    one place than another by a fifth, in upright curtains a few to a
+    frame.
+
+    **Lit from the lens**, at night, by the camera's own lamp
+    (``lit_from_lens``), what comes back from a band is not in proportion
+    to its depth but to its depth over the square of its distance: the
+    nearest band is half of it, and the texture is that band's. The
+    scene's depth then plays no part, and ``depth_m`` gives only the
+    frame's shape.
+
+    ``number_density`` is in particles per cubic metre, of all sizes;
+    ``strength`` scales the variation, 0 giving the smooth veil back.
+    """
+    height, width = depth_m.shape
+    if strength <= 0.0 or number_density <= 0.0:
+        return np.ones((height, width), dtype=np.float32)
+    depth = depth_m.astype(np.float32, copy=False)
+    reach = np.inf if lit_from_lens else float(depth.max())
+    carried = np.zeros((height, width), dtype=np.float32)
+    share = np.empty((height, width), dtype=np.float32)
+    # In fast mode each band's grain is made on a tile and laid over the
+    # frame, a different way round and from a different corner for each
+    # band: a grain a pixel or two across has no shape to repeat, and the
+    # scene's own depth, which is not tiled, is what gives it one.
+    tile = (min(height, _FAR_TILE), min(width, _FAR_TILE)) if mode.fast() else (height, width)
+    effective = number_density * _FAR_EFFECTIVE
+    slant = np.deg2rad(angle_deg)
+    front = near_m
+    white: np.ndarray | None = None
+    for _band in range(_LIT_BANDS if lit_from_lens else _FAR_BANDS):
+        back = 2.0 * front
+        if front >= reach:
+            break
+        middle = float(np.sqrt(front * back))
+        per_pixel = effective * (middle / focal_px) ** 2 * (back - front)
+        kernel = _grain_kernel(max(fall_px_at_1m / middle, 0.0), slant)
+        sharp = float((kernel**2).sum())
+        varies = float(np.sqrt(sharp / max(per_pixel, 1e-6)))
+        if varies < _FAR_SMOOTH:
+            break
+        more: np.ndarray
+        if per_pixel < _FAR_COUNTED:
+            # Fewer than one to a pixel: counted out, each where it is.
+            # Most pixels of a sparse band hold none and a few hold one,
+            # which is a scatter of dots and nothing like an even grain.
+            count = int(rng.poisson(per_pixel * tile[0] * tile[1]))
+            places = rng.integers(0, tile[0] * tile[1], size=count)
+            counted = np.bincount(places, minlength=tile[0] * tile[1]).astype(np.float32)
+            more = np.asarray(
+                cv2.filter2D(counted.reshape(tile), -1, kernel, borderType=cv2.BORDER_REFLECT)
+            )
+            more = more * np.float32(1.0 / per_pixel) - np.float32(1.0)
+        else:
+            # One field of noise for every band, moved for each: a band's
+            # grain is its own length, so two bands cut from one field are
+            # no more alike than two fields, and drawing a field is half
+            # the cost of a band.
+            if white is None:
+                white = rng.standard_normal(tile, dtype=np.float32)
+            shift = (int(rng.integers(tile[0])), int(rng.integers(tile[1])))
+            moved = np.ascontiguousarray(np.roll(white, shift, axis=(0, 1)))
+            grain = np.asarray(cv2.filter2D(moved, -1, kernel, borderType=cv2.BORDER_REFLECT))
+            # A count is never below nothing and now and then well above
+            # its mean: the variation is one-sided, as a log-normal's is.
+            spread = float(np.sqrt(np.log1p(varies**2)))
+            grain = grain * np.float32(spread / np.sqrt(sharp)) - np.float32(0.5 * spread**2)
+            more = np.exp(grain, out=grain) - np.float32(1.0)
+        more = _laid_over(more, (height, width), rng)
+        if lit_from_lens:
+            carried += more * np.float32(near_m * (1.0 / front - 1.0 / back))
+        else:
+            np.subtract(depth, np.float32(front), out=share)
+            np.clip(share, 0.0, np.float32(back - front), out=share)
+            share *= more
+            carried += share
+        front = back
+    carried *= np.float32(strength)
+    if lit_from_lens:
+        carried += np.float32(1.0)
+        return np.maximum(carried, 0.0, out=carried)
+    texture = carried
+    np.divide(texture, np.maximum(depth, np.float32(1e-3)), out=texture)
+    texture += np.float32(1.0)
+    if _SHEET_DEPTH > 0.0:
+        small = (max(2, width // 8), max(2, height // 8))
+        cells = (max(2, _SHEET_CELLS // 2), _SHEET_CELLS)
+        coarse = np.tanh(rng.standard_normal(cells, dtype=np.float32))
+        sheets = np.asarray(cv2.resize(coarse, small, interpolation=cv2.INTER_CUBIC))
+        hung = np.asarray(cv2.resize(sheets, (width, height), interpolation=cv2.INTER_LINEAR))
+        hung = hung * np.float32(_SHEET_DEPTH * min(strength, 1.0))
+        # Of the veil beyond where the drawn particles stop, and by the
+        # frame's own depth: a sheet hangs behind a near wall, not on it.
+        np.divide(np.float32(near_m), np.maximum(depth, np.float32(1e-3)), out=share)
+        np.subtract(np.float32(1.0), share, out=share)
+        np.clip(share, 0.0, 1.0, out=share)
+        share *= hung
+        share += np.float32(1.0)
+        texture *= share
+    return np.maximum(texture, 0.0, out=texture)
+
+
+def _laid_over(tile: np.ndarray, shape: tuple[int, int], rng: np.random.Generator) -> np.ndarray:
+    """A tile repeated over a frame of ``shape``, from a corner and a way round of its own.
+
+    The tile itself where it is already the frame's size.
+    """
+    if tile.shape == shape:
+        return tile
+    if rng.integers(2):
+        tile = tile[::-1]
+    if rng.integers(2):
+        tile = tile[:, ::-1]
+    shift = (int(rng.integers(tile.shape[0])), int(rng.integers(tile.shape[1])))
+    tile = np.ascontiguousarray(np.roll(tile, shift, axis=(0, 1)))
+    over: np.ndarray = cv2.copyMakeBorder(
+        tile, 0, shape[0] - tile.shape[0], 0, shape[1] - tile.shape[1], cv2.BORDER_WRAP
+    )
+    return over
+
+
+def _grain_kernel(long_px: float, slant_rad: float) -> np.ndarray:
+    """What one far particle looks like: a line as long as it falls, through the lens's blur.
+
+    A float32 kernel that sums to 1, ``long_px`` long at ``slant_rad`` from
+    straight down, widened by a Gaussian the size of the lens's own blur.
+    """
+    half = int(np.ceil(0.5 * long_px + 3.0 * _FAR_PSF_PX))
+    size = 2 * half + 1
+    ys, xs = np.mgrid[-half : half + 1, -half : half + 1].astype(np.float32)
+    along = xs * np.float32(np.sin(slant_rad)) + ys * np.float32(np.cos(slant_rad))
+    aside = xs * np.float32(np.cos(slant_rad)) - ys * np.float32(np.sin(slant_rad))
+    past = np.maximum(np.abs(along) - np.float32(0.5 * long_px), 0.0)
+    kernel = np.exp(-0.5 * (aside**2 + past**2) / np.float32(_FAR_PSF_PX**2))
+    assert kernel.shape == (size, size)
+    result: np.ndarray = (kernel / kernel.sum()).astype(np.float32)
+    return result

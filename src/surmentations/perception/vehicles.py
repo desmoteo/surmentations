@@ -65,6 +65,17 @@ LAMP_PROMPTS = ("a car headlight", "a car tail light")
 VEHICLE_PROMPTS = ("a car", "a van", "a truck", "a bus", "a motorcycle")
 VEHICLE_KINDS = ("car", "van", "truck", "bus", "motorcycle")
 HEAVY_KINDS = frozenset({"truck", "bus"})
+# And, in the same look at the whole frame, the street lamps: a photograph
+# taken by day has them off, and a frame made into a night one is lit by
+# them. A post is a box this many times taller than wide, at least, and
+# this share of the frame's height; a lamp's head is a box no taller than
+# this many times its width, found in the top of a post's.
+STREET_LAMP_PROMPTS = ("a street light",)
+_POST_SCORE = 0.2
+_POST_TALL = 1.6
+_POST_LEAST = 0.05
+_HEAD_FLAT = 1.25
+_HEAD_IN_TOP = 0.1
 # A vehicle found is believed at this score; at least this share of its box
 # is labelled vehicle; and at least this share of it is the outline it is
 # taken to be part of.
@@ -173,6 +184,96 @@ def vehicle_outlines(
     return found
 
 
+def _one_each(rows: list[tuple[float, ...]], groups: bool = True) -> list[tuple[float, ...]]:
+    """Of boxes a detector found, those that are each one thing, surest first.
+
+    A row is left, top, right, bottom, kind, score and area. Dropped are
+    the same thing found twice, a box that holds the middles of two smaller
+    ones, which is a group, and most of a thing found again as a thing.
+    ``groups`` false keeps the second kind: a row of lamp posts down a
+    road stands, in the picture, inside the box of the nearest.
+    """
+    rows = sorted(rows, key=lambda row: -row[5])
+
+    def shared(one: tuple[float, ...], other: tuple[float, ...]) -> float:
+        """The area two boxes have in common."""
+        across = min(one[2], other[2]) - max(one[0], other[0])
+        down = min(one[3], other[3]) - max(one[1], other[1])
+        return max(across, 0.0) * max(down, 0.0)
+
+    # The same thing twice, first: or a thing found twice would count as
+    # two when the next step asks what a box holds.
+    once: list[tuple[float, ...]] = []
+    for row in rows:
+        if all(
+            shared(row, other) <= _SAME_VEHICLE * (row[6] + other[6] - shared(row, other))
+            for other in once
+        ):
+            once.append(row)
+    single = []
+    for row in once:
+        held = sum(
+            1
+            for other in once
+            if other is not row
+            and other[6] < _GROUP_OF * row[6]
+            and row[0] <= 0.5 * (other[0] + other[2]) <= row[2]
+            and row[1] <= 0.5 * (other[1] + other[3]) <= row[3]
+        )
+        if held < 2 or not groups:
+            single.append(row)
+    kept: list[tuple[float, ...]] = []
+    for row in single:
+        if not any(
+            shared(row, other) > _INSIDE * min(row[6], other[6])
+            and min(row[6], other[6]) > _ALIKE * max(row[6], other[6])
+            for other in kept
+        ):
+            kept.append(row)
+    return kept
+
+
+def lamp_posts(found: np.ndarray, frame_height: int) -> np.ndarray:
+    """The street lamps among the boxes a detector found, one row to a lamp.
+
+    ``found`` has a row for each box: left, top, right, bottom, anything,
+    and the score. A detector asked for a street light answers with the
+    whole lamp, post and arm and head, and with the head alone. A post is
+    a tall box; its heads are the flat boxes at the very top of it, two for
+    a column with two arms, or the middle of its top where there is none.
+
+    A row of the result is one head: its post's left, top, right and
+    bottom, the column and row of the head, and the score. The foot of the post, where
+    it stands on the ground, is the middle of its bottom.
+    """
+    posts: list[tuple[float, ...]] = []
+    heads: list[tuple[float, float, float]] = []
+    for x0, y0, x1, y1, _kind, score in found.reshape(-1, 6).tolist():
+        wide, tall = max(x1 - x0, 1e-3), max(y1 - y0, 1e-3)
+        if score < _POST_SCORE:
+            continue
+        if tall >= _POST_TALL * wide and tall >= _POST_LEAST * frame_height:
+            posts.append((x0, y0, x1, y1, 0.0, score, wide * tall))
+        elif tall <= _HEAD_FLAT * wide:
+            heads.append((0.5 * (x0 + x1), 0.5 * (y0 + y1), score))
+    lamps = []
+    for x0, y0, x1, y1, _kind, score, _area in _one_each(posts, groups=False):
+        # A head is at the top of its post and no lower: a flat box further
+        # down the post's is the head of the next lamp along the road.
+        slack = 0.15 * (x1 - x0)
+        mine = [
+            head
+            for head in heads
+            if x0 - slack <= head[0] <= x1 + slack
+            and y0 - slack <= head[1] <= y0 + _HEAD_IN_TOP * (y1 - y0)
+        ]
+        # Both heads of a column with two arms; the middle of the top
+        # where the detector boxed none.
+        for head_x, head_y, _head_score in mine[:2] or [(0.5 * (x0 + x1), y0, 0.0)]:
+            lamps.append((x0, y0, x1, y1, head_x, head_y, score))
+    return np.array(lamps, dtype=np.float32).reshape(-1, 7)
+
+
 def separate_vehicles(found: np.ndarray, vehicles: np.ndarray) -> np.ndarray:
     """The boxes a detector found that are each one vehicle, surest first.
 
@@ -195,46 +296,7 @@ def separate_vehicles(found: np.ndarray, vehicles: np.ndarray) -> np.ndarray:
         area = float((right - left) * (bottom - top))
         if score >= _VEHICLE_SCORE and inside >= _VEHICLE_FILL * area:
             rows.append((float(left), float(top), float(right), float(bottom), kind, score, area))
-    rows.sort(key=lambda row: -row[5])
-
-    def shared(one: tuple[float, ...], other: tuple[float, ...]) -> float:
-        """The area two boxes have in common."""
-        across = min(one[2], other[2]) - max(one[0], other[0])
-        down = min(one[3], other[3]) - max(one[1], other[1])
-        return max(across, 0.0) * max(down, 0.0)
-
-    # The same vehicle twice, first: or a vehicle found twice would count
-    # as two when the next step asks what a box holds.
-    once: list[tuple[float, ...]] = []
-    for row in rows:
-        if all(
-            shared(row, other) <= _SAME_VEHICLE * (row[6] + other[6] - shared(row, other))
-            for other in once
-        ):
-            once.append(row)
-    # Then the boxes that are several vehicles: those that hold the middles
-    # of two smaller ones.
-    single = []
-    for row in once:
-        held = sum(
-            1
-            for other in once
-            if other is not row
-            and other[6] < _GROUP_OF * row[6]
-            and row[0] <= 0.5 * (other[0] + other[2]) <= row[2]
-            and row[1] <= 0.5 * (other[1] + other[3]) <= row[3]
-        )
-        if held < 2:
-            single.append(row)
-    # And most of a vehicle found again as a vehicle.
-    kept: list[tuple[float, ...]] = []
-    for row in single:
-        if not any(
-            shared(row, other) > _INSIDE * min(row[6], other[6])
-            and min(row[6], other[6]) > _ALIKE * max(row[6], other[6])
-            for other in kept
-        ):
-            kept.append(row)
+    kept = _one_each(rows)
     return np.array([row[:6] for row in kept], dtype=np.float32).reshape(-1, 6)
 
 
@@ -420,6 +482,14 @@ class VehicleViewEstimator(ABC):
         out, or returned unread, is read by colour by whoever asks.
         """
 
+    def street_lamps(self, image: np.ndarray) -> np.ndarray:
+        """The street lamps of one ``(H, W, 3)`` frame, a row to each, where the reader finds them.
+
+        As :func:`lamp_posts` returns them: the post's box, its head and
+        the score. None here; an estimator that can find them says so.
+        """
+        return np.zeros((0, 7), dtype=np.float32)
+
 
 class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
     """Vehicle views from an open-vocabulary detector asked for lamps, the shipped default.
@@ -502,6 +572,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         self._mean = torch.tensor(pictures.image_mean, device=self.device).view(1, 3, 1, 1)
         self._std = torch.tensor(pictures.image_std, device=self.device).view(1, 3, 1, 1)
         self._words: dict[tuple[str, ...], Any] = {}
+        self._seen: tuple[Any, np.ndarray] | None = None
 
     def _find(self, picture: np.ndarray, prompts: tuple[str, ...], least: float) -> np.ndarray:
         """What the detector finds in a square picture, one row to a box.
@@ -539,6 +610,32 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         scores = found["scores"].float().cpu().numpy().reshape(-1, 1)
         return np.hstack([boxes, kinds, scores]).astype(np.float32)
 
+    def _whole_frame(self, image: np.ndarray) -> np.ndarray:
+        """What stands in a whole 8-bit frame: its vehicles and its street lamps, as found.
+
+        One pass, asked for both, and kept for the frame it was made for:
+        the vehicles and the lamps of one frame are asked for one after
+        the other.
+        """
+        height, width = image.shape[:2]
+        key = (image.shape, hash(image[:: max(1, height // 32), :: max(1, width // 32)].tobytes()))
+        if self._seen is None or self._seen[0] != key:
+            whole = np.full((max(height, width), max(height, width), 3), 114, dtype=np.uint8)
+            whole[:height, :width] = image
+            least = min(_VEHICLE_SCORE, _POST_SCORE)
+            self._seen = (key, self._find(whole, VEHICLE_PROMPTS + STREET_LAMP_PROMPTS, least))
+        return self._seen[1]
+
+    def street_lamps(self, image: np.ndarray) -> np.ndarray:
+        """The street lamps of one ``(H, W, 3)`` frame (:func:`lamp_posts`).
+
+        From the same look at the whole frame that finds its vehicles.
+        """
+        if image.dtype != np.uint8:
+            image = np.clip(np.rint(image.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
+        found = self._whole_frame(image)
+        return lamp_posts(found[found[:, 4] >= len(VEHICLE_PROMPTS)], image.shape[0])
+
     def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
         """The view of each vehicle of one ``(H, W, 3)`` frame, largest first.
 
@@ -554,9 +651,8 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
             return []
         # The vehicles first, in the whole frame, to tell apart the ones
         # the labels run together.
-        whole = np.full((max(height, width), max(height, width), 3), 114, dtype=np.uint8)
-        whole[:height, :width] = image
-        found = self._find(whole, VEHICLE_PROMPTS, _VEHICLE_SCORE)
+        found = self._whole_frame(image)
+        found = found[found[:, 4] < len(VEHICLE_PROMPTS)]
         apart = split_outlines(vehicles, separate_vehicles(found, vehicles))
         none = np.zeros((0, 5), dtype=np.float32)
         views = [VehicleView(box, 0.0, 0.0, none, mask, kind) for box, mask, kind in apart]

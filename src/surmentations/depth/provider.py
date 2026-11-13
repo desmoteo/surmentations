@@ -173,6 +173,7 @@ class _Scene:
         "labels",
         "metric",
         "pitch",
+        "street_lamps",
         "vehicles",
     )
 
@@ -193,6 +194,7 @@ class _Scene:
         self.labels: np.ndarray | None = None
         self.geometry: InstallationGeometry | None = None
         self.vehicles: list[VehicleView] | None = None
+        self.street_lamps: np.ndarray | None = None
         self.disparity: np.ndarray | None = None
         self.fov: float | None = None
         self.pitch: float | None = None
@@ -438,8 +440,14 @@ class SharedDepthProvider:
         them there is nothing to read, and a scene with no vehicle labelled
         is not shown to the network at all.
         """
-        scene.vehicles = None
-        if self._vehicles is None or scene.labels is None:
+        scene.vehicles = scene.street_lamps = None
+        if self._vehicles is None:
+            return
+        # The reader's street lamps need no labels: they are found in the
+        # frame, and a night frame is lit by them whatever else is in it.
+        lamps = np.asarray(self._vehicles.street_lamps(frame), dtype=np.float32).reshape(-1, 7)
+        scene.street_lamps = lamps
+        if scene.labels is None:
             return
         named = scene.labels == int(SceneClass.VEHICLE)
         if not named.any():
@@ -459,6 +467,18 @@ class SharedDepthProvider:
         """
         with self._lock:
             return self._scene_for(image).vehicles
+
+    def get_street_lamps(self, image: np.ndarray) -> np.ndarray | None:
+        """The street lamps of ``image``'s scene as the vehicle reader found them, or ``None``.
+
+        One row to a lamp: the left, top, right and bottom of its post in
+        pixels, the column and row of its head, and a score
+        (:func:`~surmentations.perception.vehicles.lamp_posts`). ``None``
+        when the provider has no vehicle reader; an empty array for a scene
+        in which it found none, or for a reader that does not look for them.
+        """
+        with self._lock:
+            return self._scene_for(image).street_lamps
 
     def get_labels(self, image: np.ndarray) -> np.ndarray | None:
         """What each pixel of ``image``'s scene is, or ``None`` with nothing to say.
