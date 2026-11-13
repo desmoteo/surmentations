@@ -286,13 +286,25 @@ flowchart TD
     DRAW --> OCC["occupancy layer"]
     OCC --> ALPHA["coverage = 1 - e^-occupancy"]
     RATE --> VIS["visibility to beta to e^-beta z"]
-    VIS --> COMP["composite: veil, then streaks"]
-    ALPHA --> COMP
-    COMP --> WET{"wet ground?"}
-    WET -->|yes| FRESNEL["darken diffuse, plus Fresnel mirror about the road's far end"]
-    WET -->|no| DONE([output])
-    FRESNEL --> DONE
+    VIS --> VEIL["veil over the scene"]
+    VEIL --> WET{"wet ground?"}
+    WET -->|yes| FRESNEL["darken diffuse, plus Fresnel mirror about the road's far end;<br/>the traffic's lamps and spray"]
+    WET -->|no| LAST
+    FRESNEL --> LAST["streaks over everything, last"]
+    ALPHA --> LAST
+    LAST --> DONE([output])
 ```
+
+**The order is that of the scene, from the far end to the lens.** The veil
+is the rain too far off to resolve, between the camera and the scene. The
+wet road, the traffic's lamps and its spray are in the scene. The streaks
+are the drops near enough to see one by one, most of them within a few
+metres of the lens, and nothing in the scene is in front of them: they are
+drawn last, over everything else. They used to be drawn with the veil, and
+the road was then wetted and the spray laid over them, so rain in front of
+a wet road was darkened and mirrored with it and rain in front of spray was
+painted out. The camera's exposure still counts them: it is set from the
+veiled frame and the share of it the streaks will cover.
 
 The **resolvability cut is on projected width, not diameter**. A 2 mm drop
 at 1 m is 0.7 px wide and worth drawing; the same drop at 20 m is 0.035 px
@@ -406,10 +418,15 @@ flowchart TD
     RATE --> VEIL["V = 0.6/R to beta"]
     DEPTH["depth and normals"] --> ACC["upward^falloff x patchiness"]
     ACC --> SETTLE["settled snow"]
-    PROJ --> COMP["composite"]
-    VEIL --> COMP
+    VEIL --> COMP["composite: veil, settled snow, then flakes last"]
     SETTLE --> COMP
+    PROJ --> COMP
 ```
+
+The flakes are drawn last, for the reason the rain's streaks are: they are
+in the air near the lens, in front of the ground and what has settled on
+it. Drawn first, as they used to be, they were buried under the settled
+snow wherever it lay.
 
 The melted-equivalent conversion is the step that decides whether snow is
 visible at all. A snowflake's *physical* diameter is 2-4x its melted-water
