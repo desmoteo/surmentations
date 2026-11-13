@@ -1099,7 +1099,8 @@ class RandomSnow(CameraTransform):
                 tracks = wheel_tracks(frame, lanes, band, rng, ragged, worn, floor)
                 # On the road, not on what stands on it: the lanes run
                 # under the vehicles, and the snow on a roof has no ruts.
-                tracks = tracks * (1.0 - cv2.GaussianBlur(on_road.astype(np.float32), (0, 0), 1.0))
+                standing = np.zeros(road.shape, np.float32) if on_road is None else on_road
+                tracks = tracks * (1.0 - cv2.GaussianBlur(standing.astype(np.float32), (0, 0), 1.0))
                 low, high = _TRACK_CLEARED
                 cleared = tracks * np.float32(low + (high - low) * traffic)
                 # How much snow went from each pixel, which is how much of
