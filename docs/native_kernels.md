@@ -720,7 +720,8 @@ PyAV binds FFmpeg's libraries into Python. It is an optional extra
   slices are the binary's to the byte (the streams differ in one message,
   which names the libx264 release that wrote them and is never put at risk
   of loss). With error concealment on, the two decoders gave the same frame
-  every time. With it off, a lost slice shows whatever the decoder's frame
+  every time on x86-64; on GitHub's arm64 runner they did not, by a level
+  or two, with the same two releases. With it off, a lost slice shows whatever the decoder's frame
   buffer held: in process that is the zeroed, green hole every time, and
   from the binary sometimes that and sometimes a stale picture, depending
   on which buffer it reused. 15 of 120 streams differed, all of them

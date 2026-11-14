@@ -137,7 +137,7 @@ def _relight_fast(linear_rgb: np.ndarray, amount: float, sky: np.ndarray | None)
     mean_grey = max(float(grey.mean()), 1e-6)
     desaturate = _SATURATION_LOSS * amount
 
-    cloud = np.zeros(3, dtype=np.float32)
+    cloud: np.ndarray = np.zeros(3, dtype=np.float32)
     cover_scale = 0.0
     if sky is not None:
         cloud_level = float(np.percentile(raw[sky > 0.5], 85.0)) * _CLOUD_LEVEL

@@ -49,8 +49,9 @@ dependencies = [
 # carry their own FFmpeg, built with GPL components (libx264, libx265).
 codec = ["av>=12"]
 # The code reference site in docs/site, generated from the source: autodoc for
-# Python, Hawkmoth through libclang for C.
-docs = ["sphinx>=8", "myst-parser>=4", "furo", "hawkmoth>=0.19", "libclang>=18"]
+# Python, Hawkmoth through libclang for C. pytest because the site documents
+# the tests too, and autodoc has to import them to read them.
+docs = ["sphinx>=8", "myst-parser>=4", "furo", "hawkmoth>=0.19", "libclang>=18", "pytest>=8.0"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",

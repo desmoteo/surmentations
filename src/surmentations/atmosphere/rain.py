@@ -2366,9 +2366,9 @@ def _apply_ground_wetness(
     if puddles is not None:
         water = (puddles[top:bottom] * film)[..., None]
     mirror_weight = fresnel * water + film_fresnel * (1.0 - water) * film * _FILM_GLOSS
-    mirrored = sharp * water + rough * (1.0 - water)
+    reflection_seen = sharp * water + rough * (1.0 - water)
 
-    wet = wet_albedo(dry, darkening) * (1.0 - mirror_weight) + mirrored * mirror_weight
+    wet = wet_albedo(dry, darkening) * (1.0 - mirror_weight) + reflection_seen * mirror_weight
     w = wetness[top:bottom, :, None]
     out[top:bottom] = (dry * (1.0 - w) + wet * w).astype(linear.dtype)
     return out

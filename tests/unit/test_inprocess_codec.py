@@ -13,6 +13,7 @@ binary. Fast mode uses it either way.
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
 
@@ -225,9 +226,17 @@ def test_exact_mode_transmission_faults_do_not_depend_on_pyav(
 
 
 @requires_both
+@pytest.mark.skipif(
+    platform.machine() not in ("x86_64", "AMD64"),
+    reason="on arm64 the two builds were seen to conceal a loss differently",
+)
 def test_a_concealed_loss_decodes_the_same_in_process() -> None:
-    """With concealment on the two decoders agreed on every stream tried.
-    Fast mode's frames differ from exact mode's only where it is off."""
+    """On x86-64, with concealment on, the two decoders agreed on every
+    stream tried, so fast mode's frames differ from exact mode's only where
+    it is off. That is what was seen, not what the library relies on: exact
+    mode decodes a damaged stream with the binary. On GitHub's arm64 runner
+    the same two releases did not agree, by a level or two, on the first
+    stream tried."""
     if not transmission_module._reproduces_binary():
         pytest.skip("this PyAV's libx264 does not encode as the ffmpeg binary's does")
     image = _scene()

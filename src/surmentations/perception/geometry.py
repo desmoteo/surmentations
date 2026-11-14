@@ -344,7 +344,7 @@ def fit_ground_disparity(
     values = disparity[rows, columns].astype(np.float64)
     design = np.stack([x, y, np.ones_like(x)], axis=1)
     weights = np.ones_like(values)
-    plane = np.zeros(3)
+    plane: np.ndarray = np.zeros(3)
     for _ in range(_FIT_PASSES):
         plane, *_ = np.linalg.lstsq(design * weights[:, None], values * weights, rcond=None)
         residual = values - design @ plane

@@ -542,7 +542,7 @@ def _runner_body(
     left = half_width * np.clip(1.0 + _edge_noise(rng, above, radius), 0.4, 1.6)
     right = half_width * np.clip(1.0 + _edge_noise(rng, above, radius), 0.4, 1.6)
 
-    centre = np.full(rows.shape, head_x, dtype=np.float64)
+    centre: np.ndarray = np.full(rows.shape, head_x, dtype=np.float64)
     if path is not None:
         centre = np.interp(rows, path[::-1, 1], path[::-1, 0])
     bend = float(np.clip(rng.normal(0.0, 0.06), -0.14, 0.14)) * length
@@ -643,8 +643,8 @@ def _water_surface(
         y0, y1 = max(0, int(cy - reach_y)), min(height, int(cy + reach_y) + 2)
         if x1 <= x0 or y1 <= y0:
             continue
-        dx = (np.arange(x0, x1, dtype=np.float32) - np.float32(cx)).reshape(1, -1)
-        dy = (np.arange(y0, y1, dtype=np.float32) - np.float32(cy)).reshape(-1, 1)
+        dx: np.ndarray = (np.arange(x0, x1, dtype=np.float32) - np.float32(cx)).reshape(1, -1)
+        dy: np.ndarray = (np.arange(y0, y1, dtype=np.float32) - np.float32(cy)).reshape(-1, 1)
         dy = dy / np.float32(elongation)
         distance_sq = dx * dx + dy * dy
         thickness = np.float32((cap * radius) ** 2)
@@ -1285,7 +1285,7 @@ class WaterDroplets(CameraTransform):
         # touch. Kept as growing numpy buffers: the check runs once per bead
         # against everything already placed.
         capacity = max((len(pinned) + len(runners)) * 6, 64)
-        occupied = np.empty((capacity, 3), dtype=np.float64)
+        occupied: np.ndarray = np.empty((capacity, 3), dtype=np.float64)
         n_occupied = 0
 
         def _occupy(x: float, y: float, r: float) -> None:

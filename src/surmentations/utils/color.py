@@ -177,7 +177,7 @@ def veil_radiance_linear(linear_rgb: np.ndarray, sky: np.ndarray | None = None) 
     # The blur is in proportion to the frame, so it is done on a small copy.
     small = linear_rgb[:: max(1, height // 128), :: max(1, width // 128)]
     small = np.ascontiguousarray(small, dtype=np.float32)
-    sigma = max(1.0, _SOURCE_DILUTION_SIGMA * float(np.hypot(*small.shape[:2])))
+    sigma = max(1.0, _SOURCE_DILUTION_SIGMA * float(np.hypot(small.shape[0], small.shape[1])))
     kernel = int(sigma * 6) | 1
     blurred = _gaussian(small, kernel, sigma)
     region = sky_radiance_linear(blurred, 97.0)

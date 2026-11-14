@@ -24,9 +24,10 @@ module is used whenever PyAV is there, H.265 included, and a frame is then
 as much real H.265 as the binary's, from another release of the encoder.
 
 **Decoding a damaged stream is the binary's in exact mode, always.** With
-error concealment on, the two decoders gave the same frame every time. With
-it off, a lost slice shows whatever the decoder's frame buffer held: here
-that is the zeroed, green hole every time, and from the binary sometimes
+error concealment on, the two decoders gave the same frame every time on
+x86-64; on arm64 they did not, by a level or two. With it off, a lost
+slice shows whatever the decoder's frame buffer held: here that is the
+zeroed, green hole every time, and from the binary sometimes
 that and sometimes a stale picture, depending on which buffer it reused. 15
 of 120 streams differed for that reason and no other. Neither is wrong, and
 neither can be held to the other.

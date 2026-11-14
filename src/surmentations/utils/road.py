@@ -1909,10 +1909,13 @@ def road_cues(
         if len(points) < 4 * stretch:
             continue
         for start in range(0, len(points) - stretch, stretch):
-            xs, ys = points[start : start + stretch, 0], points[start : start + stretch, 1]
-            on_border = (xs <= 1) | (ys <= 1) | (xs >= width - 2) | (ys >= height - 2)
+            edge_xs = points[start : start + stretch, 0]
+            edge_ys = points[start : start + stretch, 1]
+            on_border = (
+                (edge_xs <= 1) | (edge_ys <= 1) | (edge_xs >= width - 2) | (edge_ys >= height - 2)
+            )
             if not on_border.any():
-                add(xs, ys, _CUE_EDGE * float(stretch), 2.5)
+                add(edge_xs, edge_ys, _CUE_EDGE * float(stretch), 2.5)
 
     if vehicles is not None:
         count, parts = cv2.connectedComponents((vehicles > 0.5).astype(np.uint8), connectivity=8)
