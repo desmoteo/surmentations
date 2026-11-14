@@ -43,6 +43,7 @@ from surmentations.atmosphere.snow import RandomSnow
 from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
+    NightColorMode,
     NightIrMode,
     RollingShutter,
     SensorNoise,
@@ -163,6 +164,7 @@ BUILDERS: dict[str, Callable[[dict], object]] = {
         depth_provider=_provider(), p=1.0, accumulation_probability=1.0, **k
     ),
     "NightIrMode": lambda k: NightIrMode(depth_provider=_provider(), p=1.0, **k),
+    "NightColorMode": lambda k: NightColorMode(depth_provider=_provider(), p=1.0, **k),
     # Needs no depth: the drops are lit by the camera, not the scene. Measured
     # on the daylit reference like everything else here — its streaks add
     # light whatever the background, so the ladder is meaningful even though
@@ -190,6 +192,7 @@ def _noise_floor(out: np.ndarray, clean: np.ndarray) -> float:
 
 METRICS: dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
     "NightIrMode": _noise_floor,
+    "NightColorMode": _noise_floor,
 }
 
 # VideoCodecArtifacts is covered by its own CRF-monotonicity test in

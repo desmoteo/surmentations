@@ -15,6 +15,8 @@ that are labelled ground.
 
 * :func:`scene_points`, :func:`fit_ground`: the scene in space.
 * :func:`lamps_in_space`, :func:`street_light`: the lamps' pools.
+* :func:`street_air`: the lamps' light on the air itself, which fog, rain
+  and snow make visible.
 * :func:`lamp_heads`: the lamps themselves, burning.
 * :func:`vehicle_heading`, :func:`beam_origins`, :func:`headlamp_light`:
   the traffic's beams.
@@ -31,6 +33,11 @@ References:
 
 * CIE (2010). Lighting of Roads for Motor and Pedestrian Traffic.
   CIE 115:2010. Commission Internationale de l'Eclairage.
+* Sun, B., Ramamoorthi, R., Narasimhan, S. G., Nayar, S. K. (2005). A
+  Practical Analytic Single Scattering Model for Real Time Rendering. ACM
+  SIGGRAPH 2005 Papers, 1040-1049.
+  https://doi.org/10.1145/1186822.1073309 (the closed form for a point
+  light's glow in a scattering medium)
 * UNECE (2013). Regulation No. 112: Uniform provisions concerning the
   approval of motor vehicle headlamps emitting an asymmetrical passing beam.
 """
@@ -54,6 +61,9 @@ _LAMP_SPREAD = 1.5
 # What a lamp sends upwards and sideways, as a share of what it sends
 # straight down: enough to show the crown of a tree beside it.
 _LAMP_SPILL = 0.03
+# The nearest a line of sight is taken to pass a lamp, in metres: nearer,
+# it is looking into the luminaire, which is drawn as a lamp and not as air.
+_NEAREST_PASS_M = 0.6
 # A lamp is taken to stand between these heights, in metres, whatever its
 # box and the depth map make of it.
 _LAMP_HEIGHTS = (4.0, 14.0)
@@ -158,10 +168,13 @@ def lamps_in_space(
     ``lamps`` are as :func:`~surmentations.perception.vehicles.lamp_posts`
     gives them. A post is thin and a depth map is poor at thin things, so
     its depth is not read: its foot is where the line of sight through the
-    bottom of its box meets the ground, and its head is as far above that
-    as the box is tall at that distance. A row of the result is the head's
-    three coordinates and its height. A lamp whose foot is not on the
-    ground in front of the camera is left out.
+    bottom of its box meets the ground, and its head is on the line of
+    sight through the head, where that passes nearest the upright through
+    the foot. So a lamp is in space where it is seen in the picture, at
+    the end of its arm; it used to be put over its foot, and its light
+    fell from the top of the post while the lamp burned beside it. A row
+    of the result is the head's three coordinates and its height. A lamp
+    whose foot is not on the ground in front of the camera is left out.
     """
     height, width = shape
     placed = []
@@ -175,16 +188,26 @@ def lamps_in_space(
         head_ray = np.array(
             [(head_x - 0.5 * width) / focal_px, (head_y - 0.5 * height) / focal_px, 1.0]
         )
-        # The head is on its line of sight, at the distance at which it
-        # stands over the foot: the two lines' closest approach, level.
-        level_foot = foot - float(foot @ up) * up
-        level_ray = head_ray - float(head_ray @ up) * up
-        along = float(level_ray @ level_foot) / max(float(level_ray @ level_ray), 1e-6)
-        tall = float((head_ray * along - foot) @ up)
-        tall = float(np.clip(tall, *_LAMP_HEIGHTS))
-        # Over its own foot. Its arm reaches a metre or two over the road
-        # from there, which is less than this is good to.
-        head = foot + tall * up
+        # The head is on its own line of sight, where that line passes
+        # nearest the upright through the foot: at the end of its arm, and
+        # not over the foot, which is where the post is.
+        along_up = float(head_ray @ up)
+        apart = float(head_ray @ head_ray) - along_up**2
+        head = None
+        if apart > 1e-6:
+            reach = (float(head_ray @ foot) - along_up * float(up @ foot)) / apart
+            if reach > 0.0:
+                head = head_ray * reach
+        tall = _LAMP_HEIGHTS[0] if head is None else float((head - middle) @ up)
+        if head is None or not _LAMP_HEIGHTS[0] <= tall <= _LAMP_HEIGHTS[1]:
+            # No such point, or one no lamp is at: at a lamp's height on the
+            # same line of sight, so that it is still seen where it is.
+            tall = float(np.clip(tall, *_LAMP_HEIGHTS))
+            head = foot + tall * up
+            if abs(along_up) > 0.05:
+                reach = (tall + float(middle @ up)) / along_up
+                if reach > 0.0:
+                    head = head_ray * reach
         placed.append((*head.tolist(), tall))
     return np.array(placed, dtype=np.float32).reshape(-1, 4)
 
@@ -210,6 +233,56 @@ def street_light(points: np.ndarray, up: np.ndarray, lamps: np.ndarray) -> np.nd
         reach = (np.float32(tall) / far) ** 2
         light += reach * (_LAMP_SPILL + (1.0 - _LAMP_SPILL) * below**_LAMP_SPREAD)
     return light
+
+
+def street_air(
+    points: np.ndarray, up: np.ndarray, lamps: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """The light the street lamps throw on the air along each line of sight, and how far off.
+
+    Two ``(h, w)`` float32 maps.
+
+    For each pixel, the lamps' light summed along its line of sight from
+    the lens to what it shows, in the units of :func:`street_light` times
+    metres. Times an extinction coefficient and a phase function it is the
+    light that fog, rain or snow in that air sends to the lens: the cone
+    of lit air under each lamp.
+
+    A lamp's light falls as the square of the distance from it, and the
+    integral of that along a straight line has a closed form (Sun et al.,
+    2005): for a line that passes the lamp at a distance ``h``, between
+    the points ``a`` and ``b`` metres along it from its nearest approach,
+    ``(atan(b / h) - atan(a / h)) / h``. It is weighted by how far below
+    the lamp the nearest approach is, as the lamp's light on a surface is:
+    a luminaire throws downwards, and the lit air is a cone under it and
+    not a ball round it.
+
+    The second map is how far along the line of sight that lit air is, in
+    metres, taking each lamp's at its nearest approach: what is in the air
+    dims the light on its way to the lens, and a lamp's cone two hundred
+    metres off in falling snow is not there to be seen.
+    """
+    far = np.sqrt((points**2).sum(axis=2))
+    np.maximum(far, 1e-3, out=far)
+    ray = points / far[..., None]
+    air = np.zeros(points.shape[:2], dtype=np.float32)
+    reach = np.zeros(points.shape[:2], dtype=np.float32)
+    for x, y, z, tall in lamps.reshape(-1, 4).tolist():
+        lamp = np.array([x, y, z], dtype=np.float32)
+        along = ray @ lamp
+        passes = np.sqrt(np.maximum(float(lamp @ lamp) - along**2, _NEAREST_PASS_M**2))
+        through = (np.arctan((far - along) / passes) + np.arctan(along / passes)) / passes
+        # The nearest approach, kept to the part of the line that is there.
+        off = np.clip(along, 0.0, far)
+        nearest = off[..., None] * ray
+        to_lamp = lamp - nearest
+        below = np.clip(
+            (to_lamp @ up) / np.maximum(np.sqrt((to_lamp**2).sum(axis=2)), 1e-3), 0.0, 1.0
+        )
+        lit = np.float32(tall**2) * through * (_LAMP_SPILL + (1.0 - _LAMP_SPILL) * below**2)
+        air += lit
+        reach += lit * off
+    return air, reach / np.maximum(air, 1e-9)
 
 
 class BeamSource(NamedTuple):

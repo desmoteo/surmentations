@@ -42,6 +42,7 @@ from surmentations.atmosphere.plumes import LocalPlumes
 from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
+    NightColorMode,
     NightIrMode,
     RollingShutter,
     SensorNoise,
@@ -93,6 +94,7 @@ BUILDERS: dict[str, Callable[[], Any]] = {
     "NightSnow": lambda: NightSnow(p=1.0),
     "CastShadows": lambda: CastShadows(depth_provider=_PROVIDER, p=1.0),
     "NightIrMode": lambda: NightIrMode(depth_provider=_PROVIDER, p=1.0),
+    "NightColorMode": lambda: NightColorMode(depth_provider=_PROVIDER, p=1.0),
     "WaterDroplets": lambda: WaterDroplets(p=1.0),
     "DirtSoil": lambda: DirtSoil(p=1.0),
     "SunFlare": lambda: SunFlare(p=1.0),

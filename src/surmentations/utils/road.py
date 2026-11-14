@@ -1840,6 +1840,20 @@ def _thin_bright(linear_rgb: np.ndarray, where: np.ndarray) -> tuple[np.ndarray,
     return parts, count
 
 
+def paint_on(linear_rgb: np.ndarray, road: np.ndarray) -> np.ndarray:
+    """Where a road's paint is, ``(H, W)`` bool: the thin things on it brighter than it.
+
+    Lane lines, arrows, lettering, stop bars. Without a road's own
+    coordinates, so with no test of which way each lies: for whoever needs
+    the paint as a material and not as a guide to the lanes. Nothing where
+    too much of the road passes for paint, which is the grain of asphalt
+    under a lamp and not paint.
+    """
+    parts, _count = _thin_bright(linear_rgb, road)
+    painted: np.ndarray = parts > 0
+    return painted
+
+
 def road_cues(
     linear_rgb: np.ndarray, road: np.ndarray, on_road: np.ndarray, vehicles: np.ndarray | None
 ) -> np.ndarray:

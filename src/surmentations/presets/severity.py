@@ -252,6 +252,13 @@ def _build() -> dict[int, dict[str, dict[str, Any]]]:
                 "read_noise_range": (_lerp(0.002, 0.012, t), _lerp(0.012, 0.055, t)),
                 "ambient_range": (_lerp(0.05, 0.002, t), _lerp(0.2, 0.03, t)),
             },
+            "NightColorMode": {
+                # Severity is how little light the sensor has: less of the
+                # sky's glow between the lamps, and more gain and noise.
+                "sky_glow_range": (_lerp(0.05, 0.004, t), _lerp(0.12, 0.02, t)),
+                "gain_range": (_lerp(0.8, 2.0, t), _lerp(1.4, 5.0, t)),
+                "read_noise_range": (_lerp(0.002, 0.012, t), _lerp(0.008, 0.05, t)),
+            },
             "VideoCodecArtifacts": {
                 "crf_range": (int(_lerp(20, 34, t)), int(_lerp(28, 46, t))),
                 "stale_block_probability": _lerp(0.05, 0.5, t),

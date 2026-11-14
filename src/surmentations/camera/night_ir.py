@@ -58,24 +58,21 @@ from pydantic import AfterValidator, Field
 
 from surmentations import mode
 from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
+from surmentations.camera.night_lighting import (
+    SceneLighting,
+    light_scene,
+    lit_air_of,
+    note_lit_air,
+)
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
-from surmentations.perception.geometry import focal_px
-from surmentations.perception.labels import GROUND, VEGETATION, SceneClass, class_weight
+from surmentations.perception.labels import VEGETATION, SceneClass, class_weight
+from surmentations.perception.vehicles import VehicleView
 from surmentations.utils.channels import percentile
 from surmentations.utils.grids import on_coarse_grid, pixel_grid
-from surmentations.utils.night_light import (
-    BeamSource,
-    even_road,
-    fit_ground,
-    headlamp_light,
-    lamp_heads,
-    lamps_in_space,
-    scene_points,
-    street_light,
-)
+from surmentations.utils.night_light import even_road
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
-from surmentations.utils.road import RoadVehicle, vehicle_lamps, vehicles_as_seen
+from surmentations.utils.road import paint_on
 from surmentations.utils.sky import sky_to_depth_edge, sky_weight
 
 # Broad, red-weighted stand-in for silicon's response with the IR-cut filter
@@ -97,71 +94,82 @@ _NIGHT_SKY_LEVEL = 0.12
 # nothing, and reflects the near infrared all the same.
 _LABELLED_GREENNESS = 0.3
 
-# The share of vehicles seen from the front, and from behind, whose lamps
-# are on at night: the rest are parked. And how much of the glow round a
-# lamp the sensor shows: a source far over full scale blooms on it whatever
-# the air is like.
-_LIT_AT_NIGHT = (0.85, 0.85)
+# How much of the glow round a lamp the sensor shows: a source far over
+# full scale blooms on it whatever the air is like.
 _LAMP_BLOOM = 0.3
-# How much further over full scale a lamp is at night than in daylight
-# rain, which is what the lamps' own strengths are set for: the lamp is the
-# same lamp, and the camera has opened up for the dark by about this much.
-_NIGHT_LAMP_OVER = 8.0
-# A dipped beam on the road just ahead of its vehicle, in unit exposures,
-# at a lamp strength of 1: several times what a street lamp puts under
-# itself, as the pool ahead of a car is on a lit road.
-_BEAM_LEVEL = 4.0
 # What a road in a beam sends back at the least, as a share of the middle
 # value of the frame's road.
 _BEAM_ROAD = 0.7
-# What stands on the ground and is never the ground itself, whatever its
-# depth is against the ground's.
-_STANDING = (
-    SceneClass.VEHICLE,
-    SceneClass.PERSON,
-    SceneClass.POLE,
-    SceneClass.LAMP,
-    SceneClass.FOLIAGE,
-    SceneClass.SKY,
-)
-# An outline this many times longer than wide has a long way to go by.
-_LONG_OUTLINE = 1.3
-# The field of view a frame is taken to have where nothing says: the
-# lighting needs the scene in space, and is not sensitive to it.
-_ASSUMED_FOV_DEG = 60.0
 # The auto-exposure, once lamps light the scene, holds the brightest
 # hundredth of its surfaces to this level: a camera that exposed a lit road
 # for its dark verges would show the road as a white sheet.
 _HIGHLIGHT_LEVEL = 0.95
 _HIGHLIGHT_PERCENTILE = 99.0
-# A piece of the scene's lamp label is a street lamp when it is this many
-# times taller than wide, at least, and this share of the frame tall.
-_LABELLED_POST = (1.6, 0.08)
+# How many times what a white matt surface sends back to a lamp at the lens
+# each of these does: the sheeting of a road sign and of a number plate,
+# and the glass beads of road paint. And the least a sheeting is taken to
+# send back of that, whatever colour it photographed as: a green sign's
+# ground returns a seventh of a white one's, and is still sheeting.
+_SHEETING_GAIN = 500.0
+_PAINT_GAIN = 3.0
+_SHEETING_FLOOR = 0.15
+_RETRO_SOFT_PX = 0.8
 
 
-def _labelled_lamps(labels: np.ndarray) -> np.ndarray:
-    """The street lamps a scene's labels name, as a vehicle reader would give them.
+def retroreflectors(
+    linear_rgb: np.ndarray,
+    labels: np.ndarray,
+    views: list[VehicleView] | None,
+    signs: np.ndarray | None,
+) -> np.ndarray | None:
+    """How many times a matt surface's return each pixel sends back to a lamp at the lens.
 
-    For a provider with no reader. A tall piece of the lamp label is a
-    street lamp, post and arm and head in one; its head is the end of its
-    top that is furthest from its post. The labels find the nearest lamps
-    of a road and miss the thin far ones, so a road lit by these alone is
-    lit near the camera and dark beyond.
+    ``(H, W)`` float32, 0 where the surface is an ordinary one; ``None``
+    where the frame has nothing of the kind.
+
+    Some things on a road are made to send light back where it came from:
+    the sheeting of signs and number plates, the glass beads in road paint.
+    To a driver that is what makes them show in headlamps. To a camera
+    whose illuminator sits round its lens it is the same thing, and
+    stronger: the lens is on the lamp's own axis. Under infrared a sign is
+    a white rectangle with nothing on it and a number plate is a white bar,
+    which is why cameras that read plates meter for the plate and not the
+    scene. Under anyone else's lamp, a street lamp's or a car's, none of
+    this happens: the light goes back to that lamp.
+
+    * **Road paint** is the scene's labels' road and the thin bright
+      things on it (:func:`~surmentations.utils.road.paint_on`): a few
+      times a matt white's return.
+    * **Signs** (``signs``) and **number plates** (``views``) are the
+      provider's reader's, and return some five hundred times it. A matt
+      white returns about a third of a candela per lux and square metre;
+      sheeting is quoted at some seventy for the plainest grade to several
+      hundred for the prismatic ones, so the figure is the middle of a
+      range of ten to one, and not one that was read off a standard.
+
+    It multiplies what the surface's own brightness makes of the
+    illuminator's light, so a plate's dark characters stay darker than its
+    ground until both are at full scale. On sheeting the result is
+    negative, as a mark for the caller: that brightness is not to be taken
+    below a floor there.
     """
-    height = labels.shape[0]
-    mask = (labels == int(SceneClass.LAMP)).astype(np.uint8)
-    count, parts, stats, _centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    lamps = []
-    for index in range(1, count):
-        left, top, wide, tall, _area = (int(value) for value in stats[index])
-        if tall < _LABELLED_POST[0] * wide or tall < _LABELLED_POST[1] * height:
-            continue
-        rows, columns = np.nonzero(parts[top : top + tall, left : left + wide] == index)
-        post = float(np.median(columns[rows > 0.6 * tall]))
-        head = columns[rows <= max(1, tall // 10)]
-        head_x = float(head[np.argmax(np.abs(head - post))])
-        lamps.append((left, top, left + wide, top + tall, left + head_x, top + 0.02 * tall, 1.0))
-    return np.array(lamps, dtype=np.float32).reshape(-1, 7)
+    height, width = labels.shape
+    gain = np.zeros((height, width), dtype=np.float32)
+    road = labels == int(SceneClass.ROAD)
+    if int(road.sum()) > 64:
+        gain[paint_on(linear_rgb, road)] = _PAINT_GAIN
+    boxes = [] if signs is None else [tuple(row[:4]) for row in signs.tolist()]
+    boxes += [view.plate for view in views or () if view.plate is not None]
+    for x0, y0, x1, y1 in boxes:
+        left, top = max(0, round(x0)), max(0, round(y0))
+        right, bottom = min(width, max(round(x1), left + 1)), min(height, max(round(y1), top + 1))
+        gain[top:bottom, left:right] = -_SHEETING_GAIN
+    if float(np.abs(gain).max()) == 0.0:
+        return None
+    # A lens does not draw an edge a pixel sharp, least of all on the
+    # brightest thing in its frame.
+    soft: np.ndarray = cv2.GaussianBlur(gain, (0, 0), sigmaX=_RETRO_SOFT_PX)
+    return soft
 
 
 def near_infrared_reflectance(
@@ -256,6 +264,19 @@ class NightIrMode(CameraTransform):
             out in space. With neither lamps nor labels this does nothing.
             The labelled road also has the day's light and shade taken off
             it: the sun's shadows have no business under street lamps.
+        retroreflector_range: how strongly the things made to send light
+            back where it came from return the illuminator's, drawn per
+            call, as a multiple of what they usually do; 0 is none. Road
+            paint, from the scene's labels, comes back a few times as
+            bright as a white surface would. Road signs and number plates,
+            which the provider's vehicle reader finds, come back some
+            five hundred times as bright: within the illuminator's
+            reach a sign is a white rectangle and a plate a white bar, as
+            they are on a real camera that meters for the scene and not
+            for the plate. It is the illuminator's light alone that comes
+            back this way, since the lens is beside the lamp; street lamps
+            and headlamps get theirs back themselves. See
+            :func:`retroreflectors`.
         vehicle_lamp_range: how brightly the lamps of the vehicles in the
             frame are lit, drawn per call; 1 is dipped beams, 0 none. It
             does something only on a provider built with ``vehicles=``:
@@ -329,6 +350,11 @@ class NightIrMode(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 5.0)),
         ]
+        retroreflector_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 3.0)),
+        ]
 
     def __init__(
         self,
@@ -343,6 +369,7 @@ class NightIrMode(CameraTransform):
         residual_tint: float = 0.04,
         vehicle_lamp_range: tuple[float, float] = (0.7, 1.3),
         street_lamp_range: tuple[float, float] = (0.6, 1.4),
+        retroreflector_range: tuple[float, float] = (0.6, 1.4),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -363,6 +390,7 @@ class NightIrMode(CameraTransform):
         self.residual_tint = residual_tint
         self.vehicle_lamp_range = vehicle_lamp_range
         self.street_lamp_range = street_lamp_range
+        self.retroreflector_range = retroreflector_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -451,111 +479,59 @@ class NightIrMode(CameraTransform):
         lamps = self.py_random.uniform(*self.vehicle_lamp_range)
         lamp_seed = self.py_random.randint(0, 2**31 - 1)
         street = self.py_random.uniform(*self.street_lamp_range)
-        views = self.depth_provider.get_vehicles(scene)
-        lit: list[tuple[RoadVehicle, list[tuple[float, float]]]] = []
-        seen: list[RoadVehicle] = []
-        emitted = np.zeros((height, width), dtype=np.float32)
-        glowing = np.zeros((height, width), dtype=np.float32)
-        if lamps > 0.0 and views and labels is not None:
-            seen = vehicles_as_seen(labels == int(SceneClass.VEHICLE), views)
-            light, glow, _cores = vehicle_lamps(
-                None,
-                seen,
-                np.random.default_rng(lamp_seed),
-                lamps * _NIGHT_LAMP_OVER,
-                shape=(height, width),
-                lit_share=_LIT_AT_NIGHT,
-                lit=lit,
-            )
-            # White whatever their colour: with the filter out a red lamp
-            # is a bright one and no more.
-            # (Channel against channel: a maximum taken along an axis of
-            # three is thirty times as slow.)
-            emitted += np.maximum(np.maximum(light[..., 0], light[..., 1]), light[..., 2])
-            glowing += np.maximum(np.maximum(glow[..., 0], glow[..., 1]), glow[..., 2])
+        lighting = light_scene(
+            self.depth_provider, scene, labels, depth_m, lamp_seed, lamps, street
+        )
+        drawn["lighting"] = lighting
+        if lighting.in_beam is not None and labels is not None:
+            # What a road in a beam sends back at the least: the road's own
+            # middle value, where there is a road to take it from.
+            paved = labels == int(SceneClass.ROAD)
+            if int(paved.sum()) > 50:
+                linear = to_linear_unit(first_frame(scene))[0]
+                drawn["road_level"] = float(np.median(linear[paved] @ _NIR_RESPONSE))
+        # The light in the air, for whatever puts something in that air
+        # afterwards. Colourless: this camera sees no colour.
+        white = np.ones(3, dtype=np.float32)
+        drawn["air"] = lit_air_of(lighting, white, white)
+        drawn["exposed"] = [1.0]
 
-        # What the lamps light. In space, so the scene's ground has to be
-        # known, and a plane fitted through it.
-        posts = np.zeros((0, 7), dtype=np.float32)
-        if street > 0.0 and labels is not None:
-            found = self.depth_provider.get_street_lamps(scene)
-            posts = _labelled_lamps(labels) if found is None or not len(found) else found
-        thrown = None
-        if labels is not None and (len(posts) or lit):
-            camera = self.depth_provider.settle_camera(scene)
-            focal = focal_px(width, _ASSUMED_FOV_DEG) if camera is None else camera.focal_px
-            points, _step = scene_points(depth_m, focal)
-            small = cv2.resize(labels, points.shape[1::-1], interpolation=cv2.INTER_NEAREST)
-            ground = np.isin(small, [int(one) for one in GROUND]).astype(np.float32)
-            plane = fit_ground(points, ground)
-            if plane is not None:
-                middle, up = plane
-                reaching = np.zeros(points.shape[:2], dtype=np.float32)
-                if len(posts):
-                    placed = lamps_in_space(posts, focal, (height, width), middle, up)
-                    reaching += np.float32(street) * street_light(points, up, placed)
-                    burning, halo = lamp_heads((height, width), posts, street)
-                    emitted += burning
-                    glowing += halo
-                beams: list[BeamSource] = []
-                for vehicle, places in lit:
-                    # The long way of its outline, where it has one: seen
-                    # from above, that is the way it points.
-                    offsets = np.stack(
-                        [
-                            vehicle.columns - vehicle.columns.mean(),
-                            vehicle.rows - vehicle.rows.mean(),
-                        ]
-                    )
-                    values, vectors = np.linalg.eigh(np.cov(offsets) + 1e-6 * np.eye(2))
-                    long_way = None
-                    if values[1] > _LONG_OUTLINE**2 * values[0]:
-                        long_way = (float(vectors[0, 1]), float(vectors[1, 1]))
-                    foot = (float(vehicle.foot[1]), float(vehicle.foot[0]))
-                    lean = None
-                    if len(places) == 2:
-                        apart = abs(places[1][0] - places[0][0])
-                        between = 0.5 * (places[0][0] + places[1][0])
-                        if apart >= 2.0:
-                            lean = (float(vehicle.columns.mean()) - between) / apart
-                    pair = tuple(sorted(places)) if lean is not None else ()
-                    beams.append(BeamSource(foot, vehicle.away > 0.0, lean, long_way, pair))
-                if beams:
-                    stood = np.isin(small, [int(one) for one in _STANDING])
-                    beamed = headlamp_light(
-                        points, middle, up, focal, (height, width), beams, stood
-                    )
-                    reaching += np.float32(_BEAM_LEVEL * lamps) * beamed
-                    drawn["beam"] = cv2.resize(
-                        np.minimum(beamed, 1.0), (width, height), interpolation=cv2.INTER_LINEAR
-                    )
-                thrown = cv2.resize(reaching, (width, height), interpolation=cv2.INTER_LINEAR)
-        if thrown is not None:
-            drawn["lamp_exposure"] = thrown
-            if "beam" in drawn:
-                # What a road in a beam sends back at the least: the road's
-                # own middle value, where there is a road to take it from.
-                paved = labels == int(SceneClass.ROAD)
-                if int(paved.sum()) > 50:
-                    linear = to_linear_unit(first_frame(scene))[0]
-                    drawn["road_level"] = float(np.median(linear[paved] @ _NIR_RESPONSE))
-            if len(posts):
-                # Lit by street lamps, the road is a road at night: the
-                # day's light and shade go, and the camera exposes for the
-                # pools. Under headlamps alone it stays the illuminator's.
-                drawn["road"] = cv2.GaussianBlur(
-                    (labels == int(SceneClass.ROAD)).astype(np.float32), (0, 0), sigmaX=1.5
-                )
-        if float(emitted.max()) > 0.0:
-            drawn["lamp_light"], drawn["lamp_glow"] = emitted, glowing
+        # What is made to send light back where it came from, under a lamp
+        # that is at the lens: the last of the draws.
+        retro = self.py_random.uniform(*self.retroreflector_range)
+        returning = None
+        if retro > 0.0 and labels is not None:
+            linear = to_linear_unit(first_frame(scene))[0]
+            returning = retroreflectors(
+                linear,
+                labels,
+                self.depth_provider.get_vehicles(scene),
+                self.depth_provider.get_signs(scene),
+            )
+            if returning is not None:
+                drawn["retro"] = np.float32(retro) * returning
         record_draw(
             vehicle_lamps=lamps,
-            vehicles_read=len(seen),
-            vehicles_lit=len(lit),
-            street_lamps=int(len(posts)) if thrown is not None else 0,
+            vehicles_read=lighting.vehicles_read,
+            vehicles_lit=lighting.vehicles_lit,
+            street_lamps=lighting.street_lamps if lighting.lit else 0,
             street_lamp_level=street,
+            retroreflectors=retro,
+            retroreflectors_drawn=returning is not None,
         )
         return drawn
+
+    def apply_with_params(
+        self, params: dict[str, Any], *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        """Apply, then note for the frame returned what light hangs in its air.
+
+        For the fog, rain or snow a pipeline puts in that air afterwards
+        (:func:`~surmentations.camera.night_lighting.note_lit_air`).
+        """
+        result = super().apply_with_params(params, *args, **kwargs)
+        note_lit_air(self.depth_provider, params, result)
+        return result
 
     def apply(
         self,
@@ -569,12 +545,10 @@ class NightIrMode(CameraTransform):
         noise_seed: int,
         vegetation: np.ndarray | None = None,
         night_sky: np.ndarray | None = None,
-        lamp_light: np.ndarray | None = None,
-        lamp_glow: np.ndarray | None = None,
-        lamp_exposure: np.ndarray | None = None,
-        road: np.ndarray | None = None,
-        beam: np.ndarray | None = None,
+        lighting: SceneLighting | None = None,
         road_level: float | None = None,
+        retro: np.ndarray | None = None,
+        exposed: list[float] | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the frame as the near-infrared camera sees it at night.
@@ -588,18 +562,22 @@ class NightIrMode(CameraTransform):
 
         reflectance = near_infrared_reflectance(linear, vegetation_gain, vegetation)
         arriving = exposure + ambient
-        if lamp_exposure is not None:
+        lighting = SceneLighting() if lighting is None else lighting
+        if lighting.lit:
             # Lit by lamps: the road loses the day's light and shade, which
             # no lamp explains, and takes the pools and the beams.
-            if road is not None:
-                reflectance = even_road(reflectance, road)
-            if beam is not None and road_level is not None:
+            if lighting.road is not None:
+                reflectance = even_road(reflectance, lighting.road)
+            if lighting.in_beam is not None and road_level is not None:
                 # A beam falls on a road, and a road in the day's deep
                 # shade photographed as black: lit, it would stay black.
                 # The shade was the light and not the road, so where a
                 # beam falls the road sends back most of what a road does.
-                reflectance = np.maximum(reflectance, np.float32(_BEAM_ROAD * road_level) * beam)
-            arriving = arriving + lamp_exposure
+                floor = np.float32(_BEAM_ROAD * road_level) * lighting.in_beam
+                reflectance = np.maximum(reflectance, floor)
+            for thrown in (lighting.street, lighting.beams):
+                if thrown is not None:
+                    arriving = arriving + thrown
         signal = reflectance * arriving
         if night_sky is not None:
             signal = signal * (1.0 - np.float32(1.0 - _NIGHT_SKY_LEVEL) * night_sky)
@@ -611,13 +589,25 @@ class NightIrMode(CameraTransform):
         reference_level = percentile(signal, 80.0)
         if reference_level > 1e-6:
             level = target_level / reference_level
-            if lamp_exposure is not None:
+            if lighting.lit:
                 # A scene lit from a few points is mostly dark, and its
                 # 80th percentile is in the dark. Exposed for that, the
                 # lit road is a white sheet; a camera holds its highlights.
                 brightest = percentile(signal, _HIGHLIGHT_PERCENTILE)
                 level = min(level, _HIGHLIGHT_LEVEL / max(brightest, 1e-6))
             signal = signal * level
+            if exposed is not None:
+                exposed[0] = float(level)
+            if retro is not None:
+                # Sheeting and glass beads send the illuminator's light
+                # back down its own beam, to a lens that is beside it: many
+                # times what a white surface sends. Added once the camera
+                # has exposed for the scene, which is not for these.
+                sheeting = retro < 0.0
+                returned = np.where(
+                    sheeting, np.maximum(reflectance, _SHEETING_FLOOR), reflectance
+                )
+                signal = signal + np.float32(level) * np.abs(retro) * returned * exposure
 
         # Gain deliberately does *not* rescale the signal here. On a real
         # camera gain is one of the things the AE loop uses to *reach* its
@@ -628,13 +618,23 @@ class NightIrMode(CameraTransform):
         # featureless white plate covering 24% of the image. What gain does
         # control is the noise, below.
 
-        if lamp_light is not None and lamp_glow is not None:
-            # The traffic's lamps. They are sources and not surfaces: what
-            # they send the lens is theirs, whatever the illuminator
-            # delivers where they are and wherever the auto-exposure has
-            # put the scene, which is exposed for the road and not for
-            # them. So they are added here, at their own level, after both.
-            signal = signal + lamp_light + np.float32(_LAMP_BLOOM) * lamp_glow
+        # The lamps. They are sources and not surfaces: what they send the
+        # lens is theirs, whatever the illuminator delivers where they are
+        # and wherever the auto-exposure has put the scene, which is
+        # exposed for the road and not for them. So they are added here, at
+        # their own level, after both. White whatever their colour: with
+        # the filter out a red lamp is a bright one and no more. (Channel
+        # against channel: a maximum along an axis of three is far slower.)
+        for light, glow in (
+            (lighting.vehicle_light, lighting.vehicle_glow),
+            (lighting.head_light, lighting.head_glow),
+        ):
+            if light is None or glow is None:
+                continue
+            if light.ndim == 3:
+                light = np.maximum(np.maximum(light[..., 0], light[..., 1]), light[..., 2])
+                glow = np.maximum(np.maximum(glow[..., 0], glow[..., 1]), glow[..., 2])
+            signal = signal + light + np.float32(_LAMP_BLOOM) * glow
 
         # Shot noise scales as sqrt(signal); read noise does not scale at all,
         # which is why the shadows of a gained-up frame are the noisy part.

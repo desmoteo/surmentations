@@ -52,7 +52,13 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
-from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
+from surmentations.base import (
+    CameraTransform,
+    first_frame,
+    lamp_cones,
+    require_depth_provider,
+    scene_of,
+)
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
 from surmentations.lens.dirt import scatter_psf
@@ -108,6 +114,19 @@ class NightFog(CameraTransform):
             only for frames in infrared mode, and apply this transform
             *after* ``NightIrMode``; the shipped pipelines do both.
         beam_falloff_range: how sharply the illuminator's beam dims off-axis.
+        lamp_cone_range: how strongly the fog shows in the light of the
+            scene's lamps, drawn per call; 0 is not at all. It does
+            something on a frame that
+            :class:`~surmentations.camera.night_ir.NightIrMode` or
+            :class:`~surmentations.camera.night_color.NightColorMode` made
+            a night of with a provider that knows where its lamps are: the
+            fog is lit in a cone under each street lamp and in a wedge
+            ahead of each headlamp, and dark elsewhere, which is how
+            fog at night is mostly seen. See
+            :func:`~surmentations.base.lamp_cones`.
+            The fog's own glow is then that of its lamps, and no longer
+            the scene's blurred brightness, which over a lit road was a
+            white sheet.
 
     Targets:
         image
@@ -149,6 +168,11 @@ class NightFog(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 10.0)),
         ]
+        lamp_cone_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 4.0)),
+        ]
 
     def __init__(
         self,
@@ -158,6 +182,7 @@ class NightFog(CameraTransform):
         illuminator_backscatter_range: tuple[float, float] = (0.0, 0.0),
         beam_falloff_range: tuple[float, float] = (0.6, 2.2),
         visibility_range_scene: tuple[float, float] | None = None,
+        lamp_cone_range: tuple[float, float] = (0.6, 1.4),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -173,6 +198,7 @@ class NightFog(CameraTransform):
         self.glow_radius_range = glow_radius_range
         self.illuminator_backscatter_range = illuminator_backscatter_range
         self.beam_falloff_range = beam_falloff_range
+        self.lamp_cone_range = lamp_cone_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -209,8 +235,21 @@ class NightFog(CameraTransform):
         xx = (np.arange(width, dtype=np.float32).reshape(1, -1) - width / 2.0) / (width / 2.0)
         beam = np.exp(-falloff * (xx * xx + yy * yy)).astype(np.float32)
 
-        record_draw(visibility_m=visibility, beta=beta, backscatter=backscatter)
+        # The fog in the lamps' own light, where the frame's lamps are
+        # known: the last of the draws.
+        cone = self.py_random.uniform(*self.lamp_cone_range)
+        cones = lamp_cones(data, beta) if cone > 0.0 else None
+        if cones is not None:
+            cones = cones * np.float32(cone)
+        record_draw(
+            visibility_m=visibility,
+            beta=beta,
+            backscatter=backscatter,
+            lamp_cones=cone,
+            lamp_cones_drawn=cones is not None,
+        )
         return {
+            "cones": cones,
             "optical_depth": (beta * depth_m).astype(np.float32),
             "sky": sky,
             "glow_radius": self.py_random.uniform(*self.glow_radius_range)
@@ -227,6 +266,7 @@ class NightFog(CameraTransform):
         glow_radius: float,
         backscatter: float,
         beam: np.ndarray,
+        cones: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Attenuate the scene, then add what the fog returns of each light.
@@ -257,7 +297,13 @@ class NightFog(CameraTransform):
         halo = scatter_psf(removed, glow_radius * (0.5 + min(thickness, 3.0)))
 
         out = radiance * transmission + _FORWARD_FRACTION * halo
-        if not illuminated:
+        if cones is not None:
+            # Lit by lamps whose places are known: the fog glows where
+            # their light is, and by the scene's general level elsewhere.
+            level = linear.reshape(-1, linear.shape[-1]).mean(axis=0).reshape(1, 1, -1)
+            share = _FOG_RADIANCE_SHARE * _DIFFUSE_SHARE / TYPICAL_SCENE_ALBEDO
+            out = out + cones + share * level * (1.0 - one_way)
+        elif not illuminated:
             # The veil: fog lit by the lamps, as bright as the light the
             # surfaces around it show. Under the illuminator those surfaces
             # are lit by the camera, and the fog the camera lights is the

@@ -12,14 +12,18 @@ stands and what it lights can be said in metres.
 
 from __future__ import annotations
 
+import albumentations as A
 import numpy as np
 import pytest
 
 from surmentations import mode
 from surmentations.atmosphere import RandomRain, RandomSnow
+from surmentations.atmosphere.night_fog import NightFog
 from surmentations.atmosphere.night_rain import NightRain
 from surmentations.atmosphere.night_snow import NightSnow
-from surmentations.camera.night_ir import NightIrMode
+from surmentations.camera.night_color import NightColorMode
+from surmentations.camera.night_ir import NightIrMode, retroreflectors
+from surmentations.camera.night_lighting import heads_by_label
 from surmentations.depth.estimator import DepthEstimator
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import recording
@@ -40,6 +44,7 @@ from surmentations.utils.night_light import (
     lamp_heads,
     lamps_in_space,
     scene_points,
+    street_air,
     street_light,
     vehicle_heading,
 )
@@ -654,3 +659,328 @@ def test_the_night_glow_is_grained_and_can_be_made_even(transform: type) -> None
     assert float(np.percentile(even, 95) - np.percentile(even, 5)) <= 2.0
     assert float(grained.std()) > 2.0
     assert float(grained.mean()) == pytest.approx(float(even.mean()), rel=0.2)
+
+
+def test_the_light_on_the_air_is_a_cone_under_each_lamp() -> None:
+    """Along a line of sight, a lamp's light summed over the air it passes
+    through: most where the line passes just under the lamp, little far to
+    one side, next to nothing above it, since a luminaire throws downwards;
+    and the lit air is as far off as the lamp is."""
+    up = (-_ground_at(0.0) / CAMERA_M).astype(np.float32)
+    lamp = np.array([[*_ground_at(30.0, 0.0, 10.0), 10.0]], np.float32)
+    looked_at = np.stack(
+        [
+            _ground_at(60.0, 0.0, 8.0),  # through the air a little under the lamp
+            _ground_at(60.0, 14.0, 8.0),  # the same height, well to one side
+            _ground_at(60.0, 0.0, 26.0),  # passing well over the lamp
+            _ground_at(12.0, 0.0, 8.0),  # stopping short of it
+        ]
+    ).astype(np.float32)[None]
+    air, reach = street_air(looked_at, up, lamp)
+    under, beside, over, short = air[0].tolist()
+    assert under > 4.0 * beside > 0.0
+    assert over < 0.3 * under, "a ball of lit air round the lamp, and not a cone under it"
+    assert short < 0.25 * under
+    assert 20.0 < float(reach[0, 0]) < 45.0
+    none, _far = street_air(looked_at, up, np.zeros((0, 4), np.float32))
+    assert float(none.max()) == 0.0
+
+
+def test_a_lamp_s_head_is_in_space_where_it_is_seen() -> None:
+    """A head at the end of an arm two metres to one side of its post: the
+    lamp is put on the line of sight through the head, and not over the
+    foot of the post, so its light falls from where it burns."""
+    middle, up = _ground_at(20.0), -_ground_at(0.0) / CAMERA_M
+    foot, head = _pixel_of(_ground_at(30.0, 4.0)), _pixel_of(_ground_at(30.0, 6.0, 7.0))
+    lamps = np.array([[foot[0] - 3, head[1], foot[0] + 3, foot[1], head[0], head[1], 0.5]])
+    placed = lamps_in_space(lamps.astype(np.float32), FOCAL, (HEIGHT, WIDTH), middle, up)[0]
+    seen_at = _pixel_of(placed[:3])
+    assert abs(seen_at[0] - head[0]) < 0.5 and abs(seen_at[1] - head[1]) < 0.5
+    assert np.allclose(placed[:3], _ground_at(30.0, 6.0, 7.0), atol=0.7)
+
+
+def test_a_headless_lamp_takes_its_head_from_the_end_of_its_labelled_arm() -> None:
+    """A reader that boxed no head puts one at the middle of the top of the
+    post's box, which for a lamp with an arm is empty air. The labels show
+    the arm: the head goes to its end, one for each arm, and a head the
+    reader did box stays where it is."""
+    labels = np.full((HEIGHT, WIDTH), int(SceneClass.ROAD), dtype=np.uint8)
+    labels[60:220, 98:102] = int(SceneClass.POLE)  # a post
+    labels[60:64, 98:150] = int(SceneClass.POLE)  # its arm, to the right
+    labels[58:66, 144:152] = int(SceneClass.LAMP)  # the luminaire at its end
+    one_arm = np.array([[96.0, 58.0, 152.0, 220.0, 124.0, 58.0, 0.5]], np.float32)
+    moved = heads_by_label(one_arm, labels)
+    assert moved.shape == (1, 7)
+    assert 143.0 <= float(moved[0, 4]) <= 152.0 and 57.0 <= float(moved[0, 5]) <= 66.0
+    boxed = one_arm.copy()
+    boxed[0, 4:6] = (110.0, 61.0)
+    assert np.array_equal(heads_by_label(boxed, labels), boxed)
+    labels[60:64, 50:98] = int(SceneClass.POLE)  # a second arm, to the left
+    two_arms = np.array([[48.0, 58.0, 152.0, 220.0, 100.0, 58.0, 0.5]], np.float32)
+    heads = sorted(float(row[4]) for row in heads_by_label(two_arms, labels))
+    assert len(heads) == 2 and heads[0] < 60.0 and heads[1] > 140.0
+    nothing = np.full_like(labels, int(SceneClass.ROAD))
+    assert np.array_equal(heads_by_label(one_arm, nothing), one_arm)
+
+
+def test_a_night_in_colour_is_lit_in_its_lamps_colour_and_dark_between() -> None:
+    """Under sodium the lit road is orange, with next to no blue; under a
+    cool LED it is not. Either way it is bright under the lamp and dark far
+    from it, and the lamp burns. With no lamps known the frame is lit by
+    the sky's glow alone: dim, even and noisy."""
+    image, labels, lamps = _night_road()
+
+    def night(provider: SharedDepthProvider, kelvin: float) -> tuple[np.ndarray, dict]:
+        """The road as a colour camera sees it at night, and what was drawn."""
+        transform = NightColorMode(
+            depth_provider=provider, p=1.0, lamp_temperature_range_k=(kelvin, kelvin)
+        )
+        transform.set_random_seed(2)
+        with recording() as log:
+            out = transform(image=image)["image"].astype(np.float32)
+        return out, log[0]["drew"]
+
+    def at(picture: np.ndarray, ahead_m: float, right_m: float = 0.0) -> np.ndarray:
+        """The picture's colour about a place on the ground."""
+        column, row = (round(value) for value in _pixel_of(_ground_at(ahead_m, right_m)))
+        return picture[row - 2 : row + 3, column - 2 : column + 3].reshape(-1, 3).mean(axis=0)
+
+    sodium, drew = night(_provider(labels, lamps), 2100.0)
+    assert drew["street_lamps"] == 1 and drew["lamp_temperature_k"] == 2100.0
+    under, far = at(sodium, 30.0, 1.0), at(sodium, 90.0)
+    assert float(under.mean()) > 3.0 * float(far.mean())
+    assert under[0] > 1.25 * under[1] > 1.5 * under[2], "sodium light that is not orange"
+    cool, _ = night(_provider(labels, lamps), 5600.0)
+    under = at(cool, 30.0, 1.0)
+    assert under[2] > 0.9 * under[0], "a cool lamp as orange as sodium"
+    unlit, drew = night(_provider(labels, None), 2100.0)
+    assert drew["street_lamps"] == 0
+    assert float(at(unlit, 30.0, 1.0).mean()) < 1.6 * float(at(unlit, 90.0).mean()) + 6.0
+    assert float(unlit[labels == int(SceneClass.ROAD)].mean()) < 110.0
+
+
+def test_signs_and_plates_send_the_illuminator_s_light_back_and_paint_a_little() -> None:
+    """Sheeting returns hundreds of times what a matt surface does to a
+    lamp at the lens; road paint a few times. So a sign within reach of the
+    illuminator is at full scale where the wall beside it is dark, and
+    turning the return off leaves the frame as it was."""
+    scene = np.full((HEIGHT, WIDTH, 3), 0.05, dtype=np.float32)
+    labels = np.full((HEIGHT, WIDTH), int(SceneClass.ROAD), dtype=np.uint8)
+    scene[:, 158:162] = 0.6  # a painted line down the road
+    none = np.zeros((0, 5), dtype=np.float32)
+    assert retroreflectors(np.full_like(scene, 0.05), labels, None, none) is None
+    signs = np.array([[40.0, 60.0, 70.0, 80.0, 0.5]], np.float32)
+    plate = VehicleView((200, 150, 60, 40), 0.0, 0.4, np.zeros((0, 5), np.float32))._replace(
+        plate=(220.0, 170.0, 240.0, 176.0)
+    )
+    back = retroreflectors(scene, labels, [plate], signs)
+    assert back is not None and back.shape == (HEIGHT, WIDTH)
+    assert float(back[70, 55]) < -300.0 and float(back[173, 230]) < -100.0
+    assert 1.0 < float(back[120, 160]) < 10.0
+    assert float(back[30, 250]) == 0.0
+
+    image, road_labels, _lamps = _night_road()
+
+    class _Signs(_Lamps):
+        """A reader that knows of one sign and nothing else."""
+
+        def street_signs(self, image: np.ndarray) -> np.ndarray:
+            """One sign, up the road on the left."""
+            return np.array([[60.0, 90.0, 90.0, 110.0, 0.5]], np.float32)
+
+    def infrared(**more: object) -> np.ndarray:
+        """The road under the illuminator, with a reader that found a sign."""
+        provider = SharedDepthProvider(
+            _Ground(),
+            depth_range_m=(float(_ground_depth().min()), 400.0),
+            labels=_Labels(road_labels),
+            vehicles=_Signs(np.zeros((0, 7), np.float32)),
+        )
+        transform = NightIrMode(
+            depth_provider=provider, p=1.0, illuminator_range_m=(14.0, 14.0), **more
+        )  # type: ignore[arg-type]
+        transform.set_random_seed(4)
+        return transform(image=image)["image"].astype(np.float32).mean(axis=2)
+
+    with_return, without = infrared(), infrared(retroreflector_range=(0.0, 0.0))
+    assert float(with_return[95:105, 65:85].mean()) > 240.0
+    assert float(without[95:105, 65:85].mean()) < 0.6 * float(with_return[95:105, 65:85].mean())
+    assert float(np.abs(with_return[150:, 200:] - without[150:, 200:]).max()) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("weather", "settings"),
+    [
+        (NightRain, {"rain_rate_range_mm_h": (30.0, 30.0), "max_streaks": 1}),
+        (NightSnow, {"snowfall_rate_range_mm_h": (2.0, 2.0), "max_flakes": 1}),
+    ],
+)
+def test_what_falls_at_night_shows_in_the_lamps_light(weather: type, settings: dict) -> None:
+    """Rain or snow drawn over a frame a provider lit from its lamps is
+    brightest in the air under the lamp; turned off, or over a frame nobody
+    lit, there is no such cone."""
+    image, labels, lamps = _night_road()
+    provider = _provider(labels, lamps)
+    head = (round(float(lamps[0, 5])), round(float(lamps[0, 4])))
+    under = (slice(head[0] + 8, head[0] + 30), slice(head[1] - 6, head[1] + 7))
+
+    def falling(cone: float, lit: bool = True) -> np.ndarray:
+        """The night road with something falling through it."""
+        night = NightIrMode(
+            depth_provider=provider if lit else _provider(labels, None),
+            p=1.0,
+            vehicle_lamp_range=(0.0, 0.0),
+        )
+        chain = A.Compose(
+            [
+                night,
+                weather(
+                    p=1.0,
+                    backscatter_range=(0.0, 0.0),
+                    lamp_cone_range=(cone, cone),
+                    **settings,
+                ),
+            ],
+            seed=3,
+        )
+        return chain(image=image)["image"].astype(np.float32).mean(axis=2)
+
+    with_cone, without = falling(1.0), falling(0.0)
+    lift = with_cone - without
+    assert float(lift[under].mean()) > 4.0, "nothing lit in the air under the lamp"
+    assert float(lift[under].mean()) > 5.0 * abs(float(lift[-40:, :60].mean())) + 1.0
+    unlit = falling(1.0, lit=False) - falling(0.0, lit=False)
+    assert float(np.abs(unlit).max()) == 0.0
+
+
+def test_fog_at_night_glows_under_the_lamps_it_knows_of() -> None:
+    """Fog over a lit night frame is lit by the lamps' own light, in a cone
+    under each, and the note of that light follows the frame through a
+    transform that comes between."""
+    image, labels, lamps = _night_road()
+    provider = _provider(labels, lamps)
+    head = (round(float(lamps[0, 5])), round(float(lamps[0, 4])))
+    under = (slice(head[0] + 8, head[0] + 30), slice(head[1] - 6, head[1] + 7))
+
+    def foggy(cone: float) -> np.ndarray:
+        """The night road in fog, with rain drawn first to come between."""
+        chain = A.Compose(
+            [
+                NightColorMode(depth_provider=provider, p=1.0, vehicle_lamp_range=(0.0, 0.0)),
+                NightRain(
+                    p=1.0, max_streaks=1, backscatter_range=(0.0, 0.0), lamp_cone_range=(0, 0)
+                ),
+                NightFog(
+                    depth_provider=provider,
+                    p=1.0,
+                    visibility_range_m=(300.0, 300.0),
+                    lamp_cone_range=(cone, cone),
+                ),
+            ],
+            seed=3,
+        )
+        return chain(image=image)["image"].astype(np.float32).mean(axis=2)
+
+    lit, plain = foggy(1.0), foggy(0.0)
+    assert float(lit[under].mean()) > float(plain[under].mean()) + 5.0
+    assert float(lit[under].mean()) > float(lit[-40:, :60].mean()) + 5.0
+
+
+def test_a_scene_is_read_from_the_frame_it_started_as() -> None:
+    """A provider asked about a frame that transforms made from another reads
+    the other: what stands in a scene is looked for in the photograph, and
+    not in the photograph with something drawn over it."""
+
+    class _Seen(DepthEstimator):
+        """A depth estimator that remembers the frames it was shown."""
+
+        def __init__(self) -> None:
+            """Start with none."""
+            self.frames: list[np.ndarray] = []
+
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            """Note the frame and call it level."""
+            self.frames.append(image)
+            return np.full(image.shape[:2], 0.5, dtype=np.float32)
+
+    estimator = _Seen()
+    provider = SharedDepthProvider(estimator)
+    image = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    # A transform with no provider first, then one that asks.
+    chain = A.Compose([NightRain(p=1.0), NightFog(depth_provider=provider, p=1.0)], seed=1)
+    chain(image=image)
+    assert len(estimator.frames) == 1
+    assert estimator.frames[0] is image, "depth was read from the frame with rain over it"
+
+
+def test_a_reader_looks_at_the_original_and_answers_in_the_frame_s_pixels() -> None:
+    """Given the frame at the size it was taken at, the labels and the
+    reader are run on that, and what they find comes back in the pixels of
+    the frame the pipeline works on. An original of another shape is not
+    the same picture."""
+
+    class _Sized(_Labels):
+        """Labels that note the size of each frame they were asked about."""
+
+        def __init__(self) -> None:
+            """Start with none seen."""
+            self.sizes: list[tuple[int, int]] = []
+
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            """Road everywhere, with a vehicle in the lower right quarter."""
+            self.sizes.append(image.shape[:2])
+            labels = np.full(image.shape[:2], int(SceneClass.ROAD), dtype=np.uint8)
+            labels[image.shape[0] // 2 :, image.shape[1] // 2 :] = int(SceneClass.VEHICLE)
+            return labels
+
+    class _Reader(VehicleViewEstimator):
+        """A reader that notes sizes too, and finds a lamp post and a plate."""
+
+        def __init__(self) -> None:
+            """Start with none seen."""
+            self.sizes: list[tuple[int, int]] = []
+
+        def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
+            """One vehicle: the mask's own box, with a plate at its middle."""
+            self.sizes.append(vehicles.shape)
+            rows, columns = np.nonzero(vehicles)
+            box = (
+                int(columns.min()),
+                int(rows.min()),
+                int(np.ptp(columns)) + 1,
+                int(np.ptp(rows)) + 1,
+            )
+            lamps = np.array([[box[0] + 40.0, box[1] + 60.0, 8.0, 6.0, 0.5]], np.float32)
+            plate = (box[0] + 100.0, box[1] + 80.0, box[0] + 140.0, box[1] + 92.0)
+            return [
+                VehicleView(box, 0.0, 0.5, lamps, np.ones((box[3], box[2]), bool), "car", plate)
+            ]
+
+        def street_lamps(self, image: np.ndarray) -> np.ndarray:
+            """One post, a tenth of the way in."""
+            wide, tall = image.shape[1], image.shape[0]
+            return np.array(
+                [[0.1 * wide, 0.1 * tall, 0.12 * wide, 0.9 * tall, 0.11 * wide, 0.1 * tall, 0.5]]
+            )
+
+    labeller, reader = _Sized(), _Reader()
+    provider = SharedDepthProvider(_Ground(), labels=labeller, vehicles=reader)
+    frame = np.full((HEIGHT, WIDTH, 3), 90, dtype=np.uint8)
+    original = np.full((4 * HEIGHT, 4 * WIDTH, 3), 90, dtype=np.uint8)
+    provider.remember(frame, original=original)
+    assert labeller.sizes == [(4 * HEIGHT, 4 * WIDTH)] and reader.sizes == [(4 * HEIGHT, 4 * WIDTH)]
+    assert provider.get_labels(frame).shape == (HEIGHT, WIDTH)  # type: ignore[union-attr]
+    (view,) = provider.get_vehicles(frame) or []
+    assert view.box == (WIDTH // 2, HEIGHT // 2, WIDTH // 2, HEIGHT // 2)
+    assert view.mask is not None and view.mask.shape == (HEIGHT // 2, WIDTH // 2)
+    assert view.lamps[0, :4].tolist() == [WIDTH // 2 + 10.0, HEIGHT // 2 + 15.0, 2.0, 1.5]
+    assert view.plate == (
+        WIDTH // 2 + 25.0,
+        HEIGHT // 2 + 20.0,
+        WIDTH // 2 + 35.0,
+        HEIGHT // 2 + 23.0,
+    )
+    post = provider.get_street_lamps(frame)
+    assert post is not None and np.allclose(post[0, :4], [32.0, 24.0, 38.4, 216.0])
+    with pytest.raises(ValueError, match="not the same shape"):
+        provider.remember(frame, original=np.zeros((HEIGHT, 3 * WIDTH, 3), np.uint8))

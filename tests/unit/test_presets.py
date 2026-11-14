@@ -18,6 +18,7 @@ from surmentations.atmosphere.snow import RandomSnow
 from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
+    NightColorMode,
     NightIrMode,
     RollingShutter,
     SensorNoise,
@@ -81,6 +82,7 @@ _DEPTH_CONDITIONED = {
     "RandomRain": RandomRain,
     "RandomSnow": RandomSnow,
     "NightIrMode": NightIrMode,
+    "NightColorMode": NightColorMode,
     "CastShadows": CastShadows,
     "GroundFog": GroundFog,
     "LocalPlumes": LocalPlumes,

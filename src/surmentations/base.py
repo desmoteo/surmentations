@@ -43,10 +43,11 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+import cv2
 import numpy as np
 from albumentations.core.transforms_interface import ImageOnlyTransform
 
-from surmentations.depth.provider import carry_depth, settled_fov
+from surmentations.depth.provider import carry_depth, lit_air, settled_fov
 from surmentations.diagnostics import instrument
 
 RangeF = tuple[float, float]
@@ -163,6 +164,37 @@ def scene_of(data: dict[str, Any]) -> np.ndarray:
     else:
         raise KeyError("expected the data to contain `image` or `images`")
     return scene
+
+
+# Of the light that falls on a drop or a flake, the share it sends towards
+# a lens off to one side, against what a matt surface would: a sphere's
+# worth of directions against a hemisphere's.
+AIR_PHASE = 0.25
+
+
+def lamp_cones(data: dict[str, Any], extinction_per_m: float) -> np.ndarray | None:
+    """What the lamps of a night frame light in air of one extinction, ``(H, W, 3)`` or ``None``.
+
+    The cone of lit air under each street lamp and the wedge ahead of each
+    headlamp, as linear light to be added to the frame. A transform that
+    made a night of the frame noted the lamps' light on the air along each
+    line of sight (:func:`~surmentations.depth.provider.lit_air`); what a
+    medium in that air sends to the lens is that times its extinction
+    coefficient and a phase function (:data:`AIR_PHASE`), less what the
+    medium takes out again over the distance to the lit air. ``None`` for a
+    frame nobody lit: a night photograph, or a night made without a
+    provider that knows where the lamps are.
+    """
+    scene = scene_of(data)
+    air = lit_air(scene)
+    if air is None or extinction_per_m <= 0.0:
+        return None
+    height, width = scene.shape[-3:-1]
+    full = cv2.resize(air, (width, height), interpolation=cv2.INTER_LINEAR)
+    through = np.exp(np.float32(-extinction_per_m) * full[..., 3])
+    sent = np.float32(extinction_per_m * AIR_PHASE) * through
+    glow: np.ndarray = full[..., :3] * sent[..., None]
+    return glow
 
 
 def scene_fov(data: dict[str, Any], horizontal_fov_deg: float) -> float:

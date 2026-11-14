@@ -71,6 +71,18 @@ HEAVY_KINDS = frozenset({"truck", "bus"})
 # this share of the frame's height; a lamp's head is a box no taller than
 # this many times its width, found in the top of a post's.
 STREET_LAMP_PROMPTS = ("a street light",)
+# And the road signs, and on each vehicle its number plate: the things on a
+# road made to send light back where it came from, which under a camera's
+# own lamp are the brightest things in the frame.
+SIGN_PROMPTS = ("a traffic sign",)
+PLATE_PROMPTS = ("a license plate",)
+# A sign is believed at this score, and is no larger than this share of the
+# frame; a plate at this score, no wider than this share of its vehicle and
+# wider than it is tall.
+_SIGN_SCORE = 0.2
+_SIGN_LARGEST = 0.06
+_PLATE_SCORE = 0.12
+_PLATE_WIDEST = 0.6
 _POST_SCORE = 0.2
 _POST_TALL = 1.6
 _POST_LEAST = 0.05
@@ -141,6 +153,8 @@ class VehicleView(NamedTuple):
       so here.
     * ``kind``: what the vehicle is, where that is known: one of
       :data:`VEHICLE_KINDS`, or empty.
+    * ``plate``: its number plate where one was found, as left, top, right
+      and bottom in pixels of the frame; ``None`` otherwise.
     """
 
     box: tuple[int, int, int, int]
@@ -149,6 +163,7 @@ class VehicleView(NamedTuple):
     lamps: np.ndarray
     mask: np.ndarray | None = None
     kind: str = ""
+    plate: tuple[float, float, float, float] | None = None
 
     @property
     def read(self) -> bool:
@@ -269,6 +284,7 @@ def lamp_posts(found: np.ndarray, frame_height: int) -> np.ndarray:
         ]
         # Both heads of a column with two arms; the middle of the top
         # where the detector boxed none.
+        mine.sort(key=lambda head: -head[2])
         for head_x, head_y, _head_score in mine[:2] or [(0.5 * (x0 + x1), y0, 0.0)]:
             lamps.append((x0, y0, x1, y1, head_x, head_y, score))
     return np.array(lamps, dtype=np.float32).reshape(-1, 7)
@@ -444,6 +460,77 @@ def lamps_of(
     return VehicleView(box, float(scores[0]), float(scores[1]), np.array(pair, dtype=np.float32))
 
 
+def plate_of(
+    box: tuple[int, int, int, int], found: np.ndarray
+) -> tuple[float, float, float, float] | None:
+    """A vehicle's number plate among the boxes a detector found on it, or ``None``.
+
+    ``found`` has a row for each: left, top, right, bottom in pixels of the
+    frame, anything, and the score. A plate is a small thing wider than it
+    is tall, within the vehicle's box: the surest such.
+    """
+    left, top, wide, tall = box
+    best: tuple[float, tuple[float, float, float, float]] | None = None
+    for x0, y0, x1, y1, _kind, score in found.reshape(-1, 6).tolist():
+        across, down = x1 - x0, y1 - y0
+        inside = left <= 0.5 * (x0 + x1) <= left + wide and top <= 0.5 * (y0 + y1) <= top + tall
+        if score < _PLATE_SCORE or not inside or across <= down or across > _PLATE_WIDEST * wide:
+            continue
+        if best is None or score > best[0]:
+            best = (score, (x0, y0, x1, y1))
+    return None if best is None else best[1]
+
+
+def street_signs(found: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """The road signs among the boxes a detector found, a row to each.
+
+    ``found`` has a row for each box: left, top, right, bottom, anything,
+    and the score. Kept are those it is sure of that are no larger than a
+    sign is in a frame, each once. A row of the result is left, top, right,
+    bottom and score.
+    """
+    height, width = shape
+    rows: list[tuple[float, ...]] = []
+    for x0, y0, x1, y1, _kind, score in found.reshape(-1, 6).tolist():
+        area = max(x1 - x0, 0.0) * max(y1 - y0, 0.0)
+        if score >= _SIGN_SCORE and 0.0 < area <= _SIGN_LARGEST * height * width:
+            rows.append((x0, y0, x1, y1, 0.0, score, area))
+    kept = _one_each(rows, groups=False)
+    return np.array([(*row[:4], row[5]) for row in kept], dtype=np.float32).reshape(-1, 5)
+
+
+def scaled_view(
+    view: VehicleView, across: float, down: float, shape: tuple[int, int]
+) -> VehicleView:
+    """A view read in one size of a frame, in the pixels of another.
+
+    ``across`` and ``down`` are the new frame's width and height over the
+    old one's, and ``shape`` the new frame's. For a provider whose reader
+    looks at a photograph at the size it was taken at and whose pipeline
+    works on a reduced copy.
+    """
+    left, top, wide, tall = view.box
+    new_left = int(np.clip(round(left * across), 0, shape[1] - 1))
+    new_top = int(np.clip(round(top * down), 0, shape[0] - 1))
+    new_wide = int(np.clip(round((left + wide) * across) - new_left, 1, shape[1] - new_left))
+    new_tall = int(np.clip(round((top + tall) * down) - new_top, 1, shape[0] - new_top))
+    lamps = view.lamps * np.array([across, down, across, down, 1.0], dtype=np.float32)
+    mask = view.mask
+    if mask is not None:
+        mask = (
+            cv2.resize(mask.astype(np.uint8), (new_wide, new_tall), interpolation=cv2.INTER_AREA)
+            > 0
+        )
+        if not mask.any():
+            mask[new_tall // 2, new_wide // 2] = True
+    plate = view.plate
+    if plate is not None:
+        plate = (plate[0] * across, plate[1] * down, plate[2] * across, plate[3] * down)
+    return view._replace(
+        box=(new_left, new_top, new_wide, new_tall), lamps=lamps, mask=mask, plate=plate
+    )
+
+
 def check_views(views: Any, *, source: str) -> list[VehicleView]:
     """``views`` as a list of :class:`VehicleView`, or a clear error.
 
@@ -489,6 +576,14 @@ class VehicleViewEstimator(ABC):
         the score. None here; an estimator that can find them says so.
         """
         return np.zeros((0, 7), dtype=np.float32)
+
+    def street_signs(self, image: np.ndarray) -> np.ndarray:
+        """The road signs of one ``(H, W, 3)`` frame, a row to each, where the reader finds them.
+
+        As :func:`street_signs` returns them: left, top, right, bottom and
+        score. None here; an estimator that can find them says so.
+        """
+        return np.zeros((0, 5), dtype=np.float32)
 
 
 class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
@@ -622,9 +717,21 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         if self._seen is None or self._seen[0] != key:
             whole = np.full((max(height, width), max(height, width), 3), 114, dtype=np.uint8)
             whole[:height, :width] = image
-            least = min(_VEHICLE_SCORE, _POST_SCORE)
-            self._seen = (key, self._find(whole, VEHICLE_PROMPTS + STREET_LAMP_PROMPTS, least))
+            least = min(_VEHICLE_SCORE, _POST_SCORE, _SIGN_SCORE)
+            asked = VEHICLE_PROMPTS + STREET_LAMP_PROMPTS + SIGN_PROMPTS
+            self._seen = (key, self._find(whole, asked, least))
         return self._seen[1]
+
+    def street_signs(self, image: np.ndarray) -> np.ndarray:
+        """The road signs of one ``(H, W, 3)`` frame (:func:`street_signs`).
+
+        From the same look at the whole frame that finds its vehicles.
+        """
+        if image.dtype != np.uint8:
+            image = np.clip(np.rint(image.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
+        found = self._whole_frame(image)
+        signs = found[found[:, 4] == len(VEHICLE_PROMPTS) + len(STREET_LAMP_PROMPTS)]
+        return street_signs(signs, image.shape[:2])
 
     def street_lamps(self, image: np.ndarray) -> np.ndarray:
         """The street lamps of one ``(H, W, 3)`` frame (:func:`lamp_posts`).
@@ -634,7 +741,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         if image.dtype != np.uint8:
             image = np.clip(np.rint(image.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
         found = self._whole_frame(image)
-        return lamp_posts(found[found[:, 4] >= len(VEHICLE_PROMPTS)], image.shape[0])
+        return lamp_posts(found[found[:, 4] == len(VEHICLE_PROMPTS)], image.shape[0])
 
     def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
         """The view of each vehicle of one ``(H, W, 3)`` frame, largest first.
@@ -680,7 +787,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
                 at_y, at_x = (slot // self.grid) * cell + 4, (slot % self.grid) * cell + 4
                 canvas[at_y : at_y + cut.shape[0], at_x : at_x + cut.shape[1]] = cut
                 placed.append((at_x, at_y, cut.shape[1], cut.shape[0], scale, x0, y0))
-            lamps = self._find(canvas, LAMP_PROMPTS, self.min_score)
+            lamps = self._find(canvas, LAMP_PROMPTS + PLATE_PROMPTS, self.min_score)
             middle_x, middle_y = (
                 0.5 * (lamps[:, 0] + lamps[:, 2]),
                 0.5 * (lamps[:, 1] + lamps[:, 3]),
@@ -696,6 +803,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
                 rows = lamps[inside].copy()
                 rows[:, :4] = (rows[:, :4] - [at_x, at_y, at_x, at_y]) / scale + [x0, y0, x0, y0]
                 box, mask, kind = apart[index]
-                seen = lamps_of(box, mask, rows, self.min_score)
-                views[index] = seen._replace(mask=mask, kind=kind)
+                seen = lamps_of(box, mask, rows[rows[:, 4] < len(LAMP_PROMPTS)], self.min_score)
+                plate = plate_of(box, rows[rows[:, 4] >= len(LAMP_PROMPTS)])
+                views[index] = seen._replace(mask=mask, kind=kind, plate=plate)
         return views

@@ -53,6 +53,7 @@ output and the papers behind it. For how they fit together see
 | [`DemosaicArtifacts`](DemosaicArtifacts.md) | False colour and zipped edges on fine detail, from a cheap camera's mosaic. | no |
 | [`ExposureTransient`](ExposureTransient.md) | Auto-exposure / auto-white-balance error, as a camera mid-hunt shows it. | no |
 | [`IrCutFilterFault`](IrCutFilterFault.md) | A colour picture taken with the infrared-cut filter stuck open. | no |
+| [`NightColorMode`](NightColorMode.md) | A night in colour, lit by the scene's street lamps and its traffic. | yes |
 | [`NightIrMode`](NightIrMode.md) | Monochrome IR night mode with the camera's own illuminator. | yes |
 | [`OnScreenOverlay`](OnScreenOverlay.md) | A timestamp, a camera name and privacy masks drawn over the frame. | no |
 | [`RollingShutter`](RollingShutter.md) | Shear and wobble from line-by-line readout under camera motion. | no |

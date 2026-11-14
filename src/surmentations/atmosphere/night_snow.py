@@ -50,7 +50,7 @@ from surmentations.atmosphere.night_rain import (
     _frustum_volume,
 )
 from surmentations.atmosphere.snow import render_flake_field, snow_fall_speed
-from surmentations.base import CameraTransform, scene_fov
+from surmentations.base import CameraTransform, lamp_cones, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
@@ -59,10 +59,15 @@ from surmentations.utils.precipitation import (
     gunn_marshall_slope,
     resolvable_fraction,
     sample_resolvable_particles,
+    snow_extinction_coefficient,
     snow_number_density,
     snow_physical_diameter,
     width_cut_for_budget,
 )
+
+# What a falling particle sends a lens of a lamp's light, against what its
+# share of the air's extinction says. 1: it is taken at its word.
+_CONE_GAIN = 1.0
 
 
 class NightSnow(CameraTransform):
@@ -90,6 +95,16 @@ class NightSnow(CameraTransform):
             units of full scale. Snow is a bright diffuse scatterer, so this
             sits higher for a given lamp than a raindrop's does.
         beam_falloff_range: how sharply the beam dims off-axis.
+        lamp_cone_range: how strongly the snow shows in the light of the
+            scene's lamps, drawn per call; 0 is not at all. It does
+            something on a frame that
+            :class:`~surmentations.camera.night_ir.NightIrMode` or
+            :class:`~surmentations.camera.night_color.NightColorMode` made
+            a night of with a provider that knows where its lamps are: the
+            snow is lit in a cone under each street lamp and in a wedge
+            ahead of each headlamp, and dark elsewhere, which is how
+            snow at night is mostly seen. See
+            :func:`~surmentations.base.lamp_cones`.
         backscatter_grain_range: how much of its grain that glow keeps, drawn
             per call. At 0 it is an even wall of light, as it was. At 1 it
             varies as a count of flakes does: what comes back from the air
@@ -132,6 +147,7 @@ class NightSnow(CameraTransform):
         """The arguments of ``NightSnow`` as Albumentations validates them: each
         range ordered low to high and within the bounds given here.
         """
+
         snowfall_rate_range_mm_h: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -166,6 +182,11 @@ class NightSnow(CameraTransform):
             tuple[float, float],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 6.0)),
+        ]
+        lamp_cone_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 4.0)),
         ]
         backscatter_grain_range: Annotated[
             tuple[float, float],
@@ -231,6 +252,7 @@ class NightSnow(CameraTransform):
         beam_falloff_range: tuple[float, float] = (0.6, 2.2),
         backscatter_range: tuple[float, float] = (0.03, 0.2),
         backscatter_grain_range: tuple[float, float] = (0.7, 1.2),
+        lamp_cone_range: tuple[float, float] = (0.6, 1.4),
         exposure_time_range: tuple[float, float] = (0.020, 0.040),
         fall_speed_scale_range: tuple[float, float] = (0.7, 1.8),
         fall_angle_range: tuple[float, float] = (-12.0, 12.0),
@@ -254,6 +276,7 @@ class NightSnow(CameraTransform):
         self.beam_falloff_range = beam_falloff_range
         self.backscatter_range = backscatter_range
         self.backscatter_grain_range = backscatter_grain_range
+        self.lamp_cone_range = lamp_cone_range
         self.exposure_time_range = exposure_time_range
         self.fall_speed_scale_range = fall_speed_scale_range
         self.fall_angle_range = fall_angle_range
@@ -321,9 +344,7 @@ class NightSnow(CameraTransform):
         diameter_mm = snow_physical_diameter(melted_mm, snow_density)
 
         radius_px = 0.5 * focal * (diameter_mm * 1e-3) / distance_m
-        blur_radius_px = (
-            0.5 * focal * aperture_m * np.abs(1.0 / distance_m - 1.0 / focus_distance)
-        )
+        blur_radius_px = 0.5 * focal * aperture_m * np.abs(1.0 / distance_m - 1.0 / focus_distance)
         speed = snow_fall_speed(diameter_mm) * fall_speed_scale
         smear_px = focal * speed * exposure / distance_m
 
@@ -384,6 +405,24 @@ class NightSnow(CameraTransform):
                 grain,
                 lit_from_lens=True,
             )
+        # The flakes in the light of the scene's own lamps, where those
+        # are known: last of all the draws.
+        cone = self.py_random.uniform(*self.lamp_cone_range)
+        cones = lamp_cones(data, snow_extinction_coefficient(snowfall_rate)) if cone > 0.0 else None
+        if cones is not None:
+            drawn["cones"] = cones * np.float32(cone * _CONE_GAIN)
+            if "backscatter_grain" not in drawn:
+                drawn["cone_grain"] = far_field_texture(
+                    np.zeros((height, width), dtype=np.float32),
+                    np.random.default_rng(grain_seed),
+                    snow_number_density(snowfall_rate, 0.0),
+                    focal,
+                    far,
+                    focal * float(snow_fall_speed(3.0 / slope)) * fall_speed_scale * exposure,
+                    fall_angle,
+                    1.0,
+                    lit_from_lens=True,
+                )
         return drawn
 
     def apply(
@@ -394,6 +433,8 @@ class NightSnow(CameraTransform):
         beam: np.ndarray,
         backscatter: float,
         backscatter_grain: np.ndarray | None = None,
+        cones: np.ndarray | None = None,
+        cone_grain: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the lit flakes through a round stop and add them, with glare and backscatter.
@@ -442,4 +483,8 @@ class NightSnow(CameraTransform):
             if backscatter_grain is not None:
                 glow = glow * backscatter_grain
             out = out + glow[..., None]
+        if cones is not None:
+            # In the lamps' light: a count of flakes, with a count's grain.
+            grain = backscatter_grain if backscatter_grain is not None else cone_grain
+            out = out + (cones if grain is None else cones * grain[..., None])
         return from_linear_unit(np.clip(out, 0.0, None), scale, is_integer, img.dtype)

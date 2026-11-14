@@ -59,6 +59,7 @@ import threading
 import weakref
 from typing import Any, NamedTuple
 
+import cv2
 import numpy as np
 
 from surmentations import mode
@@ -82,7 +83,12 @@ from surmentations.perception.labels import (
     check_labels,
     class_weight,
 )
-from surmentations.perception.vehicles import VehicleView, VehicleViewEstimator, check_views
+from surmentations.perception.vehicles import (
+    VehicleView,
+    VehicleViewEstimator,
+    check_views,
+    scaled_view,
+)
 
 # Samples per axis of the content fingerprint. 32 x 32 pixels is a few
 # kilobytes and a few microseconds, against tens of milliseconds for the
@@ -96,6 +102,9 @@ _MAX_ALIASES = 16
 # Every live provider, so a transform with no provider of its own (lens dirt
 # between fog and night mode, say) can still pass the scene along.
 _LIVE_PROVIDERS: weakref.WeakSet[SharedDepthProvider] = weakref.WeakSet()
+# How many frames made from frames it has not been asked about a provider
+# remembers the start of: a pipeline is a dozen transforms at most.
+_MAX_LINEAGE = 16
 
 
 class DepthCacheInfo(NamedTuple):
@@ -134,12 +143,19 @@ def _fingerprint(image: np.ndarray) -> tuple[Any, ...]:
 class _Alias:
     """One array known to show a scene."""
 
-    __slots__ = ("fingerprint", "ref")
+    __slots__ = ("fingerprint", "lit_air", "ref")
 
-    def __init__(self, image: np.ndarray) -> None:
-        """Hold ``image`` weakly, with a fingerprint of its contents."""
+    def __init__(self, image: np.ndarray, lit_air: np.ndarray | None = None) -> None:
+        """Hold ``image`` weakly, with a fingerprint of its contents.
+
+        ``lit_air`` is what is known of the light in the air of this one
+        picture of the scene (:meth:`SharedDepthProvider.set_lit_air`): it
+        is the picture's and not the scene's, since the same scene by day
+        has none.
+        """
         self.ref = weakref.ref(image)
         self.fingerprint = _fingerprint(image)
+        self.lit_air = lit_air
 
     def is_alive(self) -> bool:
         """Whether the array this alias stands for still exists."""
@@ -173,6 +189,7 @@ class _Scene:
         "labels",
         "metric",
         "pitch",
+        "signs",
         "street_lamps",
         "vehicles",
     )
@@ -195,6 +212,7 @@ class _Scene:
         self.geometry: InstallationGeometry | None = None
         self.vehicles: list[VehicleView] | None = None
         self.street_lamps: np.ndarray | None = None
+        self.signs: np.ndarray | None = None
         self.disparity: np.ndarray | None = None
         self.fov: float | None = None
         self.pitch: float | None = None
@@ -216,6 +234,13 @@ class _Scene:
         """
         live = [alias for alias in self.aliases if alias.is_alive() and alias.ref() is not image]
         self.aliases = [*live[-(_MAX_ALIASES - 1) :], _Alias(image)]
+
+    def alias_of(self, image: np.ndarray) -> _Alias | None:
+        """The alias that stands for ``image``, if this scene has one."""
+        for alias in self.aliases:
+            if alias.matches(image):
+                return alias
+        return None
 
 
 class SharedDepthProvider:
@@ -321,6 +346,9 @@ class SharedDepthProvider:
         process, and a worker starts empty.
         """
         self._scenes: list[_Scene] = []  # least recently used first
+        # Frames made from frames this provider has not been asked about:
+        # each with the frame it started as, both held weakly.
+        self._lineage: list[tuple[_Alias, weakref.ref[np.ndarray]]] = []
         self._hits = 0
         self._misses = 0
         self._lock = threading.RLock()
@@ -366,6 +394,7 @@ class SharedDepthProvider:
         image: np.ndarray,
         labels: np.ndarray | None = None,
         geometry: InstallationGeometry | None = None,
+        original: np.ndarray | None = None,
     ) -> _Scene:
         """The scene ``image`` shows, made now if it is not held. Call with the lock held.
 
@@ -374,15 +403,38 @@ class SharedDepthProvider:
         one frame: the frame a pipeline starts from, before fog or rain has
         been drawn over it. ``labels`` and ``geometry`` given here are used
         in place of the estimators'.
+
+        **From the frame as it was.** A frame this provider has not been
+        asked about, made by transforms from one it can still find (they
+        tell it: :meth:`carry`), is read as that first frame: what stands
+        in a scene is looked for in the photograph, and not in the
+        photograph with a flare or a night drawn over it. And where
+        ``original`` gives the frame at the size it was taken at, what
+        names and finds things is run on that
+        (:meth:`remember`).
         """
         scene = self._find(image)
         if scene is not None:
             self._scenes.remove(scene)
             self._scenes.append(scene)
             return scene
+        started_as = self._started_as(image)
+        if started_as is not None and labels is None and geometry is None:
+            scene = self._scene_for(started_as, original=original)
+            scene.adopt(image)
+            return scene
 
         self._misses += 1
         frame = _reference_frame(image)
+        source = frame if original is None else _reference_frame(original)
+        if source.shape[0] * frame.shape[1] != source.shape[1] * frame.shape[0]:
+            across, down = source.shape[1] / frame.shape[1], source.shape[0] / frame.shape[0]
+            if abs(across / down - 1.0) > 0.02:
+                raise ValueError(
+                    f"original is {source.shape[1]} x {source.shape[0]} and the frame "
+                    f"{frame.shape[1]} x {frame.shape[0]}: the original of a frame is the "
+                    "same picture at another size, and these are not the same shape."
+                )
         depth = np.asarray(self._estimator.estimate(frame))
         if depth.shape != frame.shape[:2]:
             raise ValueError(
@@ -396,11 +448,19 @@ class SharedDepthProvider:
         depth.flags.writeable = False
         scene = _Scene(depth, image)
 
+        named = None
         if labels is None and self._labels is not None:
-            labels = self._labels.estimate(frame)
+            # Named in the frame as it was taken, and brought to the size
+            # of the frame the pipeline works at.
+            named = np.asarray(self._labels.estimate(source))
+            labels = named
+            if source is not frame and named.shape == source.shape[:2]:
+                labels = cv2.resize(
+                    named, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST
+                )
         if labels is not None:
-            source = "remember()" if self._labels is None else type(self._labels).__name__
-            scene.labels = check_labels(labels, frame.shape[:2], source=source).view()
+            given_by = "remember()" if self._labels is None else type(self._labels).__name__
+            scene.labels = check_labels(labels, frame.shape[:2], source=given_by).view()
             scene.labels.flags.writeable = False
         scene.disparity = self._estimator.disparity(depth)
         if isinstance(self._geometry, GeometryEstimator):
@@ -409,7 +469,7 @@ class SharedDepthProvider:
         elif geometry is None:
             geometry = self._geometry
         scene.geometry = geometry
-        self._read_vehicles(scene, frame)
+        self._read_vehicles(scene, frame, source, named)
 
         self._scenes.append(scene)
         self._prune()
@@ -433,28 +493,67 @@ class SharedDepthProvider:
             scene.asked = True
             return scene.depth
 
-    def _read_vehicles(self, scene: _Scene, frame: np.ndarray) -> None:
+    def _started_as(self, image: np.ndarray) -> np.ndarray | None:
+        """The frame ``image`` was made from by transforms, if that is known and still there."""
+        alive = [pair for pair in self._lineage if pair[0].is_alive() and pair[1]() is not None]
+        self._lineage = alive
+        for made, first in self._lineage:
+            root = first()
+            if root is not None and made.matches(image) and root.shape == image.shape:
+                return root
+        return None
+
+    def _read_vehicles(
+        self,
+        scene: _Scene,
+        frame: np.ndarray,
+        source: np.ndarray | None = None,
+        named: np.ndarray | None = None,
+    ) -> None:
         """Read which end of each of a scene's vehicles is seen, where there is a reader.
 
         From the scene's labels, which say where its vehicles are: without
         them there is nothing to read, and a scene with no vehicle labelled
         is not shown to the network at all.
+
+        ``source`` is the frame at the size it was taken at, where that is
+        not ``frame``, and ``named`` its labels at that size. The reader
+        looks at ``source``: a lamp that is three pixels in the frame a
+        pipeline works at is a dozen in the photograph. What it finds is
+        brought to the frame's own pixels.
         """
-        scene.vehicles = scene.street_lamps = None
+        scene.vehicles = scene.street_lamps = scene.signs = None
         if self._vehicles is None:
             return
+        source = frame if source is None else source
+        across = frame.shape[1] / source.shape[1]
+        down = frame.shape[0] / source.shape[0]
+        signs = np.asarray(self._vehicles.street_signs(source), dtype=np.float32).reshape(-1, 5)
+        scene.signs = signs * np.array([across, down, across, down, 1.0], dtype=np.float32)
         # The reader's street lamps need no labels: they are found in the
         # frame, and a night frame is lit by them whatever else is in it.
-        lamps = np.asarray(self._vehicles.street_lamps(frame), dtype=np.float32).reshape(-1, 7)
-        scene.street_lamps = lamps
+        lamps = np.asarray(self._vehicles.street_lamps(source), dtype=np.float32).reshape(-1, 7)
+        scene.street_lamps = lamps * np.array(
+            [across, down, across, down, across, down, 1.0], dtype=np.float32
+        )
         if scene.labels is None:
             return
-        named = scene.labels == int(SceneClass.VEHICLE)
-        if not named.any():
+        if named is None or named.shape != source.shape[:2]:
+            named = scene.labels
+            if named.shape != source.shape[:2]:
+                named = cv2.resize(
+                    named, (source.shape[1], source.shape[0]), interpolation=cv2.INTER_NEAREST
+                )
+        vehicles = named == int(SceneClass.VEHICLE)
+        if not vehicles.any():
             scene.vehicles = []
             return
-        source = type(self._vehicles).__name__
-        scene.vehicles = check_views(self._vehicles.estimate(frame, named), source=source)
+        reader = type(self._vehicles).__name__
+        views = check_views(self._vehicles.estimate(source, vehicles), source=reader)
+        if source.shape[:2] != frame.shape[:2]:
+            views = [scaled_view(view, across, down, frame.shape[:2]) for view in views]
+            views = [view for view in views if view.box[2] > 0 and view.box[3] > 0]
+        scene.vehicles = views
 
     def get_vehicles(self, image: np.ndarray) -> list[VehicleView] | None:
         """Which end of each vehicle of ``image``'s scene is seen, or ``None`` with nothing to say.
@@ -479,6 +578,45 @@ class SharedDepthProvider:
         """
         with self._lock:
             return self._scene_for(image).street_lamps
+
+    def get_signs(self, image: np.ndarray) -> np.ndarray | None:
+        """The road signs of ``image``'s scene as the vehicle reader found them, or ``None``.
+
+        One row to a sign: its left, top, right and bottom in pixels and a
+        score. ``None`` when the provider has no vehicle reader; an empty
+        array where it found none or does not look for them.
+        """
+        with self._lock:
+            return self._scene_for(image).signs
+
+    def set_lit_air(self, image: np.ndarray, air: np.ndarray | None) -> bool:
+        """Note the light that hangs in the air of one picture of a scene.
+
+        ``air`` is ``(h, w, 4)`` float32, on any grid of the frame's shape.
+        In its first three planes, for each line of sight, the light its
+        lamps throw on the air along it, summed over its length, in the
+        picture's own linear RGB times metres; in the fourth, how far off
+        along the line that lit air is, in metres. Times an extinction
+        coefficient the first is what fog, rain or snow in that air sends
+        back to the lens, the cone under a street lamp and the wedge ahead
+        of a headlamp, and the second is how much of it the same fog, rain
+        or snow takes out again on the way.
+
+        A transform that makes a night of a frame knows where its lamps
+        are and notes this for the frame it returns; the transforms that
+        put something in the air afterwards ask for it (:func:`lit_air`),
+        and it follows the frame through them. It belongs to the picture
+        and not to the scene: the same scene by day has none.
+
+        Returns whether ``image`` is a frame this provider knows.
+        """
+        with self._lock:
+            scene = self._find(image)
+            alias = None if scene is None else scene.alias_of(image)
+            if alias is None:
+                return False
+            alias.lit_air = air
+            return True
 
     def get_labels(self, image: np.ndarray) -> np.ndarray | None:
         """What each pixel of ``image``'s scene is, or ``None`` with nothing to say.
@@ -509,6 +647,7 @@ class SharedDepthProvider:
         *,
         labels: np.ndarray | None = None,
         geometry: InstallationGeometry | None = None,
+        original: np.ndarray | None = None,
     ) -> None:
         """Tell the provider what is already known about ``image``, before a pipeline runs.
 
@@ -520,13 +659,27 @@ class SharedDepthProvider:
         geometry that leaves something open has it filled in by the
         provider's estimator if there is one.
 
+        ``original`` is the same frame at the size it was taken at, where
+        the pipeline works on a reduced copy. What names and finds things
+        in a scene, its labels and its vehicle reader, is then run on the
+        original, and what it finds is brought to the frame's pixels: a
+        number plate or a lamp that is a few pixels in a frame 800 across
+        is found in the photograph it was reduced from, and missed or
+        misplaced in the reduction. Depth and the camera's geometry are
+        still the frame's own. It must be the same picture: the same shape
+        to within a fiftieth.
+
         Call it with the array the pipeline is about to be given: the scene
         is recognised by that array, as it is for depth.
         """
         with self._lock:
             scene = self._find(image)
+            if scene is not None and original is not None:
+                # Read again, from the original this time.
+                self._scenes.remove(scene)
+                scene = None
             if scene is None:
-                self._scene_for(image, labels=labels, geometry=geometry)
+                self._scene_for(image, labels=labels, geometry=geometry, original=original)
                 return
             if labels is not None:
                 frame = _reference_frame(image)
@@ -728,8 +881,20 @@ class SharedDepthProvider:
         with self._lock:
             scene = self._find(source)
             if scene is None:
+                # Not a frame this provider has been asked about, yet. It
+                # may be asked about what was made from it, and is then to
+                # read the frame that came first and not this one.
+                started_as = self._started_as(source)
+                first = source if started_as is None else started_as
+                self._lineage = [*self._lineage[-(_MAX_LINEAGE - 1) :]]
+                self._lineage.append((_Alias(derived), weakref.ref(first)))
                 return False
+            before = scene.alias_of(source)
             scene.adopt(derived)
+            after = scene.alias_of(derived)
+            if before is not None and after is not None:
+                # What hangs in the air of the one hangs in the other's.
+                after.lit_air = before.lit_air
             return True
 
     def cache_info(self) -> DepthCacheInfo:
@@ -778,6 +943,22 @@ def settled_fov(image: np.ndarray, horizontal_fov_deg: float) -> float:
                 continue
             return provider.settle_fov(image, horizontal_fov_deg)
     return horizontal_fov_deg
+
+
+def lit_air(image: np.ndarray) -> np.ndarray | None:
+    """The light in the air of ``image``, as whichever live provider knows it; else ``None``.
+
+    What :meth:`SharedDepthProvider.set_lit_air` noted for this picture or
+    for the one it was made from. For a transform that puts rain, snow or
+    fog in the air and has no provider of its own.
+    """
+    for provider in list(_LIVE_PROVIDERS):
+        with provider._lock:
+            scene = provider._find(image)
+            alias = None if scene is None else scene.alias_of(image)
+            if alias is not None and alias.lit_air is not None:
+                return alias.lit_air
+    return None
 
 
 def carry_depth(source: np.ndarray, derived: np.ndarray) -> None:

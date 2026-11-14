@@ -14,7 +14,9 @@ surmentations.camera.denoise
 surmentations.camera.exposure
 surmentations.camera.flicker
 surmentations.camera.ir_cut
+surmentations.camera.night_color
 surmentations.camera.night_ir
+surmentations.camera.night_lighting
 surmentations.camera.overlay
 surmentations.camera.rolling_shutter
 surmentations.camera.sensor_noise

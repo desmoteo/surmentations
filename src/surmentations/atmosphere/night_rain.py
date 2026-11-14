@@ -52,7 +52,7 @@ from pydantic import AfterValidator, Field
 
 from surmentations import mode
 from surmentations.atmosphere.rain import render_streak_layer
-from surmentations.base import CameraTransform, scene_fov
+from surmentations.base import CameraTransform, lamp_cones, scene_fov
 from surmentations.diagnostics import record_draw
 from surmentations.utils.grids import pixel_grid
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -61,6 +61,7 @@ from surmentations.utils.precipitation import (
     focal_length_px,
     gamma_dsd_slope,
     marshall_palmer_slope,
+    rain_extinction_coefficient,
     rain_number_density,
     raindrop_terminal_velocity,
     resolvable_fraction,
@@ -72,6 +73,11 @@ from surmentations.utils.precipitation import (
 #: the ``1/z^2`` falloff is expressed relative to something. Drops nearer than
 #: this saturate, which is exactly what they do in real footage.
 _REFERENCE_DISTANCE_M = 1.0
+
+
+# What a falling particle sends a lens of a lamp's light, against what its
+# share of the air's extinction says. 1: it is taken at its word.
+_CONE_GAIN = 1.0
 
 
 class NightRain(CameraTransform):
@@ -105,6 +111,16 @@ class NightRain(CameraTransform):
             ``1/z^2`` term a drop at 0.4 m saturates while one at 4 m is
             invisible. Values near 1 give a restrained drizzle; the upper end
             gives the hard white streaks of heavy rain in a strong beam.
+        lamp_cone_range: how strongly the rain shows in the light of the
+            scene's lamps, drawn per call; 0 is not at all. It does
+            something on a frame that
+            :class:`~surmentations.camera.night_ir.NightIrMode` or
+            :class:`~surmentations.camera.night_color.NightColorMode` made
+            a night of with a provider that knows where its lamps are: the
+            rain is lit in a cone under each street lamp and in a wedge
+            ahead of each headlamp, and dark elsewhere, which is how
+            rain at night is mostly seen. See
+            :func:`~surmentations.base.lamp_cones`.
         backscatter_grain_range: how much of its grain that glow keeps, drawn
             per call. At 0 it is an even wall of light, as it was. At 1 it
             varies as a count of drops does: what comes back from the air
@@ -135,6 +151,7 @@ class NightRain(CameraTransform):
         """The arguments of ``NightRain`` as Albumentations validates them: each
         range ordered low to high and within the bounds given here.
         """
+
         rain_rate_range_mm_h: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -170,6 +187,11 @@ class NightRain(CameraTransform):
             tuple[float, float],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 20.0)),
+        ]
+        lamp_cone_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 4.0)),
         ]
         backscatter_grain_range: Annotated[
             tuple[float, float],
@@ -212,6 +234,7 @@ class NightRain(CameraTransform):
         illuminator_gain_range: tuple[float, float] = (1.5, 6.0),
         backscatter_range: tuple[float, float] = (0.02, 0.14),
         backscatter_grain_range: tuple[float, float] = (0.7, 1.2),
+        lamp_cone_range: tuple[float, float] = (0.6, 1.4),
         horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
         aperture_diameter_range_mm: tuple[float, float] = (0.9, 2.6),
         focus_distance_range_m: tuple[float, float] = (8.0, 40.0),
@@ -232,6 +255,7 @@ class NightRain(CameraTransform):
         self.illuminator_gain_range = illuminator_gain_range
         self.backscatter_range = backscatter_range
         self.backscatter_grain_range = backscatter_grain_range
+        self.lamp_cone_range = lamp_cone_range
         self.horizontal_fov_range_deg = horizontal_fov_range_deg
         self.aperture_diameter_range_mm = aperture_diameter_range_mm
         self.focus_distance_range_m = focus_distance_range_m
@@ -296,9 +320,7 @@ class NightRain(CameraTransform):
 
         drop_width = focal * (diameter_mm * 1e-3) / distance_m
         length = focal * (speed * exposure) / distance_m
-        blur_radius = (
-            0.5 * focal * aperture_m * np.abs(1.0 / distance_m - 1.0 / focus_distance)
-        )
+        blur_radius = 0.5 * focal * aperture_m * np.abs(1.0 / distance_m - 1.0 / focus_distance)
         thickness = drop_width + 2.0 * blur_radius
 
         # The whole point of this transform. Irradiance on the drop falls as
@@ -363,6 +385,26 @@ class NightRain(CameraTransform):
                 grain,
                 lit_from_lens=True,
             )
+        # The drops in the light of the scene's own lamps, where those
+        # are known: last of all the draws.
+        cone = self.py_random.uniform(*self.lamp_cone_range)
+        cones = lamp_cones(data, rain_extinction_coefficient(rain_rate)) if cone > 0.0 else None
+        if cones is not None:
+            drawn["cones"] = cones * np.float32(cone * _CONE_GAIN)
+            if "backscatter_grain" not in drawn:
+                drawn["cone_grain"] = far_field_texture(
+                    np.zeros((height, width), dtype=np.float32),
+                    np.random.default_rng(grain_seed),
+                    rain_number_density(rain_rate, 0.0),
+                    focal,
+                    far,
+                    focal
+                    * float(raindrop_terminal_velocity(3.0 / marshall_palmer_slope(rain_rate)))
+                    * exposure,
+                    wind_angle,
+                    1.0,
+                    lit_from_lens=True,
+                )
         return drawn
 
     def apply(
@@ -373,6 +415,8 @@ class NightRain(CameraTransform):
         gain: float,
         backscatter: float,
         backscatter_grain: np.ndarray | None = None,
+        cones: np.ndarray | None = None,
+        cone_grain: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Add the lit streaks and the beam's backscatter to the frame.
@@ -404,6 +448,10 @@ class NightRain(CameraTransform):
                 glow = glow * backscatter_grain
             out = out + glow[..., None]
 
+        if cones is not None:
+            # In the lamps' light: a count of drops, with a count's grain.
+            grain = backscatter_grain if backscatter_grain is not None else cone_grain
+            out = out + (cones if grain is None else cones * grain[..., None])
         return from_linear_unit(np.clip(out, 0.0, None), scale, is_integer, img.dtype)
 
 

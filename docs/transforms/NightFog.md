@@ -82,6 +82,7 @@ inside it all the same.
 | `illuminator_backscatter_range` | `(0.0, 0.0)` | brightness of the wall of light the camera's own illuminator raises in the fog, relative to full scale. Zero — the default — means the illuminator is off. Set it only for frames in infrared mode, and apply this transform *after* `NightIrMode`; the shipped pipelines do both. |
 | `beam_falloff_range` | `(0.6, 2.2)` | how sharply the illuminator's beam dims off-axis. |
 | `visibility_range_scene` | `None` | visibility as a multiple of the scene's depth, in place of `visibility_range_m`: the same fog on a courtyard and on a long street. See `RandomFog`. `None`, the default, uses `visibility_range_m`. |
+| `lamp_cone_range` | `(0.6, 1.4)` | how strongly the fog shows in the light of the scene's lamps, drawn per call; 0 is not at all. It does something on a frame that `NightIrMode` or `NightColorMode` made a night of with a provider that knows where its lamps are: the fog is lit in a cone under each street lamp and in a wedge ahead of each headlamp, and dark elsewhere, which is how fog at night is mostly seen. See `lamp_cones`. The fog's own glow is then that of its lamps, and no longer the scene's blurred brightness, which over a lit road was a white sheet. |
 | `p` | `0.5` | probability that the transform is applied |
 
 ## Samples

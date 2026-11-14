@@ -149,6 +149,11 @@ SOURCES = {
     "saglam": "Saglam, A. and Temizel, A. (2009). Real-time adaptive camera tamper detection for "
     "video surveillance. *IEEE International Conference on Advanced Video and Signal Based "
     "Surveillance (AVSS)*.",
+    "elvidge": "Elvidge, C. D., Keith, D. M., Tuttle, B. T. and Baugh, K. E. (2010). Spectral "
+    "identification of lighting type and character. *Sensors* 10(4), 3961-3988.",
+    "sun2005": "Sun, B., Ramamoorthi, R., Narasimhan, S. G. and Nayar, S. K. (2005). A practical "
+    "analytic single scattering model for real time rendering. *ACM SIGGRAPH 2005 Papers*, "
+    "1040-1049.",
     "gates": "Gates, D. M., Keegan, H. J., Schleter, J. C. and Weidner, V. R. (1965). Spectral "
     "properties of plants. *Applied Optics* 4(1), 11.",
     "brown": "Brown, M. and Süsstrunk, S. (2011). Multi-spectral SIFT for scene category "
@@ -261,6 +266,8 @@ LINKS = {
     "libbrecht": DOI + "10.1088/0034-4885/68/4/R03",
     "ribnick": DOI + "10.1109/AVSS.2006.94",
     "saglam": DOI + "10.1109/AVSS.2009.29",
+    "elvidge": DOI + "10.3390/s100403961",
+    "sun2005": DOI + "10.1145/1186822.1073309",
     "gates": DOI + "10.1364/AO.4.000011",
     "brown": DOI + "10.1109/CVPR.2011.5995637",
     "emva": "https://www.emva.org/standards-technology/emva-1288/",
@@ -564,6 +571,27 @@ PAGES: dict[str, tuple[str, list[str]]] = {
     "NightIrMode": (
         _FROM_GUIDE + "Night IR",
         ["gates", "brown", "emva", "depth_anything"],
+    ),
+    "NightColorMode": (
+        _flow(
+            'RGB["frame, linear: what each surface sends back"] --> EVEN["the road without '
+            'the day\'s light and shade"]',
+            'PROV["provider: street lamps, vehicles and their lamps, ground"] --> SPACE["lamps '
+            'placed in space over a plane through the ground"]',
+            'SPACE --> POOLS["street lamps: pools, inverse square, in the lamps\' colour"]',
+            'SPACE --> BEAMS["headlamps: two beams ahead of each lit vehicle"]',
+            'GLOW["the sky\'s glow, everywhere"] --> SUM["light arriving, per channel"]',
+            "POOLS --> SUM",
+            "BEAMS --> SUM",
+            'EVEN --> SIG["signal = surface x light"]',
+            "SUM --> SIG",
+            'SIG --> AE["auto-exposure: 80th percentile to target, lit road held below white"]',
+            'AE --> LAMPS["plus the lamps themselves, over full scale, and their bloom"]',
+            'LAMPS --> NOISE["plus shot and read noise in each channel, scaled by gain"]',
+            "NOISE --> OUT([frame])",
+            'SPACE -.-> AIR["the lamps\' light on the air, noted for fog, rain and snow"]',
+        ),
+        ["elvidge", "sun2005", "depth_anything"],
     ),
     "IrCutFilterFault": (
         _flow(

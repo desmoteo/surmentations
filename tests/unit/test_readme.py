@@ -35,6 +35,7 @@ from surmentations.camera import (
     DemosaicArtifacts,
     ExposureTransient,
     IrCutFilterFault,
+    NightColorMode,
     NightIrMode,
     OnScreenOverlay,
     RollingShutter,
@@ -67,7 +68,7 @@ TRANSFORMS = {
     for cls in (
         RandomFog, RandomRain, RandomSnow, NightRain, NightSnow, NightFog,
         WaterDroplets, DirtSoil, SunFlare, SourceGlare, HousingOccluders, SpiderWeb,
-        CastShadows, NightIrMode, AcFlicker, RollingShutter, SensorNoise,
+        CastShadows, NightIrMode, NightColorMode, AcFlicker, RollingShutter, SensorNoise,
         ExposureTransient, WdrToneMapping, TemporalDenoiseArtifacts,
         VideoCodecArtifacts, TransmissionFaults,
         NightInsects, GroundFog, LocalPlumes, HeatShimmer, IrDomeGlare, FrostOnGlass,
