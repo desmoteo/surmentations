@@ -44,19 +44,92 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from weathermentations.atmosphere import RandomFog, RandomRain, RandomSnow  # noqa: E402
-from weathermentations.depth import (  # noqa: E402
+from surmentations.atmosphere import (  # noqa: E402
+    NightFog,
+    NightRain,
+    NightSnow,
+    RandomFog,
+    RandomRain,
+    RandomSnow,
+)
+from surmentations.atmosphere.ground_fog import GroundFog  # noqa: E402
+from surmentations.atmosphere.heat_shimmer import HeatShimmer  # noqa: E402
+from surmentations.atmosphere.night_insects import NightInsects  # noqa: E402
+from surmentations.atmosphere.plumes import LocalPlumes  # noqa: E402
+from surmentations.camera import (  # noqa: E402
+    AcFlicker,
+    ExposureTransient,
+    NightIrMode,
+    RollingShutter,
+    SensorNoise,
+    TemporalDenoiseArtifacts,
+    TransmissionFaults,
+    VideoCodecArtifacts,
+    WdrToneMapping,
+)
+from surmentations.camera.analog import AnalogVideoArtifacts  # noqa: E402
+from surmentations.camera.codec import ffmpeg_path  # noqa: E402
+from surmentations.camera.demosaic import DemosaicArtifacts  # noqa: E402
+from surmentations.camera.ir_cut import IrCutFilterFault  # noqa: E402
+from surmentations.camera.overlay import OnScreenOverlay  # noqa: E402
+from surmentations.camera.vibration import CameraVibration  # noqa: E402
+from surmentations.depth import (  # noqa: E402
     DepthAnythingV2Estimator,
     SharedDepthProvider,
 )
-from weathermentations.lens import DirtSoil, SunFlare, WaterDroplets  # noqa: E402
+from surmentations.lens import (  # noqa: E402
+    DirtSoil,
+    HousingOccluders,
+    SourceGlare,
+    SpiderWeb,
+    SunFlare,
+    WaterDroplets,
+)
+from surmentations.lens.dome_glare import IrDomeGlare  # noqa: E402
+from surmentations.lens.focus import FocusShift  # noqa: E402
+from surmentations.lens.foliage import FoliageIntrusion  # noqa: E402
+from surmentations.lens.frost import FrostOnGlass  # noqa: E402
+from surmentations.lens.snow_cap import SnowOnHousing  # noqa: E402
+from surmentations.lens.tamper import LensTamper  # noqa: E402
+from surmentations.scene import CastShadows  # noqa: E402
 
-DEPTH_FREE = ("water_droplets", "dirt_soil", "sun_flare")
-DEPTH_CONDITIONED = ("fog", "rain", "snow")
+DEPTH_FREE = (
+    "water_droplets",
+    "dirt_soil",
+    "sun_flare",
+    "housing_occluders",
+    "ac_flicker",
+    "rolling_shutter",
+    "sensor_noise",
+    "exposure_transient",
+    "wdr_tone_mapping",
+    "denoise_artifacts",
+    "video_codec",
+    "transmission_faults",
+    "night_rain",
+    "night_snow",
+    "spider_web",
+    "night_insects",
+    "ir_dome_glare",
+    "frost_on_glass",
+    "snow_on_housing",
+    "lens_tamper",
+    "foliage_intrusion",
+    "focus_shift",
+    "ir_cut_filter_fault",
+    "demosaic_artifacts",
+    "analog_video_artifacts",
+    "camera_vibration",
+    "on_screen_overlay",
+)
+DEPTH_CONDITIONED = (
+    "fog", "rain", "snow", "night_ir", "cast_shadows", "ground_fog", "local_plumes", "heat_shimmer",
+)  # fmt: skip
 
 
 @dataclass
 class Result:
+    """One transform at one size: the median time to draw its parameters and to render."""
     name: str
     size: int
     params_ms: float
@@ -64,24 +137,69 @@ class Result:
 
     @property
     def total_ms(self) -> float:
+        """Drawing and rendering together, in milliseconds."""
         return self.params_ms + self.apply_ms
 
     @property
     def images_per_second(self) -> float:
+        """How many frames one worker gets through a second at this cost."""
         return 1000.0 / self.total_ms if self.total_ms > 0 else float("inf")
 
 
 def build_transforms(depth_provider: SharedDepthProvider | None) -> dict[str, object]:
+    """Every transform of the library at its defaults, keyed by a short name.
+
+    The two codec transforms only where there is an ffmpeg binary; the
+    depth-conditioned ones only with a ``depth_provider``. This is also what
+    ``benchmark_single_core.py`` times, in whichever checkout it is given.
+    """
     transforms: dict[str, object] = {
         "water_droplets": WaterDroplets(p=1.0),
         "dirt_soil": DirtSoil(p=1.0),
         "sun_flare": SunFlare(p=1.0),
+        "housing_occluders": HousingOccluders(p=1.0),
+        "source_glare": SourceGlare(p=1.0),
+        "ac_flicker": AcFlicker(p=1.0),
+        "rolling_shutter": RollingShutter(p=1.0),
+        "sensor_noise": SensorNoise(p=1.0),
+        "exposure_transient": ExposureTransient(p=1.0),
+        "wdr_tone_mapping": WdrToneMapping(p=1.0),
+        "denoise_artifacts": TemporalDenoiseArtifacts(p=1.0),
+        # Lit by the camera rather than the scene, so it needs no depth.
+        "night_rain": NightRain(p=1.0),
+        "night_snow": NightSnow(p=1.0),
+        "spider_web": SpiderWeb(p=1.0),
+        "on_screen_overlay": OnScreenOverlay(p=1.0),
+        "camera_vibration": CameraVibration(p=1.0),
+        "focus_shift": FocusShift(p=1.0),
+        "analog_video_artifacts": AnalogVideoArtifacts(p=1.0),
+        "demosaic_artifacts": DemosaicArtifacts(p=1.0),
+        "ir_cut_filter_fault": IrCutFilterFault(p=1.0),
+        "foliage_intrusion": FoliageIntrusion(p=1.0),
+        "lens_tamper": LensTamper(p=1.0),
+        "snow_on_housing": SnowOnHousing(p=1.0),
+        "frost_on_glass": FrostOnGlass(p=1.0),
+        "ir_dome_glare": IrDomeGlare(p=1.0),
+        "night_insects": NightInsects(p=1.0),
     }
+    # Two ffmpeg subprocesses per call, so it is both the slowest transform
+    # here and the one whose cost is least about this library.
+    if ffmpeg_path() is not None:
+        transforms["video_codec"] = VideoCodecArtifacts(p=1.0)
+        transforms["transmission_faults"] = TransmissionFaults(p=1.0)
     if depth_provider is not None:
         transforms |= {
             "fog": RandomFog(depth_provider=depth_provider, p=1.0),
             "rain": RandomRain(depth_provider=depth_provider, p=1.0),
             "snow": RandomSnow(depth_provider=depth_provider, p=1.0),
+            "night_ir": NightIrMode(depth_provider=depth_provider, p=1.0),
+            "night_fog": NightFog(depth_provider=depth_provider, p=1.0),
+            "cast_shadows": CastShadows(depth_provider=depth_provider, p=1.0),
+            "ground_fog": GroundFog(depth_provider=depth_provider, p=1.0),
+            "local_plumes": LocalPlumes(depth_provider=depth_provider, p=1.0),
+            # Over a long view, where it has work to do: across these scenes' own
+            # fifty metres it returns the frame untouched.
+            "heat_shimmer": HeatShimmer(depth_provider=depth_provider, p=1.0, depth_scale=3000.0),
         }
     return transforms
 
@@ -127,6 +245,12 @@ def benchmark(
     repeats: int,
     reuse_scene: bool,
 ) -> Result:
+    """Time one transform at one size: drawing its parameters, and rendering.
+
+    Each half is the median of ``repeats`` calls after a warm-up. Drawing is
+    timed on a fresh array each call unless ``reuse_scene``, so that the
+    depth estimate is paid as a new frame pays it.
+    """
     transform.set_random_seed(0)  # type: ignore[attr-defined]
     source = scene_source(scenes, reuse_scene)
     shape_params = {"shape": scenes[0].shape}
@@ -152,6 +276,7 @@ def benchmark(
 
 
 def print_table(results: list[Result], title: str) -> None:
+    """Print results as a table: transform, size, the two halves, the total and frames a second."""
     print(f"\n{title}")
     header = (
         f"{'transform':<16}{'size':>7}{'params ms':>12}"
@@ -167,6 +292,7 @@ def print_table(results: list[Result], title: str) -> None:
 
 
 def main() -> int:
+    """Parse the command line, time every transform asked for, and print or save the results."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
         "--sizes", type=int, nargs="+", default=[512, 1024], help="square image sizes to test"

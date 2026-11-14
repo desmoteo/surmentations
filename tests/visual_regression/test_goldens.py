@@ -13,12 +13,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from weathermentations.atmosphere.fog import RandomFog
-from weathermentations.atmosphere.rain import RandomRain
-from weathermentations.atmosphere.snow import RandomSnow
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
-from weathermentations.lens import DirtSoil, SunFlare, WaterDroplets
+from surmentations.atmosphere.fog import RandomFog
+from surmentations.atmosphere.rain import RandomRain
+from surmentations.atmosphere.snow import RandomSnow
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
+from surmentations.lens import DirtSoil, SunFlare, WaterDroplets
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
@@ -32,8 +32,32 @@ class _LinearDepthEstimator(DepthEstimator):
     """
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth rising linearly from 0 at the top row to 1 at the bottom."""
         height, width = image.shape[:2]
         return np.tile(np.linspace(0.0, 1.0, height)[:, None], (1, width)).astype(np.float32)
+
+
+class _GroundPlaneDepthEstimator(DepthEstimator):
+    """A level camera above a horizontal ground plane, receding to a horizon.
+
+    Snow's accumulation is derived from surface *orientation*, so it needs a
+    depth map describing a plausible surface. The linear ramp above has its
+    far end at the bottom of the frame, which back-projects to a ceiling and
+    correctly collects no snow — leaving the golden with nothing to pin.
+    """
+
+    def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth of level ground seen from 1.5 m up, horizon at mid-frame, 50 m above it.
+
+        Each row's distance follows from the camera height and the focal
+        length of a 60-degree field of view, as a real road's would.
+        """
+        height, width = image.shape[:2]
+        focal = width / (2.0 * np.tan(np.deg2rad(60.0) / 2.0))
+        cy = height / 2.0
+        rows = np.arange(height, dtype=np.float32).reshape(height, 1)
+        depth = np.where(rows > cy + 2, 1.5 * focal / np.maximum(rows - cy, 1e-3), 50.0)
+        return np.broadcast_to(np.minimum(depth, 50.0) / 50.0, (height, width)).astype(np.float32)
 
 
 TRANSFORMS = {
@@ -48,13 +72,12 @@ TRANSFORMS = {
     "rain": RandomRain(
         depth_provider=SharedDepthProvider(_LinearDepthEstimator()),
         p=1.0,
-        streak_density_range=(100, 100),
+        max_streaks=400,
         wetness_probability=1.0,
     ),
     "snow": RandomSnow(
-        depth_provider=SharedDepthProvider(_LinearDepthEstimator()),
+        depth_provider=SharedDepthProvider(_GroundPlaneDepthEstimator()),
         p=1.0,
-        flake_density_range=(150, 150),
         accumulation_probability=1.0,
     ),
 }

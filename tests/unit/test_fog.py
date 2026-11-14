@@ -1,26 +1,31 @@
+"""``RandomFog``: the output contract, the approach to airlight with depth, and the sky."""
+
 import numpy as np
 import pytest
 
-from weathermentations.atmosphere.fog import RandomFog
-from weathermentations.depth.estimator import DepthEstimator
-from weathermentations.depth.provider import SharedDepthProvider
+from surmentations.atmosphere.fog import RandomFog
+from surmentations.depth.estimator import DepthEstimator
+from surmentations.depth.provider import SharedDepthProvider
 
 
 class _LinearDepthEstimator(DepthEstimator):
     """Depth increases linearly from 0 (top row) to 1 (bottom row)."""
 
     def estimate(self, image: np.ndarray) -> np.ndarray:
+        """Depth rising linearly from 0 at the top row to 1 at the bottom."""
         height, width = image.shape[:2]
         return np.tile(np.linspace(0.0, 1.0, height)[:, None], (1, width)).astype(np.float32)
 
 
 @pytest.fixture
 def provider() -> SharedDepthProvider:
+    """A depth provider over the linear depth, as a fixture."""
     return SharedDepthProvider(_LinearDepthEstimator())
 
 
 @pytest.fixture
 def scene() -> np.ndarray:
+    """A flat blue frame, as a fixture."""
     img = np.zeros((64, 48, 3), dtype=np.uint8)
     img[:, :] = (30, 60, 120)
     return img
@@ -122,11 +127,31 @@ def test_fixed_atmospheric_light_is_respected(
     np.testing.assert_allclose(out[-1].mean(axis=0), np.array(airlight, dtype=np.float32), atol=2.0)
 
 
-def test_sky_keeps_its_gradient(provider: SharedDepthProvider, scene: np.ndarray) -> None:
-    """Uncapped, the far field collapses to exactly the airlight colour and the
-    sky goes flat. The cap must leave measurable variation up there."""
+def test_sky_keeps_its_gradient() -> None:
+    """Uncapped, the sky collapses to exactly the airlight colour and goes
+    flat. The cap must leave measurable variation up there.
+
+    The sky is found by what it looks like — featureless, at one depth,
+    reaching the top of the frame — and not by being far, so the scene here
+    has one: a smooth gradient above textured ground, at the arbitrary flat
+    depth a network gives it."""
+
+    class _SkyOverGround(DepthEstimator):
+        """A sky at an arbitrary depth over ground receding from the camera."""
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            height, width = image.shape[:2]
+            depth = np.full((height, width), 0.4, dtype=np.float32)
+            ground = height - height // 2
+            depth[height // 2 :] = np.linspace(1.0, 0.0, ground, dtype=np.float32)[:, None]
+            return depth
+
+    rng = np.random.default_rng(0)
+    scene = np.empty((96, 96, 3), dtype=np.uint8)
+    scene[:48] = np.linspace(200, 150, 48).astype(np.uint8)[:, None, None]
+    scene[48:] = rng.integers(30, 120, size=(48, 96, 1), dtype=np.uint8)
+
     common = dict(
-        depth_provider=provider,
+        depth_provider=SharedDepthProvider(_SkyOverGround()),
         p=1.0,
         beta_range=(0.5, 0.5),
         scattering_gamma_range=(0.0, 0.0),
@@ -136,5 +161,6 @@ def test_sky_keeps_its_gradient(provider: SharedDepthProvider, scene: np.ndarray
     flat = RandomFog(sky_optical_depth_cap=10.0, **common)(image=scene)["image"]
     capped = RandomFog(sky_optical_depth_cap=1.0, **common)(image=scene)["image"]
 
-    far_rows = slice(-8, None)
-    assert capped[far_rows].astype(np.float32).std() > flat[far_rows].astype(np.float32).std()
+    sky_rows = slice(4, 40)
+    assert flat[sky_rows].astype(np.float32).std() < 0.5, "uncapped, the sky is all airlight"
+    assert capped[sky_rows].astype(np.float32).std() > 2.0
