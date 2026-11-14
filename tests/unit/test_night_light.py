@@ -22,7 +22,12 @@ from surmentations.atmosphere.night_fog import NightFog
 from surmentations.atmosphere.night_rain import NightRain
 from surmentations.atmosphere.night_snow import NightSnow
 from surmentations.camera.night_color import NightColorMode
-from surmentations.camera.night_ir import NightIrMode, retroreflectors
+from surmentations.camera.night_ir import (
+    NightIrMode,
+    lens_glare,
+    retroreflectors,
+    sheeting_within,
+)
 from surmentations.camera.night_lighting import heads_by_label
 from surmentations.depth.estimator import DepthEstimator
 from surmentations.depth.provider import SharedDepthProvider
@@ -768,16 +773,25 @@ def test_signs_and_plates_send_the_illuminator_s_light_back_and_paint_a_little()
     labels = np.full((HEIGHT, WIDTH), int(SceneClass.ROAD), dtype=np.uint8)
     scene[:, 158:162] = 0.6  # a painted line down the road
     none = np.zeros((0, 5), dtype=np.float32)
-    assert retroreflectors(np.full_like(scene, 0.05), labels, None, none) is None
+    assert retroreflectors(np.full_like(scene, 0.05), labels, None, none) == (None, None)
     signs = np.array([[40.0, 60.0, 70.0, 80.0, 0.5]], np.float32)
     plate = VehicleView((200, 150, 60, 40), 0.0, 0.4, np.zeros((0, 5), np.float32))._replace(
         plate=(220.0, 170.0, 240.0, 176.0)
     )
-    back = retroreflectors(scene, labels, [plate], signs)
-    assert back is not None and back.shape == (HEIGHT, WIDTH)
-    assert float(back[70, 55]) < -300.0 and float(back[173, 230]) < -100.0
-    assert 1.0 < float(back[120, 160]) < 10.0
-    assert float(back[30, 250]) == 0.0
+    paint, sheeting = retroreflectors(scene, labels, [plate], signs)
+    assert paint is not None and paint.shape == (HEIGHT, WIDTH)
+    assert sheeting is not None and sheeting.shape == (HEIGHT, WIDTH)
+    assert float(sheeting[70, 55]) > 300.0
+    # A plate returns between a quarter of a sign's and all of it: its own
+    # share where there is a generator to draw one from, else the middle.
+    assert 100.0 < float(sheeting[173, 230]) < float(sheeting[70, 55])
+    drawn = [
+        float(retroreflectors(scene, labels, [plate], none, np.random.default_rng(seed))[1].max())
+        for seed in range(8)
+    ]
+    assert 120.0 < min(drawn) < 0.8 * max(drawn) and max(drawn) <= 500.0
+    assert 1.0 < float(paint[120, 160]) < 10.0 and float(sheeting[120, 160]) == 0.0
+    assert float(paint[30, 250]) == 0.0 and float(sheeting[30, 250]) == 0.0
 
     image, road_labels, _lamps = _night_road()
 
@@ -806,6 +820,192 @@ def test_signs_and_plates_send_the_illuminator_s_light_back_and_paint_a_little()
     assert float(with_return[95:105, 65:85].mean()) > 240.0
     assert float(without[95:105, 65:85].mean()) < 0.6 * float(with_return[95:105, 65:85].mean())
     assert float(np.abs(with_return[150:, 200:] - without[150:, 200:]).max()) == 0.0
+
+
+def _plate_picture(tall: int) -> tuple[np.ndarray, tuple[float, float, float, float]]:
+    """A yellow plate with dark characters, slanted, on red bodywork, and a loose box round it.
+
+    The plate is ``tall`` pixels high and four times as wide, and falls by
+    half its height from its left end to its right, as one seen from a
+    mast does.
+    """
+    wide = 4 * tall
+    picture = np.zeros((6 * tall, wide + 4 * tall, 3), dtype=np.float32)
+    picture[...] = (0.30, 0.02, 0.02)
+    left, top = 2 * tall, 2 * tall
+    for column in range(wide):
+        fall = round(0.5 * tall * column / wide)
+        picture[top + fall : top + fall + tall, left + column] = (0.70, 0.55, 0.05)
+        if (column // max(tall // 4, 1)) % 2 == 1 and tall // 4 <= column < wide - tall // 4:
+            # Characters: strokes an eighth of the height, a quarter in from each edge.
+            stroke = slice(top + fall + tall // 4, top + fall + tall - tall // 4)
+            if column % max(tall // 4, 1) < max(tall // 8, 1):
+                picture[stroke, left + column] = (0.03, 0.03, 0.03)
+    return picture, (left - 1.0, top - 1.0, left + wide + 1.0, top + 1.5 * tall + 1.0)
+
+
+def test_a_plate_s_sheeting_is_the_plate_in_the_picture_and_not_its_box() -> None:
+    """A reader's box is upright and loose; the plate in it is slanted. The
+    sheeting is where the picture has the plate's ground: not in the
+    corners of the box that are bodywork. A small plate is filled, its
+    characters lost; a large one keeps them out. And where the picture
+    cannot tell plate from car, the box is taken whole."""
+    picture, box = _plate_picture(8)
+    rows, columns, share = sheeting_within(picture, box, plate=True)
+    whole = np.zeros(picture.shape[:2], dtype=np.float32)
+    whole[rows, columns] = share
+    yellow = picture[..., 1] > 0.4
+    dark = (picture.sum(axis=2) < 0.2) & ~yellow
+    assert float(whole[yellow].mean()) > 0.9
+    assert float(whole[dark].mean()) > 0.9, "a small plate whose characters are holes"
+    # The corners of the box the slant leaves empty: top right, bottom left.
+    assert float(whole[16:18, 44:48].max()) < 0.2 and float(whole[26:28, 16:20].max()) < 0.2
+    body = ~yellow & ~dark
+    assert float(whole[body].sum()) < 0.25 * float(whole.sum())
+
+    large, large_box = _plate_picture(40)
+    rows, columns, share = sheeting_within(large, large_box, plate=True)
+    whole = np.zeros(large.shape[:2], dtype=np.float32)
+    whole[rows, columns] = share
+    characters = large.sum(axis=2) < 0.2
+    assert int(characters.sum()) > 200
+    assert float(whole[characters].mean()) < 0.2 and float(whole[large[..., 1] > 0.4].mean()) > 0.9
+
+    # A white plate on a white car: nothing to tell them apart by.
+    plain = np.full((40, 80, 3), 0.6, dtype=np.float32)
+    rows, columns, share = sheeting_within(plain, (30.0, 15.0, 50.0, 22.0), plate=True)
+    whole = np.zeros(plain.shape[:2], dtype=np.float32)
+    whole[rows, columns] = share
+    assert float(whole[15:22, 30:50].min()) == 1.0 and float(whole.sum()) == 20.0 * 7.0
+    assert sheeting_within(plain, (90.0, 50.0, 100.0, 60.0), plate=True) is None
+
+
+def test_a_sign_s_sheeting_leaves_out_what_is_behind_it_and_its_black_legend() -> None:
+    """A round sign in a square box against the sky: the corners of the box
+    are sky and return nothing, its red ring returns as its white does, and
+    a black legend returns nothing."""
+    picture = np.full((80, 80, 3), (0.35, 0.5, 0.8), dtype=np.float32)
+    yy, xx = np.mgrid[:80, :80]
+    far = np.hypot(yy - 39.5, xx - 39.5)
+    picture[far < 16] = (0.6, 0.05, 0.05)
+    picture[far < 12] = (0.85, 0.85, 0.85)
+    picture[36:44, 34:46] = (0.02, 0.02, 0.02)
+    rows, columns, share = sheeting_within(picture, (23.0, 23.0, 57.0, 57.0), plate=False)
+    whole = np.zeros((80, 80), dtype=np.float32)
+    whole[rows, columns] = share
+    assert float(whole[25, 25]) == 0.0 and float(whole[54, 54]) == 0.0
+    assert float(whole[39, 26]) > 0.9 and float(whole[30, 39]) > 0.9
+    assert float(whole[40, 40]) < 0.15
+    assert float(whole[:20].max()) == 0.0
+
+
+def test_a_sign_on_its_point_and_a_hoarding_seen_aslant_keep_their_shapes() -> None:
+    """A reader's upright box is a rough account of a sign standing on its
+    point or of a hoarding seen along the road. The sheeting is the shape
+    in the picture: the box's corners are left out, and so is the board a
+    sign is fixed to, though it fills more of the box's ring than not."""
+    yy, xx = np.mgrid[:90, :120]
+    # An orange diamond on a dark board, against a cluttered verge.
+    rng = np.random.default_rng(3)
+    picture = (0.25 + 0.1 * rng.random((90, 120, 3))).astype(np.float32)
+    picture[20:70, 30:90] = (0.03, 0.03, 0.04)
+    diamond = (np.abs(yy - 45) + np.abs(xx - 60)) <= 18
+    picture[diamond] = (0.75, 0.25, 0.03)
+    rows, columns, share = sheeting_within(picture, (41.0, 26.0, 80.0, 65.0), plate=False)
+    whole = np.zeros((90, 120), dtype=np.float32)
+    whole[rows, columns] = share
+    assert float(whole[diamond].mean()) > 0.95
+    assert float(whole[~diamond].sum()) < 0.08 * float(whole.sum())
+    for corner in ((28, 44), (28, 77), (62, 44), (62, 77)):
+        assert float(whole[corner]) == 0.0, "a corner of the box, taken for the sign"
+
+    # A pale hoarding seen along the road: tall at its near end, short at its far one.
+    picture = np.full((90, 120, 3), (0.08, 0.12, 0.06), dtype=np.float32)
+    wedge = (xx >= 20) & (xx < 100) & (yy >= 20 + 0.2 * (xx - 20)) & (yy < 70 - 0.2 * (xx - 20))
+    picture[wedge] = (0.6, 0.6, 0.65)
+    rows, columns, share = sheeting_within(picture, (19.0, 19.0, 101.0, 71.0), plate=False)
+    whole = np.zeros((90, 120), dtype=np.float32)
+    whole[rows, columns] = share
+    assert float(whole[wedge].mean()) > 0.95
+    assert float(whole[~wedge].sum()) < 0.05 * float(whole.sum())
+    assert float(whole[22, 95]) == 0.0 and float(whole[67, 95]) == 0.0
+
+
+def test_a_lens_spreads_what_is_far_over_full_scale_and_keeps_its_light() -> None:
+    """A bar at twenty full scales: after the lens its light is all there,
+    most of it where it was, and the rest a haze that fades with distance
+    and reaches past where a sharp edge would have ended. Nothing lit,
+    nothing done."""
+    light = np.zeros((200, 300), dtype=np.float32)
+    light[95:102, 140:154] = 20.0
+    spread = lens_glare(light)
+    assert spread.shape == light.shape
+    assert abs(float(spread.sum()) / float(light.sum()) - 1.0) < 0.03
+    assert float(spread[98, 147]) > 15.0
+    beside, further, far = (float(spread[98, 153 + step]) for step in (1, 4, 10))
+    assert beside > further > far > 0.0
+    assert beside > 0.3, "an edge that ends where it was drawn"
+    assert far < 0.1 and float(spread[20, 20]) == 0.0
+    nothing = np.zeros((40, 40), dtype=np.float32)
+    assert lens_glare(nothing) is nothing
+
+
+def test_a_plate_under_the_illuminator_is_a_soft_bar_and_not_a_box() -> None:
+    """Through the transform: a plate the reader boxed loosely comes out at
+    full scale where the plate is, dark in the box's corners where the car
+    is, and with an edge that falls over a few pixels and not over one."""
+    image, road_labels, _lamps = _night_road()
+    plate, box = _plate_picture(8)
+    top, left = 150, 120
+    tall, wide = plate.shape[:2]
+    image, road_labels = image.copy(), road_labels.copy()
+    image[top : top + tall, left : left + wide] = np.round(255.0 * plate ** (1 / 2.2))
+    road_labels[top : top + tall, left : left + wide] = int(SceneClass.VEHICLE)
+    view = VehicleView(
+        (left, top, wide, tall), 0.0, 0.4, np.zeros((0, 5), np.float32)
+    )._replace(plate=(box[0] + left, box[1] + top, box[2] + left, box[3] + top))
+
+    class _Plates(_Lamps):
+        """A reader that knows of one vehicle, and its plate."""
+
+        def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
+            """The one vehicle."""
+            return [view]
+
+    def infrared(amount: float) -> np.ndarray:
+        """The plate under the illuminator, cut to its picture."""
+        provider = SharedDepthProvider(
+            _Ground(),
+            depth_range_m=(float(_ground_depth().min()), 400.0),
+            labels=_Labels(road_labels),
+            vehicles=_Plates(np.zeros((0, 7), np.float32)),
+        )
+        transform = NightIrMode(
+            depth_provider=provider,
+            p=1.0,
+            illuminator_range_m=(14.0, 14.0),
+            vehicle_lamp_range=(0.0, 0.0),
+            read_noise_range=(0.0, 0.0),
+            retroreflector_range=(amount, amount),
+        )
+        transform.set_random_seed(4)
+        out = transform(image=image)["image"].astype(np.float32).mean(axis=2)
+        return out[top : top + tall, left : left + wide]
+
+    lit, plain = infrared(1.0), infrared(0.0)
+    characters = plate.sum(axis=2) < 0.2
+    assert float(plain[characters].max()) < 150.0
+    assert float(lit[characters].min()) > 250.0, "characters a lens would have drowned"
+    assert float(lit[plate[..., 1] > 0.4].min()) > 250.0, "a plate that is not at full scale"
+    # The corners of the box the slant leaves to the car: in the plate's
+    # haze, and not lit as the plate.
+    for corner in ((slice(15, 17), slice(42, 48)), (slice(27, 29), slice(16, 20))):
+        assert float(lit[corner].max()) < 225.0, "the corner of the box, lit as the plate"
+    # Up a column from the plate's upper edge: a haze that fades, where a
+    # box drawn sharp had full scale and then nothing.
+    column = lit[9:16, 20] - plain[9:16, 20]
+    assert float(column[-1]) > 20.0 and float(column[0]) < 0.5 * float(column[-1])
+    assert int((column > 4.0).sum()) >= 3, "an edge a pixel sharp"
 
 
 @pytest.mark.parametrize(

@@ -107,13 +107,315 @@ _HIGHLIGHT_LEVEL = 0.95
 _HIGHLIGHT_PERCENTILE = 99.0
 # How many times what a white matt surface sends back to a lamp at the lens
 # each of these does: the sheeting of a road sign and of a number plate,
-# and the glass beads of road paint. And the least a sheeting is taken to
-# send back of that, whatever colour it photographed as: a green sign's
-# ground returns a seventh of a white one's, and is still sheeting.
+# and the glass beads of road paint.
 _SHEETING_GAIN = 500.0
 _PAINT_GAIN = 3.0
-_SHEETING_FLOOR = 0.15
-_RETRO_SOFT_PX = 0.8
+_PAINT_SOFT_PX = 0.8
+# What a plate returns of that, one plate against the next: road film on a
+# plate takes most of its return, and a plate seen aslant returns less.
+_PLATE_RETURNS = (0.25, 1.0)
+# A plate's or a sign's sheeting is looked for in its box and this far
+# round it, as a share of the box's shorter side and in pixels at the least.
+_SHEETING_MARGIN = (0.3, 2.0)
+# How far from the colour of a plate's ground a pixel is still ground, and
+# where it is none of it, as shares of that colour's own size. Between the
+# two is the edge of a character, which a pixel shares with the ground.
+_GROUND_APART = (0.2, 0.6)
+# The height of a plate or a sign, in pixels, under which its characters
+# are lost in the ground's return, and the height from which they show as
+# the picture has them: a stroke an eighth of the height, two pixels wide
+# and four.
+_CHARACTERS_SHOW = (16.0, 32.0)
+# The share of its box a shape found in a picture has to fill for the
+# picture to be believed, and the share of its own convex outline, with
+# its holes filled and as it is: a triangle fills half its box, a thing
+# that is one piece nearly all of its outline, and a plate's ground is the
+# plate less its characters.
+_SHEETING_LEAST = 0.35
+_OUTLINE_FILLED = (0.7, 0.5)
+# The share of the ring round a box a group of pixels may take in and
+# still be the thing in the box, and not what the thing stands against.
+_RING_TOO = 0.5
+# The shorter side of a box, in pixels, from which a group of pixels is
+# rid of what is thinner than three pixels before its shape is taken.
+_OPENED_FROM = 16.0
+# The longer side of a window, in pixels, up to which a shape's outline is
+# drawn four times finer than the frame, for the shares of its edge pixels.
+_DRAWN_FINE_TO = 96
+# A sign's legend: darker than this share of the sign's pale parts, it is
+# black film, which sends nothing back.
+_LEGEND_BELOW = 0.3
+# The most a sheeting's return is carried at, in full scales of the sensor:
+# what a lens spreads of a source is in proportion to it, and a source a
+# hundred times over full scale is not drawn a hundred times as wide.
+_SHEETING_MOST = 24.0
+# How a lens spreads a source far over full scale: the widths, in pixels of
+# a frame a thousand across its diagonal, of the Gaussians that stand for a
+# glare falling off as the cube of the distance, and the share of the light
+# in each. The first is the lens in focus.
+_GLARE = ((0.6, 0.906), (1.5, 0.05), (3.0, 0.025), (6.0, 0.0125), (12.0, 0.0065))
+
+
+def _box_window(
+    box: tuple[float, float, float, float], shape: tuple[int, int], margin: float
+) -> tuple[slice, slice, np.ndarray] | None:
+    """A box's place in a frame: the rows and columns round it, and each pixel's share in it.
+
+    The window reaches ``margin`` pixels beyond the box on every side, cut
+    to the frame. The share is the part of the pixel's area the box covers,
+    so a box whose edges fall between pixels has soft edges and not ones
+    moved to the nearest pixel. ``None`` for a box outside the frame.
+    """
+    height, width = shape
+    x0, y0, x1, y1 = box
+    left, top = max(0, int(np.floor(x0 - margin))), max(0, int(np.floor(y0 - margin)))
+    right = min(width, int(np.ceil(x1 + margin)))
+    bottom = min(height, int(np.ceil(y1 + margin)))
+    if right <= left or bottom <= top:
+        return None
+    columns = np.arange(left, right, dtype=np.float32)
+    rows = np.arange(top, bottom, dtype=np.float32)
+    across = np.clip(np.minimum(x1, columns + 1.0) - np.maximum(x0, columns), 0.0, 1.0)
+    down = np.clip(np.minimum(y1, rows + 1.0) - np.maximum(y0, rows), 0.0, 1.0)
+    return slice(top, bottom), slice(left, right), np.outer(down, across).astype(np.float32)
+
+
+def _share_in(
+    box: tuple[float, float, float, float],
+    window: tuple[slice, slice, np.ndarray],
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Each pixel's share in another box, over a window already cut round the first.
+
+    ``window`` is what :func:`_box_window` gave for the first box, and the
+    result has its size. For a box that is the first one grown, or shrunk,
+    by less than the window's margin.
+    """
+    rows, columns, inside = window
+    share = np.zeros_like(inside)
+    other = _box_window(box, shape, 0.0)
+    if other is None:
+        return share
+    top, left = other[0].start - rows.start, other[1].start - columns.start
+    bottom, right = top + other[2].shape[0], left + other[2].shape[1]
+    if top < 0 or left < 0 or bottom > share.shape[0] or right > share.shape[1]:
+        return inside
+    share[top:bottom, left:right] = other[2]
+    return share
+
+
+def _split_in_two(values: np.ndarray, within: np.ndarray) -> np.ndarray | None:
+    """The upper of the two groups a plane of values falls into, by Otsu's threshold.
+
+    ``values`` is ``(h, w)`` in ``[0, 1]`` and the threshold is taken over
+    the pixels of ``within`` alone. ``None`` where they are all but one
+    value, which no threshold splits.
+    """
+    levels = np.clip(np.round(values * 255.0), 0.0, 255.0).astype(np.uint8)
+    chosen = levels[within]
+    if chosen.size < 4 or int(chosen.max()) - int(chosen.min()) < 8:
+        return None
+    threshold, _ = cv2.threshold(chosen.reshape(-1, 1), 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    upper: np.ndarray = levels > threshold
+    return upper
+
+
+def _outline_of(
+    found: np.ndarray,
+    reach: np.ndarray,
+    box: tuple[float, float, float, float],
+    corner: tuple[int, int],
+) -> tuple[float, np.ndarray] | None:
+    """One guess at where a thing is in its box, made into a shape and marked for how good it is.
+
+    ``found`` is a mask over the window round the box, ``reach`` each
+    pixel's share in the box grown by what the thing may pass it by, and
+    ``corner`` the window's first row and column in the frame. Returns the
+    mark and the shape, each pixel's share in it; ``None`` for a guess
+    that is no shape at all.
+
+    A sign, a plate and a hoarding are all convex: so the shape is the
+    convex outline of the guess's largest piece, filled, with edges that
+    fall between pixels drawn as shares. Small pieces and holes (a legend,
+    a plate's characters, a twig across it) are thereby dropped and
+    filled. The mark is how much of its outline the piece itself fills,
+    times how well the outline's own upright box agrees with the
+    reader's: a reader's box is loose, but it is round the thing, so a
+    guess that found half of it, or its legend, or the sky in a corner,
+    scores low. A guess is no shape when its piece, holes filled, fills
+    less than seven tenths of its outline, or as it is less than half
+    (which is what is *round* a thing: the bodywork round a plate, the
+    sky in the corners of a round sign's box, whose outline is the box),
+    or when the outline is less than ``_SHEETING_LEAST`` of the box.
+    """
+    mask: np.ndarray = (found & (reach > 0.5)).astype(np.uint8)
+    if min(box[2] - box[0], box[3] - box[1]) >= _OPENED_FROM:
+        # Specks, and a hair's breadth joining the thing to its surround:
+        # on a thing large enough that three pixels are not a third of it.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    count, parts, sizes, _middles = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if count < 2:
+        return None
+    largest = 1 + int(np.argmax(sizes[1:, cv2.CC_STAT_AREA]))
+    piece = (parts == largest).astype(np.uint8)
+    # Each pixel is a square, and the outline goes round the squares:
+    # round their centres it would be half a pixel short on every side.
+    # Drawn four times finer, a pixel is the four by four from its first
+    # fine pixel to its last. A large thing is drawn as it is: a share
+    # of a pixel on its edge is nothing to it.
+    fine = 4 if max(mask.shape) <= _DRAWN_FINE_TO else 1
+    rows, columns = np.nonzero(piece)
+    corners = np.concatenate(
+        [
+            np.stack([columns * fine + dx, rows * fine + dy], axis=1)
+            for dx, dy in ((0, 0), (fine - 1, 0), (0, fine - 1), (fine - 1, fine - 1))
+        ]
+    ).astype(np.int32)
+    drawn = np.zeros((mask.shape[0] * fine, mask.shape[1] * fine), dtype=np.uint8)
+    cv2.fillConvexPoly(drawn, cv2.convexHull(corners), 255)
+    shape = cv2.resize(
+        drawn, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_AREA
+    ).astype(np.float32) / np.float32(255.0)
+    # The piece with its holes filled, against its outline.
+    edges, _ = cv2.findContours(piece, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    solid = np.zeros_like(piece)
+    cv2.drawContours(solid, edges, -1, 1, thickness=cv2.FILLED)
+    outline = float(shape.sum())
+    x0, y0, x1, y1 = box
+    area = max((x1 - x0) * (y1 - y0), 1e-6)
+    filled, holed = _OUTLINE_FILLED
+    if (
+        outline < _SHEETING_LEAST * area
+        or float(solid.sum()) < filled * outline
+        or float(piece.sum()) < holed * outline
+    ):
+        return None
+    left, top = corner[1] + float(columns.min()), corner[0] + float(rows.min())
+    right, bottom = corner[1] + float(columns.max()) + 1.0, corner[0] + float(rows.max()) + 1.0
+    shared = max(0.0, min(x1, right) - max(x0, left)) * max(0.0, min(y1, bottom) - max(y0, top))
+    agreed = shared / (area + (right - left) * (bottom - top) - shared)
+    return min(float(solid.sum()) / outline, 1.0) * agreed, shape
+
+
+def sheeting_within(
+    linear_rgb: np.ndarray, box: tuple[float, float, float, float], plate: bool
+) -> tuple[slice, slice, np.ndarray] | None:
+    """Where a number plate's or a sign's sheeting is, in and round the box a reader put on it.
+
+    Returns the rows and the columns of a window round the box and, over
+    that window, the share of each pixel that is sheeting: ``(h, w)``
+    float32 in ``[0, 1]``. ``None`` for a box outside the frame.
+
+    A reader's box is upright and a little loose. What is in it is
+    neither: a plate seen from a mast is a slanted four-sided thing that
+    fills two thirds of its box, a hoarding seen along the road is a
+    wedge, and a sign is as often round, three-cornered or on its point as
+    square. Lit as the box, any of them is a white rectangle laid on the
+    picture. So the box says only where to look, and the shape is taken
+    from the picture, by the plain means that suffice in a window of a
+    few hundred pixels with one thing in the middle of it.
+
+    Several guesses are made at which pixels are the thing:
+
+    * those **unlike what is round the box**: the colour of the ring of
+      pixels beyond the box, and how much that ring varies, say what the
+      thing stands against, a sky, a wall or bodywork;
+    * the **paler** and the **darker** of the two groups the window's
+      brightness falls into, and the **more coloured** of the two its
+      colourfulness falls into, each by Otsu's threshold;
+    * for a plate, those **of its ground's colour**: the middle colour of
+      the paler half of the box's middle, which is the ground and not the
+      characters, nor the bodywork the box's edges take in.
+
+    A guess that takes in half the ring round the box as well is what
+    the thing stands against and is dropped. Each of the others is made
+    into a convex shape and marked (:func:`_outline_of`), the mark
+    lowered by the share of the ring the guess takes in, and the best is
+    kept. Where none is a shape
+    (a white plate on a white car, a plate in deep shade, a sign against
+    a wall of its own colour) the box is taken whole.
+
+    Within the shape not everything is sheeting. A plate's characters and
+    a sign's black legend are paint or film over it, and send back what a
+    matt black does: they are left out where the picture resolves them,
+    which is from ``_CHARACTERS_SHOW`` pixels of height. Below that their
+    strokes are under two pixels wide, and no lens keeps a stroke dark
+    beside a ground at tens of full scales: the shape is filled. A sign's
+    colours are all sheeting, and dyes that are red or blue to the eye
+    pass the near infrared, so they return alike.
+    """
+    x0, y0, x1, y1 = box
+    share, least = _SHEETING_MARGIN
+    margin = max(least, share * min(x1 - x0, y1 - y0))
+    frame = (linear_rgb.shape[0], linear_rgb.shape[1])
+    window = _box_window(box, frame, margin)
+    if window is None:
+        return None
+    rows, columns, inside = window
+    patch = linear_rgb[rows, columns]
+    core, ring = inside > 0.5, inside == 0.0
+    if int(core.sum()) < 4 or int(ring.sum()) < 4:
+        return rows, columns, inside
+
+    light = np.sqrt(np.clip(patch.mean(axis=-1), 0.0, 1.0))
+    most, fewest = patch.max(axis=-1), patch.min(axis=-1)
+    coloured = (most - fewest) / (most + np.float32(0.05))
+    behind = np.median(patch[ring], axis=0)
+    spread = float(np.median(np.linalg.norm(patch[ring] - behind, axis=-1))) + 0.02
+    unlike = np.linalg.norm(patch - behind, axis=-1) > 3.0 * spread
+    guesses: list[np.ndarray] = [unlike]
+    everywhere = np.ones_like(core)
+    paler = _split_in_two(light, everywhere)
+    if paler is not None:
+        guesses += [paler, ~paler]
+    vivid = _split_in_two(np.clip(coloured, 0.0, 1.0), everywhere)
+    if vivid is not None:
+        guesses.append(vivid)
+    ground = np.ones_like(inside)
+    if plate:
+        # The middle of the box is plate, whatever its edges take in of
+        # the car: the half of it across and the half of it down.
+        across, down = 0.25 * (x1 - x0), 0.25 * (y1 - y0)
+        middle = _share_in((x0 + across, y0 + down, x1 - across, y1 - down), window, frame) > 0.0
+        centre = middle if int(middle.sum()) >= 4 else core
+        brightness = patch.sum(axis=-1)
+        pale = centre & (brightness >= float(np.median(brightness[centre])))
+        colour = np.median(patch[pale], axis=0)
+        apart = np.linalg.norm(patch - colour, axis=-1) / (float(np.linalg.norm(colour)) + 0.02)
+        near, far = _GROUND_APART
+        ground = np.clip((far - apart) / (far - near), 0.0, 1.0).astype(np.float32)
+        guesses.insert(0, ground > 0.5)
+
+    # A thing may pass its box by a pixel, where the picture shows it to.
+    reach = _share_in((x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0), window, frame)
+    best: tuple[float, np.ndarray] | None = None
+    for guess in guesses:
+        beyond = float(guess[ring].mean())
+        if beyond >= _RING_TOO:
+            # What is round the box is of this group too: it is what the
+            # thing stands against, and not the thing.
+            continue
+        outlined = _outline_of(guess, reach, box, (rows.start, columns.start))
+        if outlined is None:
+            continue
+        # And the less of the ring a group takes in, the more its edge is
+        # one the picture drew and not one the box cut.
+        mark = outlined[0] * (1.0 - beyond)
+        if best is None or mark > best[0]:
+            best = (mark, outlined[1])
+    shape = inside if best is None else best[1]
+
+    # What in the shape is not sheeting, where the picture resolves it.
+    low, high = _CHARACTERS_SHOW
+    shown = float(np.clip(((y1 - y0) - low) / (high - low), 0.0, 1.0))
+    if shown > 0.0:
+        if not plate:
+            sure = shape > 0.5
+            palest = float(np.percentile(most[sure], 90.0)) if bool(sure.any()) else 0.0
+            if palest > 0.0:
+                ground = np.clip(most / (_LEGEND_BELOW * palest), 0.0, 1.0).astype(np.float32)
+        shape = shape * (np.float32(1.0 - shown) + np.float32(shown) * ground)
+    return rows, columns, shape
 
 
 def retroreflectors(
@@ -121,55 +423,121 @@ def retroreflectors(
     labels: np.ndarray,
     views: list[VehicleView] | None,
     signs: np.ndarray | None,
-) -> np.ndarray | None:
-    """How many times a matt surface's return each pixel sends back to a lamp at the lens.
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """What in a frame sends a lamp at the lens its light back: the road's paint, and sheeting.
 
-    ``(H, W)`` float32, 0 where the surface is an ordinary one; ``None``
-    where the frame has nothing of the kind.
+    Two ``(H, W)`` float32 planes, either ``None`` where the frame has
+    nothing of the kind:
 
-    Some things on a road are made to send light back where it came from:
-    the sheeting of signs and number plates, the glass beads in road paint.
+    * **paint**: how many times its own matt return each pixel of road
+      paint sends back. The scene's labels' road and the thin bright
+      things on it (:func:`~surmentations.utils.road.paint_on`): the glass
+      beads in the paint, a few times a matt white's return. It multiplies
+      what the surface's own brightness makes of the illuminator's light.
+    * **sheeting**: how many times a matt *white* surface's return each
+      pixel of a sign's or a number plate's sheeting sends back, whatever
+      it photographed as: a plate in the shade of its car is as much
+      sheeting as one in the sun. Signs (``signs``) and plates (``views``)
+      are the provider's reader's, and their shape in the box the reader
+      drew is the picture's (:func:`sheeting_within`).
+
+    Some things on a road are made to send light back where it came from.
     To a driver that is what makes them show in headlamps. To a camera
     whose illuminator sits round its lens it is the same thing, and
-    stronger: the lens is on the lamp's own axis. Under infrared a sign is
-    a white rectangle with nothing on it and a number plate is a white bar,
-    which is why cameras that read plates meter for the plate and not the
-    scene. Under anyone else's lamp, a street lamp's or a car's, none of
-    this happens: the light goes back to that lamp.
+    stronger: the lens is on the lamp's own axis. Under anyone else's
+    lamp, a street lamp's or a car's, none of this happens: the light goes
+    back to that lamp.
 
-    * **Road paint** is the scene's labels' road and the thin bright
-      things on it (:func:`~surmentations.utils.road.paint_on`): a few
-      times a matt white's return.
-    * **Signs** (``signs``) and **number plates** (``views``) are the
-      provider's reader's, and return some five hundred times it. A matt
-      white returns about a third of a candela per lux and square metre;
-      sheeting is quoted at some seventy for the plainest grade to several
-      hundred for the prismatic ones, so the figure is the middle of a
-      range of ten to one, and not one that was read off a standard.
-
-    It multiplies what the surface's own brightness makes of the
-    illuminator's light, so a plate's dark characters stay darker than its
-    ground until both are at full scale. On sheeting the result is
-    negative, as a mark for the caller: that brightness is not to be taken
-    below a floor there.
+    Sheeting returns some five hundred times a matt white. A matt white
+    returns about a third of a candela per lux and square metre; sheeting
+    is quoted at some seventy for the plainest grade to several hundred
+    for the prismatic ones, so the figure is the middle of a range of ten
+    to one, and not one that was read off a standard. A plate returns
+    between a quarter of it and all, each its own share drawn from
+    ``rng``: road film takes most of a plate's return, and so does being
+    seen aslant. Without ``rng`` every plate returns the middle of that.
     """
     height, width = labels.shape
-    gain = np.zeros((height, width), dtype=np.float32)
+    paint: np.ndarray | None = None
     road = labels == int(SceneClass.ROAD)
     if int(road.sum()) > 64:
-        gain[paint_on(linear_rgb, road)] = _PAINT_GAIN
-    boxes = [] if signs is None else [tuple(row[:4]) for row in signs.tolist()]
-    boxes += [view.plate for view in views or () if view.plate is not None]
-    for x0, y0, x1, y1 in boxes:
-        left, top = max(0, round(x0)), max(0, round(y0))
-        right, bottom = min(width, max(round(x1), left + 1)), min(height, max(round(y1), top + 1))
-        gain[top:bottom, left:right] = -_SHEETING_GAIN
-    if float(np.abs(gain).max()) == 0.0:
-        return None
-    # A lens does not draw an edge a pixel sharp, least of all on the
-    # brightest thing in its frame.
-    soft: np.ndarray = cv2.GaussianBlur(gain, (0, 0), sigmaX=_RETRO_SOFT_PX)
-    return soft
+        painted = paint_on(linear_rgb, road)
+        if bool(painted.any()):
+            sharp = np.zeros((height, width), dtype=np.float32)
+            sharp[painted] = _PAINT_GAIN
+            # A lens does not draw an edge a pixel sharp.
+            paint = cv2.GaussianBlur(sharp, (0, 0), sigmaX=_PAINT_SOFT_PX)
+    boxes = [] if signs is None else [(tuple(row[:4]), False) for row in signs.tolist()]
+    boxes += [(view.plate, True) for view in views or () if view.plate is not None]
+    sheeting: np.ndarray | None = None
+    for box, plate in boxes:
+        returns = 1.0
+        if plate:
+            low, high = _PLATE_RETURNS
+            returns = 0.5 * (low + high) if rng is None else float(rng.uniform(low, high))
+        found = sheeting_within(linear_rgb, box, plate)
+        if found is None:
+            continue
+        rows, columns, share = found
+        if sheeting is None:
+            sheeting = np.zeros((height, width), dtype=np.float32)
+        np.maximum(
+            sheeting[rows, columns],
+            np.float32(_SHEETING_GAIN * returns) * share,
+            out=sheeting[rows, columns],
+        )
+    return paint, sheeting
+
+
+def lens_glare(light: np.ndarray) -> np.ndarray:
+    """A plane of light far over full scale, as a lens spreads it over the sensor.
+
+    ``light`` is ``(H, W)`` in full scales of the sensor, mostly 0. No
+    lens draws a point as a point: most of its light lands within a pixel,
+    and a few hundredths are scattered round it, falling off roughly as
+    the cube of the distance. On anything within the sensor's range those
+    hundredths are lost in the picture. On a number plate returning tens
+    of full scales they are the picture: the plate grows by a pixel or two,
+    its corners round, its characters drown, and it sits in a haze that
+    fades over a dozen pixels. Drawn without that spread, the same plate is
+    a hard white rectangle with a pixel-sharp edge, which no camera makes.
+
+    The fall is stood for by a few Gaussians of doubling width, each with
+    half the light of the one before. Only the part of the frame within
+    reach of some light is worked on, and the two widest are taken on a
+    grid four times coarser.
+    """
+    lit = np.flatnonzero(light.max(axis=1) > 0.0), np.flatnonzero(light.max(axis=0) > 0.0)
+    if lit[0].size == 0:
+        return light
+    height, width = light.shape
+    scale = float(np.hypot(height, width)) / 1000.0
+    reach = int(np.ceil(3.0 * _GLARE[-1][0] * scale)) + 4
+    top, bottom = max(0, int(lit[0][0]) - reach), min(height, int(lit[0][-1]) + reach + 1)
+    left, right = max(0, int(lit[1][0]) - reach), min(width, int(lit[1][-1]) + reach + 1)
+    source = np.ascontiguousarray(light[top:bottom, left:right])
+    spread = np.zeros_like(source)
+    coarse: np.ndarray | None = None
+    for index, (sigma, share) in enumerate(_GLARE):
+        sigma_px = sigma * scale
+        if index >= len(_GLARE) - 2 and min(source.shape) >= 16:
+            if coarse is None:
+                coarse = cv2.resize(
+                    source,
+                    (max(1, source.shape[1] // 4), max(1, source.shape[0] // 4)),
+                    interpolation=cv2.INTER_AREA,
+                )
+            wide = cv2.GaussianBlur(coarse, (0, 0), sigmaX=max(sigma_px / 4.0, 0.3))
+            wide = cv2.resize(
+                wide, (source.shape[1], source.shape[0]), interpolation=cv2.INTER_LINEAR
+            )
+        else:
+            wide = cv2.GaussianBlur(source, (0, 0), sigmaX=max(sigma_px, 0.3))
+        spread += np.float32(share) * wide
+    out = np.zeros_like(light)
+    out[top:bottom, left:right] = spread
+    return out
 
 
 def near_infrared_reflectance(
@@ -271,12 +639,15 @@ class NightIrMode(CameraTransform):
             bright as a white surface would. Road signs and number plates,
             which the provider's vehicle reader finds, come back some
             five hundred times as bright: within the illuminator's
-            reach a sign is a white rectangle and a plate a white bar, as
-            they are on a real camera that meters for the scene and not
-            for the plate. It is the illuminator's light alone that comes
-            back this way, since the lens is beside the lamp; street lamps
-            and headlamps get theirs back themselves. See
-            :func:`retroreflectors`.
+            reach a sign is a white shape and a plate a white bar in a
+            haze of its own, its characters gone, as they are on a real
+            camera that meters for the scene and not for the plate. The
+            shape is the plate's or the sign's in the picture, not the
+            reader's box, and its edge is the lens's
+            (:func:`sheeting_within`, :func:`lens_glare`). It is the
+            illuminator's light alone that comes back this way, since the
+            lens is beside the lamp; street lamps and headlamps get theirs
+            back themselves. See :func:`retroreflectors`.
         vehicle_lamp_range: how brightly the lamps of the vehicles in the
             frame are lit, drawn per call; 1 is dipped beams, 0 none. It
             does something only on a provider built with ``vehicles=``:
@@ -499,17 +870,21 @@ class NightIrMode(CameraTransform):
         # What is made to send light back where it came from, under a lamp
         # that is at the lens: the last of the draws.
         retro = self.py_random.uniform(*self.retroreflector_range)
-        returning = None
+        returning = False
         if retro > 0.0 and labels is not None:
             linear = to_linear_unit(first_frame(scene))[0]
-            returning = retroreflectors(
+            paint, sheeting = retroreflectors(
                 linear,
                 labels,
                 self.depth_provider.get_vehicles(scene),
                 self.depth_provider.get_signs(scene),
+                np.random.default_rng(self.py_random.randint(0, 2**31 - 1)),
             )
-            if returning is not None:
-                drawn["retro"] = np.float32(retro) * returning
+            if paint is not None:
+                drawn["retro"] = np.float32(retro) * paint
+            if sheeting is not None:
+                drawn["sheeting"] = np.float32(retro) * sheeting
+            returning = paint is not None or sheeting is not None
         record_draw(
             vehicle_lamps=lamps,
             vehicles_read=lighting.vehicles_read,
@@ -517,7 +892,7 @@ class NightIrMode(CameraTransform):
             street_lamps=lighting.street_lamps if lighting.lit else 0,
             street_lamp_level=street,
             retroreflectors=retro,
-            retroreflectors_drawn=returning is not None,
+            retroreflectors_drawn=returning,
         )
         return drawn
 
@@ -549,6 +924,7 @@ class NightIrMode(CameraTransform):
         road_level: float | None = None,
         retro: np.ndarray | None = None,
         exposed: list[float] | None = None,
+        sheeting: np.ndarray | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the frame as the near-infrared camera sees it at night.
@@ -599,15 +975,18 @@ class NightIrMode(CameraTransform):
             if exposed is not None:
                 exposed[0] = float(level)
             if retro is not None:
-                # Sheeting and glass beads send the illuminator's light
-                # back down its own beam, to a lens that is beside it: many
-                # times what a white surface sends. Added once the camera
-                # has exposed for the scene, which is not for these.
-                sheeting = retro < 0.0
-                returned = np.where(
-                    sheeting, np.maximum(reflectance, _SHEETING_FLOOR), reflectance
-                )
-                signal = signal + np.float32(level) * np.abs(retro) * returned * exposure
+                # The glass beads in road paint send the illuminator's
+                # light back down its own beam, to a lens that is beside
+                # it: a few times what the paint's own brightness would.
+                signal = signal + np.float32(level) * retro * reflectance * exposure
+            if sheeting is not None:
+                # And sheeting hundreds of times what a white surface
+                # would, whatever the plate or the sign photographed as.
+                # Added once the camera has exposed for the scene, which is
+                # not for these; and spread as a lens spreads what is far
+                # over full scale, which is all that shows of it.
+                returned = np.minimum(np.float32(level) * sheeting * exposure, _SHEETING_MOST)
+                signal = signal + lens_glare(returned)
 
         # Gain deliberately does *not* rescale the signal here. On a real
         # camera gain is one of the things the AE loop uses to *reach* its

@@ -77,10 +77,12 @@ STREET_LAMP_PROMPTS = ("a street light",)
 SIGN_PROMPTS = ("a traffic sign",)
 PLATE_PROMPTS = ("a license plate",)
 # A sign is believed at this score, and is no larger than this share of the
-# frame; a plate at this score, no wider than this share of its vehicle and
-# wider than it is tall.
+# frame: a road sign a fiftieth of a frame is one a few metres from the
+# lens, and what a detector calls a sign at that size is a shop's banner or
+# a hoarding beside the camera. A plate is believed at this score, no wider
+# than this share of its vehicle and wider than it is tall.
 _SIGN_SCORE = 0.2
-_SIGN_LARGEST = 0.06
+_SIGN_LARGEST = 0.02
 _PLATE_SCORE = 0.12
 _PLATE_WIDEST = 0.6
 _POST_SCORE = 0.2

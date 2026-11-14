@@ -33,6 +33,7 @@ from surmentations.perception.vehicles import (
     lamps_of,
     separate_vehicles,
     split_outlines,
+    street_signs,
     vehicle_outlines,
 )
 from surmentations.utils.road import (
@@ -55,6 +56,26 @@ def _found(*rows: tuple[float, float, float, float, int, float]) -> np.ndarray:
 def _lamp(x: float, y: float, kind: int, score: float, half: float = 4.0) -> tuple:
     """One box of a lamp's size with its middle at a point of the frame."""
     return (x - half, y - half, x + half, y + half, kind, score)
+
+
+def test_a_sign_is_one_the_reader_is_sure_of_and_no_banner_beside_the_lens() -> None:
+    """Of the boxes a detector calls signs, the ones kept are those it is
+    sure of and that are the size of a road sign in a frame: a box a
+    twentieth of the frame is a shop's banner or a hoarding by the camera,
+    and lit as sheeting it is a white slab across the picture."""
+    found = np.array(
+        [
+            [100.0, 50.0, 130.0, 80.0, 0.0, 0.5],  # a sign
+            [300.0, 200.0, 400.0, 430.0, 0.0, 0.6],  # a banner: 4.8% of the frame
+            [500.0, 60.0, 520.0, 80.0, 0.0, 0.1],  # a guess
+            [101.0, 51.0, 131.0, 81.0, 0.0, 0.3],  # the first one again
+        ],
+        dtype=np.float32,
+    )
+    kept = street_signs(found, (600, 800))
+    assert kept.shape == (1, 5)
+    assert kept[0, :4].tolist() == [100.0, 50.0, 130.0, 80.0] and float(kept[0, 4]) == 0.5
+    assert street_signs(np.zeros((0, 6), np.float32), (600, 800)).shape == (0, 5)
 
 
 def test_a_vehicle_shows_the_end_whose_lamps_are_surer_and_its_lamps_are_the_pair() -> None:
