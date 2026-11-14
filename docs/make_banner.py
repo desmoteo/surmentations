@@ -6,9 +6,11 @@ Run with::
 
 It writes ``docs/assets/social_banner.webp``, 1280 by 640 pixels, the
 picture at the top of the README, and the same picture as
-``social_banner.png`` beside it: that is the size GitHub asks for a
+``social_banner.jpg`` beside it: that is the size GitHub asks for a
 repository's social preview (Settings, General, Social preview), which takes
-PNG and not WebP. Both are published with the gallery and not kept in git.
+no WebP and nothing of 1 MB or more; as PNG it is 1.06 MB, as JPEG at
+quality 95 under 300 kB. Both are published with the gallery and not kept in
+git.
 
 The banner is one photograph cut into slanted strips, each strip taken from
 a different effect's cell of the severity gallery in ``docs/examples``.
@@ -181,8 +183,8 @@ def main() -> None:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     image.save(OUT, quality=90, method=6)
-    image.save(OUT.with_suffix(".png"), optimize=True)
-    print(f"wrote {OUT.relative_to(DOCS.parent)} and its PNG, {image.width} by {image.height}")
+    image.save(OUT.with_suffix(".jpg"), quality=95, optimize=True, progressive=True)
+    print(f"wrote {OUT.relative_to(DOCS.parent)} and its JPEG, {image.width} by {image.height}")
 
 
 if __name__ == "__main__":

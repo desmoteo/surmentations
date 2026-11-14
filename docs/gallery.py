@@ -81,9 +81,10 @@ def networks() -> dict[str, Any]:
 
 # What the site holds besides the code reference: the folders under docs/
 # that the pictures are rendered into, and which of their files to publish.
-# The PNG is the banner's copy for GitHub's social preview, which takes no WebP.
+# The JPEG is the banner's copy for GitHub's social preview, which takes no
+# WebP and no file of 1 MB or more (the banner as PNG is 1.06 MB).
 PUBLISHED = ("examples", "assets")
-SUFFIXES = (".webp", ".png")
+SUFFIXES = (".webp", ".jpg")
 
 _PAGE = """<!doctype html>
 <html lang="en">

@@ -16,6 +16,12 @@ keywords = [
     "computer-vision",
     "weather-simulation",
     "monocular-depth",
+    "image-augmentation",
+    "synthetic-data",
+    "surveillance",
+    "cctv",
+    "camera-simulation",
+    "pytorch",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -61,8 +67,11 @@ dev = [
     "tqdm>=4.60",
 ]
 
-# No [project.urls] section yet — fill in Homepage/Repository once this
-# project has an actual git remote to point to.
+[project.urls]
+Homepage = "https://desmoteo.github.io/surmentations/"
+Documentation = "https://desmoteo.github.io/surmentations/reference/"
+Repository = "https://github.com/desmoteo/surmentations"
+Issues = "https://github.com/desmoteo/surmentations/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/surmentations"]
