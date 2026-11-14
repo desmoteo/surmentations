@@ -110,6 +110,8 @@ NEEDS_OPEN_SKY = (
 )  # fmt: skip
 # Faults and effects of the daytime picture.
 DAYTIME_ONLY = ("ir_cut_filter_fault",)
+# What makes a night of a daylit frame.
+MAKES_NIGHT = ("night_color",)
 # Turbulence over ground the sun has heated, which shows over a long path.
 NEEDS_A_LONG_VIEW = ("heat_shimmer",)
 LONG_VIEW_M = 500.0
@@ -137,6 +139,7 @@ WHY_NOT = {
     ),
     "lamps": "it acts on artificial lights at night, and this is a daylit scene",
     "daytime": "it is a fault of the colour picture by day, and the scene is at night",
+    "night": "it makes a night of a daylit frame, and this scene is a night already",
     "long view": (
         "it is turbulence over sunlit ground, which shows over a kilometre or so by day: "
         "this scene is too short, under a roof or at night"
@@ -150,7 +153,8 @@ WHY_NOT = {
 # `night_ir` shows.
 COMPARED = (
     "fog", "rain", "snow", "wet_ground", "snow_cover", "ground_fog", "local_plumes",
-    "heat_shimmer", "cast_shadows", "night_ir", "night_fog", "night_snow",
+    "heat_shimmer", "cast_shadows", "night_ir", "night_fog", "night_snow", "night_rain",
+    "night_color",
 )  # fmt: skip
 
 # One colour per scene class, for the label maps.
@@ -285,6 +289,8 @@ def _why_not(effect: str, scene: Scene) -> str | None:
         return WHY_NOT["lamps"]
     if scene.night and effect in DAYTIME_ONLY:
         return WHY_NOT["daytime"]
+    if scene.night and effect in MAKES_NIGHT:
+        return WHY_NOT["night"]
     if effect in NEEDS_A_LONG_VIEW and (
         scene.night or scene.sheltered or scene.depth_range_m[1] < LONG_VIEW_M
     ):
@@ -434,6 +440,14 @@ def _base(effect: str, image: np.ndarray, provider: SharedDepthProvider, scene: 
     return image
 
 
+def _original(path: Path) -> np.ndarray:
+    """A sample scene as RGB at the size it was taken at, for the provider that reads it."""
+    image = cv2.imread(str(path))
+    if image is None:
+        raise FileNotFoundError(f"Could not read {path}")
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
 def _load(path: Path) -> np.ndarray:
     """A sample scene as RGB, :data:`WIDTH_PX` across."""
     image = cv2.imread(str(path))
@@ -554,9 +568,12 @@ def _scene_readme(
         "and which only a provider that knows the road and its vehicles can draw. That",
         "provider also has a vehicle reader, which says which end of each vehicle is",
         "seen and where its lamps are; see [the road surface](../../../road_surface.md).",
-        "With that reader `night_ir` is lit as a road is at night, from its street lamps",
-        "and its traffic's lamps and beams, as it is whenever a provider has one; on the",
-        "left it is lit evenly, as a daylight frame is.",
+        "With that reader `night_ir` and `night_color` are lit as a road is at night,",
+        "from its street lamps and its traffic's lamps and beams; on the left they are",
+        "lit evenly, as a daylight frame is. Under `night_ir` the road signs and number",
+        "plates the reader found send the illuminator's light back, and `night_rain` and",
+        "`night_snow`, drawn over that frame, show in the lamps' light. The reader looks",
+        "at each photograph at the size it was taken at, not at the reduced frame.",
         "",
     ]
     compared = [effect for effect in effects if effect in COMPARED]
@@ -768,6 +785,9 @@ def main() -> None:
             geometry=GroundPlaneGeometryEstimator(),
             vehicles=reader,
         )
+        # Read from the photograph and not from its reduction: a lamp or a
+        # number plate is a few pixels in a frame 800 across.
+        aware.remember(image, original=_original(SCENES_DIR / f"{scene_name}.jpg"))
         picture, reading = _reading(image, aware, scene)
         _save(out / "reading.jpg", picture)
         for effect, overrides, before, seed in twins:

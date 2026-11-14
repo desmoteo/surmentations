@@ -1,6 +1,6 @@
 """Draw the figures of ``docs/road_surface.md``.
 
-Six pictures, made from the photographs the galleries use, with a
+Nine pictures, made from the photographs the galleries use, with a
 provider that carries scene labels and an estimated geometry:
 
 * the roads as the library reads them: painted lines, lane lines and the
@@ -10,7 +10,12 @@ provider that carries scene labels and an estimated geometry:
 * a soaked road as it was, and with its traffic's spray and lamps;
 * infrared night lit evenly, as a daylight frame is, and lit by its street
   lamps and its traffic's lamps;
-* rain and snow with an even veil in the distance and with its grain.
+* rain and snow with an even veil in the distance and with its grain;
+* a night in colour: lit by the sky's glow alone, and by sodium and by LED
+  street lighting;
+* fog, rain and snow at night without and with the light of the lamps on
+  what is in the air;
+* infrared night without and with what signs, plates and paint send back.
 
 Run from the repository root, on a machine with a CUDA GPU::
 
@@ -25,14 +30,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import albumentations as A
 import cv2
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from docs.generate_scene_examples import SCENES, SCENES_DIR, _load  # noqa: E402
+from docs.generate_scene_examples import SCENES, SCENES_DIR, _load, _original  # noqa: E402
 from surmentations.atmosphere import RandomRain, RandomSnow  # noqa: E402
+from surmentations.atmosphere.night_fog import NightFog  # noqa: E402
+from surmentations.atmosphere.night_rain import NightRain  # noqa: E402
+from surmentations.atmosphere.night_snow import NightSnow  # noqa: E402
+from surmentations.camera import NightColorMode  # noqa: E402
 from surmentations.camera.night_ir import NightIrMode  # noqa: E402
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider  # noqa: E402
 from surmentations.perception import (  # noqa: E402
@@ -71,16 +81,25 @@ def _photograph(name: str) -> np.ndarray:
     return _load(SCENES_DIR / f"{name}.jpg")
 
 
-def _provider(name: str, depth: Any, labels: Any, vehicles: Any) -> SharedDepthProvider:
-    """A provider for a scene that reads its labels, its geometry and its vehicles."""
+def _provider(
+    name: str, depth: Any, labels: Any, vehicles: Any, image: np.ndarray | None = None
+) -> SharedDepthProvider:
+    """A provider for a scene that reads its labels, its geometry and its vehicles.
+
+    Given the scene's frame, it is told to read it from the photograph at
+    the size it was taken at, where there is a larger one.
+    """
     far = SCENES[name].depth_range_m if name in SCENES else (3.0, 300.0)
-    return SharedDepthProvider(
+    provider = SharedDepthProvider(
         depth,
         depth_range_m=far,
         labels=labels,
         geometry=GroundPlaneGeometryEstimator(),
         vehicles=vehicles,
     )
+    if image is not None and name in SCENES and labels is not None:
+        provider.remember(image, original=_original(SCENES_DIR / f"{name}.jpg"))
+    return provider
 
 
 def _pitch(name: str) -> tuple[float, float]:
@@ -215,7 +234,7 @@ def night_lamps(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles
     """
     tiles = []
     for name in ("urban_road_day", "reference", "urban_street_wet"):
-        provider = _provider(name, depth, labels, vehicles)
+        provider = _provider(name, depth, labels, vehicles, images[name])
         for lamps in ({"street_lamp_range": (0.0, 0.0), "vehicle_lamp_range": (0.0, 0.0)}, {}):
             night = NightIrMode(depth_provider=provider, p=1.0, **lamps)
             night.set_random_seed(5)
@@ -258,18 +277,94 @@ def far_field(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPro
     _save("far_field.jpg", tiles, 2)
 
 
+def night_colour(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
+    """Two scenes as a colour camera sees them at night, three ways.
+
+    With a provider that has depth alone, which knows of no lamps: lit by
+    the sky's glow. And with one that reads the scene, under sodium
+    lighting and under LED.
+    """
+    tiles = []
+    for name in ("urban_road_day", "underpass_from_above"):
+        plain = SharedDepthProvider(depth, depth_range_m=SCENES[name].depth_range_m)
+        aware = _provider(name, depth, labels, vehicles, images[name])
+        for provider, kelvin in ((plain, 4300.0), (aware, 2100.0), (aware, 5000.0)):
+            night = NightColorMode(
+                depth_provider=provider, p=1.0, lamp_temperature_range_k=(kelvin, kelvin)
+            )
+            night.set_random_seed(5)
+            tiles.append(night(image=images[name])["image"])
+    _save("night_colour.jpg", tiles, 3)
+
+
+def lamp_cones(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
+    """Fog, rain and snow over one lit night scene: without the lamps' light on them, and with.
+
+    The same draws both times, ``lamp_cone_range`` at 0 and at 1. Fog and
+    rain over a night in colour, snow over an infrared one.
+    """
+    name = "urban_road_day"
+    provider = _provider(name, depth, labels, vehicles, images[name])
+    tiles = []
+    for mode, weather, settings in (
+        (
+            NightColorMode(depth_provider=provider, p=1.0, lamp_temperature_range_k=(2100, 2100)),
+            NightFog,
+            {"depth_provider": provider, "visibility_range_m": (300.0, 300.0)},
+        ),
+        (
+            NightColorMode(depth_provider=provider, p=1.0, lamp_temperature_range_k=(4500, 4500)),
+            NightRain,
+            SEVERITY[4]["NightRain"],
+        ),
+        (NightIrMode(depth_provider=provider, p=1.0), NightSnow, SEVERITY[3]["NightSnow"]),
+    ):
+        for cone in (0.0, 1.0):
+            chain = A.Compose(
+                [mode, weather(p=1.0, lamp_cone_range=(cone, cone), **settings)], seed=5
+            )
+            tiles.append(chain(image=images[name])["image"])
+    _save("lamp_cones.jpg", tiles, 2)
+
+
+def retroreflectors(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
+    """Two scenes under the infrared illuminator, cut to their traffic and enlarged.
+
+    The same draw without what signs, plates and paint send back
+    (``retroreflector_range`` at 0) and with it.
+    """
+    tiles = []
+    cuts = {"urban_road_day": (300, 250, 500, 230), "underpass_from_above": (180, 120, 440, 290)}
+    for name, (left, top, wide, tall) in cuts.items():
+        provider = _provider(name, depth, labels, vehicles, images[name])
+        for amount in (0.0, 1.0):
+            night = NightIrMode(
+                depth_provider=provider,
+                p=1.0,
+                illuminator_range_m=(12.0, 12.0),
+                retroreflector_range=(amount, amount),
+            )
+            night.set_random_seed(5)
+            out = night(image=images[name])["image"]
+            tiles.append(out[top : top + tall, left : left + wide])
+    _save("retroreflectors.jpg", tiles, 2)
+
+
 def main() -> None:
-    """Make the six figures."""
+    """Make the nine figures."""
     depth, labels = DepthAnythingV2Estimator(), SegmentationLabelEstimator()
     images = {name: _photograph(name) for name in SHOWN}
     vehicles = OpenVocabularyVehicleEstimator()
-    providers = {name: _provider(name, depth, labels, vehicles) for name in SHOWN}
+    providers = {name: _provider(name, depth, labels, vehicles, images[name]) for name in SHOWN}
     read_roads(images, providers)
     read_vehicles(images, providers)
     compare(images, providers, "snow")
     compare(images, providers, "rain")
     night_lamps(images, depth, labels, vehicles)
     far_field(images, providers)
+    night_colour(images, depth, labels, vehicles)
+    lamp_cones(images, depth, labels, vehicles)
+    retroreflectors(images, depth, labels, vehicles)
     print(f"Wrote the figures to {OUT_DIR}")
 
 

@@ -177,7 +177,7 @@ the vehicles are; a provider given none behaves as it always did.
 | Depth | first argument | how far each pixel is | `DepthAnythingV2Estimator` (Apache-2.0) | 11–15 ms |
 | Scene labels | `labels=` | what each pixel is: road, sky, vegetation, vehicle, person … | `SegmentationLabelEstimator` (UperNet/ConvNeXt, MIT) | 33 ms |
 | Installation geometry | `geometry=` | the camera's field of view, tilt, roll and height | `GroundPlaneGeometryEstimator`, or an `InstallationGeometry` you give | 5 ms |
-| Vehicle views | `vehicles=` | each vehicle apart from its neighbours, which end of it is seen, where its lamps are; and where the street lamps stand | `OpenVocabularyVehicleEstimator` (OWLv2, Apache-2.0) | 130–200 ms |
+| Vehicle views | `vehicles=` | each vehicle apart from its neighbours, which end of it is seen, where its lamps and its number plate are; and where the street lamps and the road signs stand | `OpenVocabularyVehicleEstimator` (OWLv2, Apache-2.0) | 130–200 ms |
 
 ```python
 from surmentations.depth import DepthAnythingV2Estimator, SharedDepthProvider
@@ -198,12 +198,21 @@ depth_provider = SharedDepthProvider(
 # A fixed camera whose mounting is known is better given than estimated:
 geometry = InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_m=6.5)
 
+# Where the pipeline works on a reduced frame, have the scene read from the
+# photograph it was reduced from: a lamp or a plate is a few pixels otherwise.
+depth_provider.remember(image, original=photograph)
+
 # What the provider read off a frame:
 labels = depth_provider.get_labels(image)        # (H, W) uint8 of SceneClass
 camera = depth_provider.settle_camera(image)     # field of view, pitch, roll, height
-views = depth_provider.get_vehicles(image)       # one VehicleView per vehicle
+views = depth_provider.get_vehicles(image)       # one VehicleView per vehicle: end, lamps, plate
 lamps = depth_provider.get_street_lamps(image)   # one row per street lamp's head
+signs = depth_provider.get_signs(image)          # one row per road sign
 ```
+
+What is read is read from the frame a pipeline starts with, whichever
+transform asks first, and never from a frame with weather already drawn
+over it.
 
 **Labels and geometry.** With labels, a wet road stays off the vehicles on
 it and snow settles by name as well as by shape; the sky is the sky; foliage
@@ -229,13 +238,30 @@ left as the road was and right with both:
 
 ![a soaked road without and with its traffic's spray and lamps](docs/assets/road_surface/wet_road_and_spray.jpg)
 
-and what `NightIrMode` needs to light a scene as a road is lit at night:
-from its street lamps, each throwing a pool that falls off with distance,
-and its traffic's lamps and beams, in place of one even level of light. The
-same draw with the lamps turned off, which is a daylight frame in grey, and
-with them:
+and what `NightIrMode` and `NightColorMode` need to light a scene as a road
+is lit at night: from its street lamps, each throwing a pool that falls off
+with distance, and its traffic's lamps and beams, in place of one even
+level of light. The same draw with the lamps turned off, which is a
+daylight frame in grey, and with them:
 
 ![infrared night lit evenly, and lit by its lamps](docs/assets/road_surface/night_lamps.jpg)
+
+In colour, the same scene lit by the sky's glow alone, which is all a
+provider with depth alone can do, and by sodium and by LED street lighting:
+
+![a night in colour: unlit, sodium, LED](docs/assets/road_surface/night_colour.jpg)
+
+A night lit this way has lamps whose places are known, and what is in the
+air shows in their light. `NightFog`, `NightRain` and `NightSnow` without
+it (left) and with it (right):
+
+![fog, rain and snow in the lamps' light](docs/assets/road_surface/lamp_cones.jpg)
+
+Under the camera's own infrared illuminator, the road signs and number
+plates the reader finds send its light straight back, as they do on a real
+camera; without and with:
+
+![signs and plates under infrared](docs/assets/road_surface/retroreflectors.jpg)
 
 All of these are evidence and not a verdict: an effect weighs what a reader
 says against what it reads from depth and colour itself.
@@ -289,7 +315,8 @@ parameters, samples and references. The tables here are the overview.
 
 | Transform | Models | Needs depth |
 | --- | --- | --- |
-| [`NightIrMode`](docs/transforms/NightIrMode.md) | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise; with a vehicle reader on the provider, the traffic's lamps lit | yes |
+| [`NightIrMode`](docs/transforms/NightIrMode.md) | IR-cut filter out: monochrome by *infrared* reflectance (foliage goes bright, which a luma conversion gets backwards), an illuminator falling as 1/z², gain-scaled noise; with a provider that reads the scene, lit as a road is at night: pools under its street lamps, the traffic's lamps and beams, and signs and plates sending the illuminator's light back | yes |
+| [`NightColorMode`](docs/transforms/NightColorMode.md) | The same night as a colour camera sees it: lit from the scene's street lamps in their own colour, sodium's orange or an LED's white, with red tail lamps, white headlamps and their beams, and noise in each channel. With a provider that knows of no lamps, a night lit by the sky's glow alone | yes |
 | [`AcFlicker`](docs/transforms/AcFlicker.md) | Mains banding. Cancels exactly when the exposure is a whole number of flicker periods — the basis of a camera's anti-flicker setting | no |
 | [`RollingShutter`](docs/transforms/RollingShutter.md) | Row-dependent shear and wobble from camera motion during readout. One of the two transforms that move pixels, with `CameraVibration`, so masks, boxes and keypoints move with it | no |
 | [`SensorNoise`](docs/transforms/SensorNoise.md) | Shot and read noise in photoelectrons, set by sensor gain, drawn on the Bayer mosaic and demosaiced, so the grain is coarse and coloured as in a real low-light frame | no |
@@ -339,13 +366,12 @@ and the physics behind it.
 | --- | --- |
 | `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
 | `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels), `traffic_speed_range_kmh` (how fast that traffic is going, which is most of how much it throws up), `vehicle_lamp_range` (off by default: the traffic's head and tail lamps lit, with their glow and their streaks down the road), `distant_rain_range` (how much of its grain the rain beyond the drawn streaks keeps; 0 is the even veil) |
-| `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `backscatter_grain_range` (the grain of the unresolved drops' glow; 0 is an even wall) |
-| `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range`, `backscatter_grain_range` (the speckle of the unresolved flakes' glow; 0 is an even wall) |
-| `NightFog` | `visibility_range_m` (read against the provider's depth range), `visibility_range_scene` (as a multiple of the scene's depth instead), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`) |
+| `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `backscatter_grain_range` (the grain of the unresolved drops' glow; 0 is an even wall), `lamp_cone_range` (how strongly it shows in the light of the scene's lamps, on a frame a night transform lit from them; 0 is not at all) |
+| `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range`, `backscatter_grain_range` (the speckle of the unresolved flakes' glow; 0 is an even wall), `lamp_cone_range` (how strongly it shows in the light of the scene's lamps, on a frame a night transform lit from them; 0 is not at all) |
+| `NightFog` | `visibility_range_m` (read against the provider's depth range), `visibility_range_scene` (as a multiple of the scene's depth instead), `glow_radius_range`, `illuminator_backscatter_range` (infrared ring on; apply after `NightIrMode`), `lamp_cone_range` (how strongly it shows in the light of the scene's lamps, on a frame a night transform lit from them; 0 is not at all) |
 | `RandomSnow` | `snowfall_rate_range_mm_h`, `snow_density_range_g_cm3`, `accumulation_probability`, `accumulation_strength_range`, `vehicle_cover_range` (0 moving traffic, 1 parked overnight), `min_flake_width_px`, `max_flakes`, `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `wheel_track_range` (how far traffic has worn the settled snow into tracks, with scene labels), `distant_snow_range` (how much of its speckle the snow beyond the drawn flakes keeps; 0 is the even veil) |
 | `CastShadows` | `casters` (person, vehicle, foliage), `shadow_count_range`, `shadow_scale_range`, `sun_elevation_range_deg`, `direct_fraction_range`, `penumbra_range`, `camera_pitch_deg` |
 | `GroundFog` | `visibility_range_m` (at the ground), `layer_height_range_m` (how shallow the layer is), `camera_height_range_m`, `camera_pitch_range_deg`, `patchiness_range`, `patch_scale_range_m`, `depth_scale` (it shows along the distance) |
-| `RandomRain`, dry road | 27.7 | 86.0 |
 | `LocalPlumes` | `plume_count_range`, `source_width_range_m`, `rise_range_m`, `opacity_range`, `lean_range` (wind), `brightness_range` |
 | `HeatShimmer` | `log10_cn2_range` (-14 mild, -12 hot ground), `horizontal_fov_range_deg` (a long lens), `aperture_diameter_range_mm`, `depth_scale` (it needs a path of a kilometre or so) |
 | `NightInsects` | `insect_count_range`, `distance_range_m`, `flight_speed_range_m_s` and `exposure_time_range` (streak length), `wing_beat_range_hz` (lobes), `dust_count_range`, `illuminator_gain_range` |
@@ -359,16 +385,15 @@ and the physics behind it.
 | `FrostOnGlass` | `coverage_range` (how far in from the rim), `thickness_range`, `feather_range` (ferns or an even layer), `crystal_scale_range`, `ambient_light_range`, `illuminator_glow_range` (infrared ring on) |
 | `SnowOnHousing` | `cap_depth_range`, `lumpiness_range`, `patch_count_range`, `brightness_range` (by day), `glow_range` (infrared ring on) |
 | `LensTamper` | `kinds` (spray, tape, cover), `coverage_range`, `opacity_range`, `shade_range` (by day), `glow_range` (infrared ring on) |
-| `NightSnow` | 12.9 | 45.7 |
 | `FoliageIntrusion` | `branch_count_range`, `distance_range_m`, `leaf_length_range_mm`, `reach_range`, `sway_speed_range_m_s`, `illuminator_gain_range` (0 by day; at night also set `leaf_light_range` to 0), `beam_falloff_range` |
 | `FocusShift` | `focus_distance_range_m` (where the lens is in fact focused; nearer is worse), `aperture_diameter_range_mm`, `depth_provider` (optional) |
-| `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range`, `street_lamp_range` (how much light each street lamp throws under itself: the scene is lit in pools from the lamps the provider knows of, not evenly), `vehicle_lamp_range` (the traffic's lamps and beams, lit where the provider's vehicle reader found them; nothing without one) |
+| `NightIrMode` | `illuminator_range_m`, `beam_falloff_range`, `gain_range` (noise, not level), `read_noise_range`, `vegetation_gain_range`, `street_lamp_range` (how much light each street lamp throws under itself: the scene is lit in pools from the lamps the provider knows of, not evenly), `vehicle_lamp_range` (the traffic's lamps and beams, lit where the provider's vehicle reader found them; nothing without one), `retroreflector_range` (what road paint, and the signs and number plates the reader finds, send back of the illuminator's light; 0 is none) |
+| `NightColorMode` | `lamp_temperature_range_k` (the street lighting's colour: 1900 to 2200 K is sodium, 3000 to 5700 K an LED), `street_lamp_range`, `vehicle_lamp_range`, `sky_glow_range` (all the light there is where the provider knows of no lamps), `target_level_range`, `gain_range` and `read_noise_range` (noise, in each channel) |
 | `AcFlicker` | `mains_frequency_hz` (50 or 60), `readout_time_range_s` (sets the band *count*), `exposure_time_range_s` (sets the depth), `pulse_exponent_range`, `modulation_depth_range` |
 | `RollingShutter` | `pan_shift_range_px`, `wobble_amplitude_range_px`, `wobble_cycles_range` |
 | `SensorNoise` | `gain_range_db` (the knob: how few electrons make a full-scale picture), `full_well_range_e`, `read_noise_range_e` |
 | `ExposureTransient` | `exposure_error_stops_range`, `assumed_temperature_range_k`, `actual_temperature_range_k` |
 | `WdrToneMapping` | `compression_range`, `detail_gain_range`, `halo_strength_range` |
-| `NightRain` | 26.1 | 63.0 |
 | `TemporalDenoiseArtifacts` | `strength_range`, `iterations_range`, `edge_threshold_range`, `chroma_blur_range` |
 | `VideoCodecArtifacts` | `codec` (`"h264"` / `"h265"`), `crf_range`, `stale_block_probability` |
 | `TransmissionFaults` | `packet_loss_range`, `burst_length_range`, `scene_motion_range` (how far the picture moved since the frame the decoder falls back on: what makes loss visible), `missing_reference_probability`, `concealment_probability` (a decoder that does not conceal shows green), `slices_range`, `frames_since_keyframe_range` |
@@ -561,12 +586,14 @@ Orin NX, and what exact mode costs.
 | `SpiderWeb` | 9.7 | 35.2 |
 | `SourceGlare` | 11.6 | 38.4 |
 | `LensTamper` | 12.1 | 54.8 |
+| `NightSnow` | 12.9 | 45.7 |
 | `TemporalDenoiseArtifacts` | 14.8 | 46.0 |
 | `SnowOnHousing` | 14.9 | 52.3 |
 | `AnalogVideoArtifacts` | 20.6 | 93.7 |
 | `WaterDroplets` | 22.7 | 70.1 |
 | `TransmissionFaults`, with PyAV | 23.2 | 79.3 |
 | `WdrToneMapping` | 26.0 | 39.6 |
+| `NightRain` | 26.1 | 63.0 |
 | `FrostOnGlass` | 26.4 | 142.4 |
 | `FoliageIntrusion` | 35.2 | 121.0 |
 | `VideoCodecArtifacts`, through ffmpeg | 144.2 | 180.1 |
@@ -586,9 +613,11 @@ once one provider holds the frame's depth.
 | `LocalPlumes` | 14.1 | 74.3 |
 | `HeatShimmer`, over a long view | 14.8 | 94.0 |
 | `RandomFog` | 20.6 | 91.7 |
+| `NightColorMode` | 21.7 | 87.4 |
 | `CastShadows` | 20.8 | 46.9 |
 | `NightFog` | 24.2 | 90.5 |
 | `GroundFog` | 24.9 | 114.6 |
+| `RandomRain`, dry road | 27.7 | 86.0 |
 | `RandomSnow` | 59.9 | 161.7 |
 | `RandomRain`, wet road | 87.0 | 197.0 |
 
@@ -773,65 +802,117 @@ variant also re-rolls the setup knobs severity leaves alone — sun position,
 camera pitch, deposit mix, mains frequency — since those change the picture as
 much as the weather does.
 
+**Twice, where the scene's reading matters.** Nine rows are drawn a second
+time, as `<effect>_aware_<n>.png`, with a provider that reads the scene: its
+[labels, its camera, its vehicles and its street lamps](#what-a-provider-can-read--optional).
+Those are the rows whose picture depends on it, and each twin starts from
+the same variant as its plain row. The plain picture is what any provider
+gives; the second is what the same call gives once the provider knows where
+the road, the traffic and the lamps are.
+
+Each cell shows the **median of seven draws**, not the first: effects that can
+legitimately draw themselves out of existence otherwise produce a cell the
+reader cannot tell from a bug. See [`docs/examples/`](docs/examples/) for the
+full sweep of 39 rows at five levels.
+
 The same effects over eight other scenes — a crossing from straight above, a
 covered car park, a real night street, mountains across a valley — are in
 [`docs/examples/scenes/`](docs/examples/scenes/README.md), one page per scene,
 with the shipped pipelines run over each. That set is the place to look for
 where the models stop fitting, and each page says what the transforms had to
 be told about the scene to get there. Each page also shows what a provider
-with [scene labels and geometry](docs/scene_understanding.md) read off the
-scene for itself, its labels with the horizon drawn across them, and every
-effect that depends on that reading twice: without it and with it, from the
-same parameters and the same seed.
+that reads the scene read off it, its labels with the horizon drawn across
+them, and every effect that depends on that reading twice: without it and
+with it, from the same parameters and the same seed.
 
-Each cell shows the **median of seven draws**, not the first: effects that can
-legitimately draw themselves out of existence otherwise produce a cell the
-reader cannot tell from a bug. See [`docs/examples/`](docs/examples/) for the
-full sweep.
+![base](docs/examples/00_base_scene.png)
 
-| Base scene | Water droplets | Dirt / soil |
-| --- | --- | --- |
-| ![base](docs/examples/00_base_scene.png) | ![water droplets](docs/examples/water_droplets_2.png) | ![dirt/soil](docs/examples/dirt_soil_2.png) |
+### Weather, by level and with the scene read
 
-| Sun flare | Fog | Rain | Snow |
+The weather is what the library is for, so these are shown at three levels,
+light, moderate and severe, and then with the scene read. Rain: with the
+road and its traffic known, the vehicles trail spray by their heading and
+speed and drive with their lamps on.
+
+| Rain, severity 1 | severity 3 | severity 5 | severity 4, scene read: spray and lamps |
 | --- | --- | --- | --- |
-| ![sun flare](docs/examples/sun_flare_3.png) | ![fog](docs/examples/fog_2.png) | ![rain](docs/examples/rain_3.png) | ![snow](docs/examples/snow_3.png) |
+| ![rain, severity 1](docs/examples/rain_0.png) | ![severity 3](docs/examples/rain_2.png) | ![severity 5](docs/examples/rain_4.png) | ![severity 4, scene read: spray and lamps](docs/examples/rain_aware_3.png) |
 
-| Night IR | Night rain | AC flicker | Cast shadows |
+Snow: with the road known, traffic has worn wheel tracks in what has settled.
+
+| Snow, severity 1 | severity 3 | severity 5 | severity 4, scene read: wheel tracks |
 | --- | --- | --- | --- |
-| ![night ir](docs/examples/night_ir_3.png) | ![night rain](docs/examples/night_rain_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![cast shadows](docs/examples/cast_shadows_3.png) |
+| ![snow, severity 1](docs/examples/snow_0.png) | ![severity 3](docs/examples/snow_2.png) | ![severity 5](docs/examples/snow_4.png) | ![severity 4, scene read: wheel tracks](docs/examples/snow_aware_3.png) |
 
-| Night snow | Wet glass under the infrared ring | Night fog | Glare from lamps |
+Fog needs depth and nothing else, and reads the same with either provider.
+
+| Fog, severity 1 | severity 3 | severity 5 | Ground fog |
 | --- | --- | --- | --- |
-| ![night snow](docs/examples/night_snow_3.png) | ![night droplets](docs/examples/night_droplets_3.png) | ![night fog](docs/examples/night_fog_3.png) | ![source glare](docs/examples/source_glare_3.png) |
+| ![fog, severity 1](docs/examples/fog_0.png) | ![severity 3](docs/examples/fog_2.png) | ![severity 5](docs/examples/fog_4.png) | ![ground fog](docs/examples/ground_fog_2.png) |
 
-| Packet loss | Soaked road, light rain | Deep snow, light fall |
-| --- | --- | --- |
-| ![transmission faults](docs/examples/transmission_faults_3.png) | ![wet ground](docs/examples/wet_ground_4.png) | ![snow cover](docs/examples/snow_cover_4.png) |
+The ground has its own ladder, under light weather that does not change:
 
-| A spider's web, far | nearer | against the housing |
-| --- | --- | --- |
-| ![spider web 1](docs/examples/spider_web_0.png) | ![spider web 3](docs/examples/spider_web_2.png) | ![spider web 5](docs/examples/spider_web_4.png) |
-
-| Insects in the beam | The ring in the dome | Frost | Snow on the housing |
+| Soaked road, light rain | scene read: spray and lamps | Deep snow, light fall | scene read: wheel tracks |
 | --- | --- | --- | --- |
-| ![night insects](docs/examples/night_insects_3.png) | ![ir dome glare](docs/examples/ir_dome_glare_2.png) | ![frost](docs/examples/frost_on_glass_2.png) | ![snow on housing](docs/examples/snow_on_housing_3.png) |
+| ![soaked road, light rain](docs/examples/wet_ground_4.png) | ![scene read: spray and lamps](docs/examples/wet_ground_aware_4.png) | ![deep snow, light fall](docs/examples/snow_cover_4.png) | ![scene read: wheel tracks](docs/examples/snow_cover_aware_4.png) |
 
-| Tampering | A branch | Filter stuck open | Demosaicing |
+| Sun flare | Cast shadows | Plumes | Heat shimmer, through a long lens |
 | --- | --- | --- | --- |
-| ![lens tamper](docs/examples/lens_tamper_3.png) | ![foliage](docs/examples/foliage_intrusion_3.png) | ![ir cut](docs/examples/ir_cut_filter_fault_3.png) | ![demosaic](docs/examples/demosaic_artifacts_4.png) |
+| ![sun flare](docs/examples/sun_flare_3.png) | ![cast shadows](docs/examples/cast_shadows_3.png) | ![plumes](docs/examples/local_plumes_3.png) | ![heat shimmer, through a long lens](docs/examples/heat_shimmer_4.png) |
 
-| A branch under the infrared ring | | |
-| --- | --- | --- |
-| ![night foliage 2](docs/examples/night_foliage_1.png) | ![night foliage 3](docs/examples/night_foliage_2.png) | ![night foliage 4](docs/examples/night_foliage_3.png) |
+### Night
 
-| Analog link | Focus | Vibration | Overlay |
+A daylight frame made into a night one. With depth alone it is lit evenly;
+with the scene read it is lit as a road is, from its street lamps and its
+traffic, and under infrared its signs and plates send the illuminator's
+light back.
+
+| Night IR | Night IR, scene read | Night in colour, sky glow only | Night in colour, scene read |
 | --- | --- | --- | --- |
-| ![analog video](docs/examples/analog_video_3.png) | ![focus shift](docs/examples/focus_shift_3.png) | ![camera vibration](docs/examples/camera_vibration_3.png) | ![overlay](docs/examples/on_screen_overlay_2.png) |
+| ![night ir](docs/examples/night_ir_3.png) | ![night ir, scene read](docs/examples/night_ir_aware_3.png) | ![night in colour, sky glow only](docs/examples/night_color_3.png) | ![night in colour, scene read](docs/examples/night_color_aware_3.png) |
 
-| Ground fog | Plumes | Heat shimmer, through a long lens |
-| --- | --- | --- |
-| ![ground fog](docs/examples/ground_fog_2.png) | ![plumes](docs/examples/local_plumes_3.png) | ![heat shimmer](docs/examples/heat_shimmer_4.png) |
+What falls at night is lit by the camera, and with the scene read by the
+scene's own lamps as well: a cone under each street lamp.
+
+| Night rain | Night rain, scene read | Night snow | Night snow, scene read |
+| --- | --- | --- | --- |
+| ![night rain](docs/examples/night_rain_3.png) | ![night rain, scene read](docs/examples/night_rain_aware_3.png) | ![night snow](docs/examples/night_snow_3.png) | ![night snow, scene read](docs/examples/night_snow_aware_3.png) |
+
+| Night fog, over a night photograph | Night fog, over this scene, its lamps known | Glare from lamps | Insects in the beam |
+| --- | --- | --- | --- |
+| ![night fog, over a night photograph](docs/examples/night_fog_3.png) | ![night fog, over this scene, its lamps known](docs/examples/night_fog_aware_3.png) | ![glare from lamps](docs/examples/source_glare_3.png) | ![insects in the beam](docs/examples/night_insects_3.png) |
+
+### Glass and housing
+
+| Water on the glass, iris open | iris stopped down | under the infrared ring | Dirt and soil |
+| --- | --- | --- | --- |
+| ![water on the glass, iris open](docs/examples/water_droplets_1.png) | ![iris stopped down](docs/examples/water_droplets_2.png) | ![under the infrared ring](docs/examples/night_droplets_3.png) | ![dirt and soil](docs/examples/dirt_soil_2.png) |
+
+| Frost | Snow on the housing | The ring in the dome | Tampering |
+| --- | --- | --- | --- |
+| ![frost](docs/examples/frost_on_glass_2.png) | ![snow on the housing](docs/examples/snow_on_housing_3.png) | ![the ring in the dome](docs/examples/ir_dome_glare_2.png) | ![tampering](docs/examples/lens_tamper_3.png) |
+
+| A spider's web, far | nearer | against the housing | The housing's own edge |
+| --- | --- | --- | --- |
+| ![a spider's web, far](docs/examples/spider_web_0.png) | ![nearer](docs/examples/spider_web_2.png) | ![against the housing](docs/examples/spider_web_4.png) | ![the housing's own edge](docs/examples/housing_occluders_3.png) |
+
+| A branch | A branch under the infrared ring | Focus | Vibration |
+| --- | --- | --- | --- |
+| ![a branch](docs/examples/foliage_intrusion_3.png) | ![a branch under the infrared ring](docs/examples/night_foliage_2.png) | ![focus](docs/examples/focus_shift_3.png) | ![vibration](docs/examples/camera_vibration_3.png) |
+
+### Sensor, processor and link
+
+| Sensor noise | AC flicker | Rolling shutter | Exposure hunting |
+| --- | --- | --- | --- |
+| ![sensor noise](docs/examples/sensor_noise_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![rolling shutter](docs/examples/rolling_shutter_3.png) | ![exposure hunting](docs/examples/exposure_transient_3.png) |
+
+| Wide dynamic range | Temporal denoising | Demosaicing | Filter stuck open |
+| --- | --- | --- | --- |
+| ![wide dynamic range](docs/examples/wdr_tone_mapping_3.png) | ![temporal denoising](docs/examples/denoise_artifacts_3.png) | ![demosaicing](docs/examples/demosaic_artifacts_4.png) | ![filter stuck open](docs/examples/ir_cut_filter_fault_3.png) |
+
+| Codec | Packet loss | Analog link | Overlay |
+| --- | --- | --- | --- |
+| ![codec](docs/examples/video_codec_3.png) | ![packet loss](docs/examples/transmission_faults_3.png) | ![analog link](docs/examples/analog_video_3.png) | ![overlay](docs/examples/on_screen_overlay_2.png) |
 
 The `rain` and `snow` rows raise the ground with the weather, level for
 level, because a row has one axis. `wet_ground` and `snow_cover` hold the
@@ -849,7 +930,17 @@ is the order the pipelines use. `night_droplets` is `WaterDroplets`
 over the same frame with `illuminator_glow_range` set, which is how the
 pipelines build it at night. `night_fog` and `source_glare` act on the lights
 in a frame, which the daylit reference does not have, so they are rendered
-over the night street from `sample_scenes/`.
+over the night street from `sample_scenes/`. `night_fog_aware` is the
+exception: it is fog over this scene made a night of in colour, whose lamps
+the provider knows, and is lit by them.
+
+In the `_aware` rows, `rain` and `wet_ground` have `spray_range`,
+`vehicle_lamp_range` and a motorway's `traffic_speed_range_kmh` set, which
+are off by default and do nothing without the scene's labels; everything
+else in them is what the defaults do once the provider reads the scene.
+`night_color` without that reading is a night with no lamps in it, lit by
+the sky's glow, which is the only night a provider with depth alone can
+light.
 
 `heat_shimmer` is rendered as through a 3 to 5 degree lens with the scene
 taken to reach 6 km, since that is where shimmer is: through this

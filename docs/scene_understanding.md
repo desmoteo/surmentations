@@ -376,10 +376,38 @@ AGPL. Classical tail-lamp detection, red by colour and paired by symmetry
 already is, and has no counterpart for an unlit headlamp by day. OWLv2 is
 Apache-2.0.
 
-**Street lamps, in the same look.** The pass over the whole frame is also
-asked for "a street light". A tall box is a lamp's post and the flat boxes
-at its top are its heads; `provider.get_street_lamps(image)` returns one
-row to a head. `NightIrMode` lights a night scene from them.
+**Street lamps, signs and plates, in the same looks.** The pass over the
+whole frame is also asked for "a street light" and "a traffic sign", and
+the pass over the vehicles for "a license plate". A tall box is a lamp's
+post and the flat boxes at its top are its heads;
+`provider.get_street_lamps(image)` returns one row to a head,
+`provider.get_signs(image)` one to a sign, and each `VehicleView` has its
+`plate`. `NightIrMode` and `NightColorMode` light a night scene from the
+lamps, and under infrared the signs and plates send the illuminator's
+light back. On the sample scenes the plates found were all plates (7 of
+the 7 visible in the underpass, 9 on the city road); the signs were signs
+but for two billboards.
+
+**From the photograph, not from its reduction.** A pipeline often works on
+a frame smaller than the one the camera took. What names and finds things
+is better run on the original:
+
+```python
+provider.remember(frame, original=photograph)   # same picture, any size
+```
+
+The labels and the reader then look at `photograph` and answer in
+`frame`'s pixels; depth and the camera's geometry stay the frame's own. A
+lamp or a plate that is three pixels across in a frame 800 wide is a dozen
+in the photograph: on the city road the reader read 17 vehicles and found
+12 plates from the 1920-pixel original, against 13 and 9 from the frame.
+
+**From the frame as it was.** A provider asked about a frame that
+transforms have already drawn on, by a transform late in a pipeline whose
+earlier ones had no provider, reads the frame the pipeline started from
+and not the one with a flare or a night over it. Transforms tell it what
+was made from what; the first frame has to be still alive, which in a
+pipeline it is.
 
 **What uses it.** `RandomRain`'s spray and lamps, and `NightIrMode`'s
 lamps and night lighting ([`road_surface.md`](road_surface.md)). Each vehicle told apart has its

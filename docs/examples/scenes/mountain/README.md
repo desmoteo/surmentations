@@ -34,7 +34,7 @@ and how far to trust it.
 | Roll | +0.0° |
 | Camera height | not found: fewer than three usable vehicles or people in view |
 | Depth | the by-eye range above: there is no height to measure from |
-| Labels | other 49%, sky 27%, foliage 22%, structure 1%, terrain 0% |
+| Labels | other 55%, sky 27%, foliage 18% |
 
 ## Without and with it
 
@@ -48,9 +48,12 @@ and its lamps (`spray_range`, `vehicle_lamp_range`), which are off by default
 and which only a provider that knows the road and its vehicles can draw. That
 provider also has a vehicle reader, which says which end of each vehicle is
 seen and where its lamps are; see [the road surface](../../../road_surface.md).
-With that reader `night_ir` is lit as a road is at night, from its street lamps
-and its traffic's lamps and beams, as it is whenever a provider has one; on the
-left it is lit evenly, as a daylight frame is.
+With that reader `night_ir` and `night_color` are lit as a road is at night,
+from its street lamps and its traffic's lamps and beams; on the left they are
+lit evenly, as a daylight frame is. Under `night_ir` the road signs and number
+plates the reader found send the illuminator's light back, and `night_rain` and
+`night_snow`, drawn over that frame, show in the lamps' light. The reader looks
+at each photograph at the size it was taken at, not at the reduced frame.
 
 | `fog` without | `fog` with |
 | --- | --- |
@@ -71,6 +74,10 @@ left it is lit evenly, as a daylight frame is.
 | `night_ir` without | `night_ir` with |
 | --- | --- |
 | ![`night_ir` without](effects/night_ir.jpg) | ![`night_ir` with](aware/night_ir.jpg) |
+
+| `night_rain` without | `night_rain` with |
+| --- | --- |
+| ![`night_rain` without](effects/night_rain.jpg) | ![`night_rain` with](aware/night_rain.jpg) |
 
 | `night_snow` without | `night_snow` with |
 | --- | --- |
@@ -96,6 +103,10 @@ left it is lit evenly, as a daylight frame is.
 | --- | --- |
 | ![`heat_shimmer` without](effects/heat_shimmer.jpg) | ![`heat_shimmer` with](aware/heat_shimmer.jpg) |
 
+| `night_color` without | `night_color` with |
+| --- | --- |
+| ![`night_color` without](effects/night_color.jpg) | ![`night_color` with](aware/night_color.jpg) |
+
 ## The other effects at severity 3
 
 One representative draw each: the median of seven by how much the frame changed.
@@ -105,41 +116,37 @@ These do not read the scene, and are the same with either provider.
 | --- | --- | --- |
 | ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![sun_flare](effects/sun_flare.jpg) |
 
-| housing_occluders | night_rain | ac_flicker |
+| housing_occluders | ac_flicker | rolling_shutter |
 | --- | --- | --- |
-| ![housing_occluders](effects/housing_occluders.jpg) | ![night_rain](effects/night_rain.jpg) | ![ac_flicker](effects/ac_flicker.jpg) |
+| ![housing_occluders](effects/housing_occluders.jpg) | ![ac_flicker](effects/ac_flicker.jpg) | ![rolling_shutter](effects/rolling_shutter.jpg) |
 
-| rolling_shutter | exposure_transient | wdr_tone_mapping |
+| exposure_transient | wdr_tone_mapping | denoise_artifacts |
 | --- | --- | --- |
-| ![rolling_shutter](effects/rolling_shutter.jpg) | ![exposure_transient](effects/exposure_transient.jpg) | ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) |
+| ![exposure_transient](effects/exposure_transient.jpg) | ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) | ![denoise_artifacts](effects/denoise_artifacts.jpg) |
 
-| denoise_artifacts | video_codec | night_droplets |
+| video_codec | night_droplets | sensor_noise |
 | --- | --- | --- |
-| ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) | ![night_droplets](effects/night_droplets.jpg) |
+| ![video_codec](effects/video_codec.jpg) | ![night_droplets](effects/night_droplets.jpg) | ![sensor_noise](effects/sensor_noise.jpg) |
 
-| sensor_noise | transmission_faults | spider_web |
+| transmission_faults | spider_web | night_insects |
 | --- | --- | --- |
-| ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) |
+| ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) |
 
-| night_insects | ir_dome_glare | frost_on_glass |
+| ir_dome_glare | frost_on_glass | snow_on_housing |
 | --- | --- | --- |
-| ![night_insects](effects/night_insects.jpg) | ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![frost_on_glass](effects/frost_on_glass.jpg) |
+| ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![frost_on_glass](effects/frost_on_glass.jpg) | ![snow_on_housing](effects/snow_on_housing.jpg) |
 
-| snow_on_housing | lens_tamper | foliage_intrusion |
+| lens_tamper | foliage_intrusion | ir_cut_filter_fault |
 | --- | --- | --- |
-| ![snow_on_housing](effects/snow_on_housing.jpg) | ![lens_tamper](effects/lens_tamper.jpg) | ![foliage_intrusion](effects/foliage_intrusion.jpg) |
+| ![lens_tamper](effects/lens_tamper.jpg) | ![foliage_intrusion](effects/foliage_intrusion.jpg) | ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) |
 
-| ir_cut_filter_fault | demosaic_artifacts | analog_video |
+| demosaic_artifacts | analog_video | focus_shift |
 | --- | --- | --- |
-| ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) |
+| ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) | ![focus_shift](effects/focus_shift.jpg) |
 
-| focus_shift | camera_vibration | on_screen_overlay |
+| camera_vibration | on_screen_overlay | night_foliage |
 | --- | --- | --- |
-| ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) |
-
-| night_foliage |  |  |
-| --- | --- | --- |
-| ![night_foliage](effects/night_foliage.jpg) |  |  |
+| ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) | ![night_foliage](effects/night_foliage.jpg) |
 
 Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
 

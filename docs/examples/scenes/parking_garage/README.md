@@ -34,7 +34,7 @@ and how far to trust it.
 | Roll | +0.4° |
 | Camera height | not found: fewer than three usable vehicles or people in view |
 | Depth | the by-eye range above: there is no height to measure from |
-| Labels | structure 58%, pavement 41%, road 0%, lamp 0%, sky 0%, pole 0% |
+| Labels | structure 58%, pavement 42%, lamp 0%, pole 0% |
 
 ## Without and with it
 
@@ -48,9 +48,12 @@ and its lamps (`spray_range`, `vehicle_lamp_range`), which are off by default
 and which only a provider that knows the road and its vehicles can draw. That
 provider also has a vehicle reader, which says which end of each vehicle is
 seen and where its lamps are; see [the road surface](../../../road_surface.md).
-With that reader `night_ir` is lit as a road is at night, from its street lamps
-and its traffic's lamps and beams, as it is whenever a provider has one; on the
-left it is lit evenly, as a daylight frame is.
+With that reader `night_ir` and `night_color` are lit as a road is at night,
+from its street lamps and its traffic's lamps and beams; on the left they are
+lit evenly, as a daylight frame is. Under `night_ir` the road signs and number
+plates the reader found send the illuminator's light back, and `night_rain` and
+`night_snow`, drawn over that frame, show in the lamps' light. The reader looks
+at each photograph at the size it was taken at, not at the reduced frame.
 
 | `fog` without | `fog` with |
 | --- | --- |
@@ -63,6 +66,10 @@ left it is lit evenly, as a daylight frame is.
 | `local_plumes` without | `local_plumes` with |
 | --- | --- |
 | ![`local_plumes` without](effects/local_plumes.jpg) | ![`local_plumes` with](aware/local_plumes.jpg) |
+
+| `night_color` without | `night_color` with |
+| --- | --- |
+| ![`night_color` without](effects/night_color.jpg) | ![`night_color` with](aware/night_color.jpg) |
 
 ## The other effects at severity 3
 

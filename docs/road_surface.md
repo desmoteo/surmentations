@@ -19,7 +19,11 @@ both off the picture, and `RandomSnow` and `RandomRain` use them:
 | Spray behind vehicles | `RandomRain(spray_range=...)` | `(0.0, 0.0)`: off | scene labels |
 | How fast the traffic is going | `RandomRain(traffic_speed_range_kmh=...)` | `(40.0, 130.0)` | with spray |
 | The traffic's lamps, lit | `RandomRain(vehicle_lamp_range=...)` | `(0.0, 0.0)`: off | scene labels |
-| The traffic's lamps at night | `NightIrMode(vehicle_lamp_range=...)` | `(0.7, 1.3)` | a vehicle reader |
+| The traffic's lamps at night | `NightIrMode(vehicle_lamp_range=...)`, `NightColorMode(...)` | `(0.7, 1.3)` | a vehicle reader |
+| Street lighting at night | `NightIrMode(street_lamp_range=...)`, `NightColorMode(...)` | `(0.6, 1.4)` | scene labels; better with a reader |
+| A night in colour | `NightColorMode(lamp_temperature_range_k=...)` | `(1900, 5500)` | lit only with labels |
+| Signs, plates and paint under infrared | `NightIrMode(retroreflector_range=...)` | `(0.6, 1.4)` | labels for paint, a reader for the rest |
+| Fog, rain and snow in the lamps' light | `NightFog`, `NightRain`, `NightSnow` `(lamp_cone_range=...)` | `(0.6, 1.4)` | a night frame lit as above |
 
 "Scene labels" means a provider built with `labels=`
 ([scene understanding](scene_understanding.md)): they say where the road
@@ -399,6 +403,70 @@ be painted on the car and then dimmed with it. All of it is worked out in
 space, so it needs the scene's ground labelled; with no lamps and no
 labels the frame is what it was.
 
+### In colour
+
+Most cameras do not go to infrared at dusk: with a fast lens they hold
+colour through an ordinary lit night.
+[`NightColorMode`](transforms/NightColorMode.md) is the same lighting seen
+by such a camera. The light has a colour, one kind of lamp to a street
+(`lamp_temperature_range_k`): high-pressure sodium at about 2100 K is
+orange with almost no blue, and under it a blue car is a grey one; a white
+LED is 3000 to 5700 K. Headlamps are whiter than either and tail lamps are
+red, so the frame has several casts at once, which a day frame turned down
+never has. The noise is in each channel separately, as a night frame's is.
+
+With a provider that has depth alone there is nothing to say where a lamp
+is, and the frame is lit by the sky's glow: dim, even, and with the day's
+shadows still in it. That is the first picture of each row below; the
+others are the same draw with a provider that reads the scene, under
+sodium and under a cool LED:
+
+![a night in colour](assets/road_surface/night_colour.jpg)
+
+### What is in the air shows in the lamps' light
+
+Fog, rain and snow at night are seen mostly where a lamp lights them: a
+cone under each street lamp, a wedge ahead of each headlamp, and darkness
+between. The transform that makes the night knows where the lamps are, and
+notes for the frame it returns how much of their light falls on the air
+along each line of sight: a lamp's light falls as the square of the
+distance, and its sum along a straight line has a closed form (Sun et al.,
+2005), weighted so that a luminaire lights the air under it and not above.
+`NightFog`, `NightRain` and `NightSnow`, which come after it in a pipeline,
+turn that into light (`lamp_cone_range`): times their own extinction
+coefficient and a quarter, which is what a drop sends sideways of what
+falls on it, less what the same weather takes out on the way back to the
+lens. Without that last term every lamp down a road in falling snow added
+up to a white wall. Rain and snow in a cone keep the grain of a count of
+particles; fog is smooth.
+
+`NightFog` used to light fog by the frame's own blurred brightness, which
+over a lit road was a white sheet. On a frame whose lamps are known it is
+lit by them. Without (left) and with (right), fog and rain over a night in
+colour and snow over an infrared one:
+
+![fog, rain and snow in the lamps' light](assets/road_surface/lamp_cones.jpg)
+
+### What sends the illuminator's light back
+
+Road signs, number plates and the glass beads in road paint are made to
+send light back where it came from. To a driver that is what makes them
+show in headlamps. To a camera whose infrared illuminator sits round its
+lens it is the same and stronger, the lens being on the lamp's own axis:
+within the illuminator's reach a sign is a white rectangle with nothing on
+it and a plate is a white bar, which is why cameras that read plates meter
+for the plate and not for the scene. `NightIrMode(retroreflector_range=...)`
+draws it: road paint, from the labels, returns a few times what a matt
+white would; signs and plates, which the vehicle reader finds, some five
+hundred times. That figure is the middle of a wide range, tens to over a
+thousand by the sheeting's grade, and was not read off a standard. Only
+the camera's own light comes back this way: a street lamp's and a car's go
+back to them, so nothing of the kind is drawn in colour.
+
+![signs and plates under infrared](assets/road_surface/retroreflectors.jpg)
+
+### A frame taken at night
+
 **A frame that was taken at night** has its lamps in it already.
 `RandomRain` leaves a vehicle alone when a few of its pixels are at full
 scale and the rest of it is dark, gives the lamps it finds burning the
@@ -455,6 +523,17 @@ before, and with them:
   are divided along the edges of their boxes, which is square where the
   vehicles are not; and far traffic it cannot tell apart stays one
   outline.
+- **A lamp is where the reader found one.** Its head is put in space on
+  its own line of sight, so its light falls from where it burns. A lamp
+  whose head the reader did not box takes it from the end of the arm the
+  labels show; with neither, from the middle of the top of its post. On
+  one sample scene two billboards are read as road signs.
+- **Reading is done on the photograph.** Given the frame at the size it
+  was taken at (`provider.remember(frame, original=...)`), the labels and
+  the reader are run on that and answer in the frame's pixels: on the city
+  road, 17 vehicles read and 12 plates found from the 1920-pixel
+  original, against 13 and 9 from the 800-pixel frame. Without it they
+  see what the pipeline sees.
 - **Night lighting is a few lamps and a plane.** The ground is one plane
   fitted through what is labelled ground: a hill, a ramp or a flyover is
   lit as if it lay on it. Nothing casts a shadow in a lamp's light, a lamp

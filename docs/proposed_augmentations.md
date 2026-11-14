@@ -3,7 +3,9 @@
 Effects the library did not have and should. All eight have since been
 built and are kept here as the record of what was intended, each with a
 note on what was done differently. Twelve more were built straight from a
-shorter list without an entry here; they are named at the end.
+shorter list without an entry here; they are named at the end. What is
+proposed now, and not built, is the list under
+[Next](#next-what-a-provider-that-reads-the-scene-makes-possible).
 Each entry says what the effect is, why it is missing, how it would be
 modelled, where it sits in the imaging chain, and what would show that it
 works, so that any one of them can be picked up cold.
@@ -422,6 +424,51 @@ stronger turbulence near the ground was left out. Annotations do not
 follow; the displacement is a pixel or two.
 
 ---
+
+## Next: what a provider that reads the scene makes possible
+
+Depth, scene labels, the camera's geometry and the vehicle reader
+([`scene_understanding.md`](scene_understanding.md)) say where things are
+and what they are, and that opens a class of effects no ordinary pipeline
+can place. Nine were listed in November 2026. Three were built at once and
+are in [`road_surface.md`](road_surface.md): the lamps' light on fog, rain
+and snow (`lamp_cone_range`), a night in colour (`NightColorMode`), and
+what sends an infrared illuminator's light back
+(`retroreflector_range`). The other six are below, in the order they were
+judged worth doing, with what each would reuse. None is started.
+
+| # | Scenario | What it would draw | Reuses | Size |
+| --- | --- | --- | --- | --- |
+| 1 | **Light from outside the frame** | The sweep of a passing car's headlamps over road and walls from traffic the frame does not show; the blue and red of an emergency vehicle's strobes | The ground's plane, the structure label, `headlamp_light` | medium |
+| 2 | **Blinding by oncoming headlamps** | Veiling glare and sensor bloom round the lamps of vehicles seen from the front, with the exposure pulled down for them so that a plate or a pedestrian beside them is lost | Vehicle facing and lamp places; `SourceGlare`, `ExposureTransient` | small |
+| 3 | **Mount slip** | The camera knocked a few degrees off its aim or its level by wind or a ladder, reprojected as a rotation is | The camera's geometry alone, no network | small |
+| 4 | **Flooding** | Standing water to a depth in metres: wheels hidden to that height, the scene mirrored in it | The ground's plane, the camera's height, the wet road's mirror | medium |
+| 5 | **Winter on vehicles** | Number plates and lamps packed with snow or mud; the plume of a cold exhaust behind each running car; the sun's glint off a windscreen | Plates and lamps from the reader, vehicle facing, `LocalPlumes` | medium |
+| 6 | **Season** | A camera trained in summer and used in winter: trees without leaves, dry or autumn vegetation | The vegetation labels | large, and the least physical |
+
+Smaller things noted along the way, for whoever takes one of these up:
+
+- **Hi-vis clothing under infrared.** The reader was not asked for it: the
+  sample scenes have none to check it against. One more prompt.
+- **Windows, signs and shop fronts at night.** A lit night has them; the
+  lighting model has only street lamps and vehicles.
+- **Shadows in lamp light.** Nothing casts one. The depth map and the
+  lamps' places are what it would take.
+- **Sweeps and strobes need a clip.** The library draws single frames, and
+  entry 1 would be a snapshot of one instant unless the same event is
+  carried across the frames of a clip.
+- **A lane layout given per camera**, as an installation geometry is, would
+  be surer than any reading of the lanes ([`road_surface.md`](road_surface.md)).
+- **Water on the glass.** Three things would bring it closer to a housing in
+  real rain: a sheet of water running down the pane in a downpour, which
+  bends the whole view and is not a matter of drops; the rings drops leave
+  when they dry, which stay for weeks; and runners that follow the wind or
+  a dome's curve and not only gravity. Its optics are already those of a
+  drop out of focus on a pane.
+
+New detector prompts need the check the lamps and the plates were given:
+a few dozen crops labelled by eye and counted, before anything is drawn
+from them.
 
 ## Built without an entry
 

@@ -47,6 +47,7 @@ from surmentations.camera import (
     DemosaicArtifacts,
     ExposureTransient,
     IrCutFilterFault,
+    NightColorMode,
     NightIrMode,
     OnScreenOverlay,
     RollingShutter,
@@ -72,6 +73,11 @@ from surmentations.lens import (
     SpiderWeb,
     SunFlare,
     WaterDroplets,
+)
+from surmentations.perception import (
+    GroundPlaneGeometryEstimator,
+    OpenVocabularyVehicleEstimator,
+    SegmentationLabelEstimator,
 )
 from surmentations.presets.severity import GROUND_SEVERITY, SEVERITY
 from surmentations.scene import CastShadows
@@ -132,6 +138,10 @@ EFFECTS: dict[str, str] = {
     "heat_shimmer": "HeatShimmer",
     # A branch again, as the infrared ring shows it.
     "night_foliage": "FoliageIntrusion",
+    # Night in colour. With the plain provider there is nothing to say
+    # where a lamp is, and the row is a night lit by the sky's glow alone;
+    # the lit one is among the AWARE_ROWS.
+    "night_color": "NightColorMode",
 }
 
 # Rows that climb `GROUND_SEVERITY` and hold the weather still, and the row
@@ -449,6 +459,8 @@ def _build(
         return RollingShutter(**kwargs)
     if name == "sensor_noise":
         return SensorNoise(**kwargs)
+    if name == "night_color":
+        return NightColorMode(depth_provider=provider, **kwargs)
     if name == "night_fog":
         return NightFog(depth_provider=provider, **kwargs)
     if name == "source_glare":
@@ -520,6 +532,36 @@ def _lamp_scene(max_dim: int = 640) -> np.ndarray:
     scale = max_dim / max(height, width)
     image = cv2.resize(image, (int(width * scale), int(height * scale)))
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+# The rows drawn a second time, as `<row>_aware_<n>.png`, with a provider
+# that reads the scene: its labels, its camera, its vehicles and its street
+# lamps. They are the rows whose picture depends on that reading. Rain and
+# the wet road gain the traffic's spray and lamps, which are off by default
+# and cannot be drawn without it; snow gains its wheel tracks; the night
+# rows are lit from the scene's own lamps, and what falls or hangs in the
+# air at night shows in their light.
+AWARE_ROWS = (
+    "rain", "wet_ground", "snow", "snow_cover", "night_ir", "night_color", "night_rain",
+    "night_snow", "night_fog",
+)  # fmt: skip
+ROAD_TRAFFIC: dict[str, Any] = {
+    "spray_range": (0.6, 0.6),
+    "vehicle_lamp_range": (1.0, 1.0),
+    "traffic_speed_range_kmh": (95.0, 115.0),
+}
+AWARE_EXTRA: dict[str, dict[str, Any]] = {"rain": ROAD_TRAFFIC, "wet_ground": ROAD_TRAFFIC}
+# How far the reference photograph reaches, by eye, for the provider that
+# reads it: its camera's height is estimated, and this is what it falls
+# back on.
+REFERENCE_DEPTH_M = (3.0, 300.0)
+
+
+def _colour_night_base(scene: np.ndarray, provider: SharedDepthProvider, level: int) -> np.ndarray:
+    """The scene as a colour camera sees it at night, for fog lit by the scene's own lamps."""
+    night = NightColorMode(depth_provider=provider, p=1.0, **SEVERITY[level]["NightColorMode"])
+    night.set_random_seed(11)
+    return night(image=scene)["image"]
 
 
 def _night_base(
@@ -614,8 +656,11 @@ def main() -> None:
     if len(names) != len(EFFECTS):
         print("ffmpeg not found; skipping the video-codec examples")
 
+    states: dict[tuple[str, int], Any] = {}
     for name in tqdm(names, total=len(names), desc="effects"):
         for index, level in enumerate(LEVELS):
+            # The generator as it stood, for the row's twin to start from.
+            states[name, index] = rng.bit_generator.state
             transform = _build(name, level, index, rng, depth_provider)
             # NightRain and NightSnow need their input already dark, and so
             # do water and a web lit by the infrared ring. Their
@@ -634,7 +679,36 @@ def main() -> None:
                 str(OUT_DIR / f"{name}_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
             )
 
+    # The same rows with a provider that reads the scene, each from the
+    # generator its plain twin started from: the same variant and, as near
+    # as a median of draws allows, the same draw.
+    aware = SharedDepthProvider(
+        DepthAnythingV2Estimator(),
+        depth_range_m=REFERENCE_DEPTH_M,
+        labels=SegmentationLabelEstimator(),
+        geometry=GroundPlaneGeometryEstimator(),
+        vehicles=OpenVocabularyVehicleEstimator(),
+    )
+    for name in tqdm(AWARE_ROWS, desc="with scene reading"):
+        for index, level in enumerate(LEVELS):
+            twin_rng = np.random.default_rng()
+            twin_rng.bit_generator.state = states[name, index]
+            transform = _build(name, level, index, twin_rng, aware, AWARE_EXTRA.get(name))
+            base = _night_base(scene, aware, level) if name in LAMP_LIT else scene
+            if name == "night_snow":
+                base = _snowy_night_base(scene, aware, level)
+            if name == "night_fog":
+                # Over this scene made a night of, where the plain row is
+                # over a night photograph: the provider knows this scene's
+                # lamps, and the fog is lit by them.
+                base = _colour_night_base(scene, aware, level)
+            out = _render_representative(transform, base, twin_rng)
+            cv2.imwrite(
+                str(OUT_DIR / f"{name}_aware_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+            )
+
     print(f"Wrote {len(names)} effects x {len(LEVELS)} severities to {OUT_DIR}")
+    print(f"and {len(AWARE_ROWS)} of them again with a provider that reads the scene")
 
 
 if __name__ == "__main__":

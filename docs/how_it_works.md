@@ -895,6 +895,34 @@ to *reach* its target, not something applied on top of a level it already
 hit. Applying it twice put a fifth of the frame against the clipping point by
 construction.
 
+Where the provider knows the scene's lamps the night is not lit evenly:
+see [the road at night](road_surface.md#at-night).
+
+### Night in colour
+
+```mermaid
+flowchart TD
+    RGB["scene RGB: what each surface sends back"] --> EVEN["road without the day's light and shade"]
+    PROV["provider: street lamps, vehicles, ground"] --> SPACE["lamps placed in space"]
+    SPACE --> POOLS["street lamps: pools, inverse square, in the lamps' colour"]
+    SPACE --> BEAMS["headlamps: two beams per lit vehicle"]
+    GLOW["sky glow, everywhere"] --> SUM["light arriving, per channel"]
+    POOLS --> SUM
+    BEAMS --> SUM
+    EVEN --> SIG["signal = surface x light"]
+    SUM --> SIG
+    SIG --> AE["auto-exposure, lit road held below white"]
+    AE --> LAMPS["plus the lamps themselves and their bloom"]
+    LAMPS --> NOISE["plus shot and read noise per channel"]
+    SPACE -.-> AIR["the lamps' light on the air, noted for fog, rain and snow"]
+```
+
+`NightColorMode` is the night a colour camera sees. Its light has the
+colour of its lamps, one kind to a street: sodium at 2100 K is orange with
+almost no blue, an LED is white. The same lighting as the infrared night's,
+from the same reading of the scene; without that reading it is lit by the
+sky's glow alone.
+
 ---
 
 ## 7. Severity, composition, and what varies
