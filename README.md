@@ -259,7 +259,9 @@ it (left) and with it (right):
 
 Under the camera's own infrared illuminator, the road signs and number
 plates the reader finds send its light straight back, as they do on a real
-camera; without and with:
+camera. The reader's box says only where each is: its shape (a slanted
+plate, a sign on its point) is taken from the picture, and its edge is
+the haze a lens makes of something that bright. Without and with:
 
 ![signs and plates under infrared](docs/assets/road_surface/retroreflectors.jpg)
 

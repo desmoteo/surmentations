@@ -386,7 +386,14 @@ post and the flat boxes at its top are its heads;
 lamps, and under infrared the signs and plates send the illuminator's
 light back. On the sample scenes the plates found were all plates (7 of
 the 7 visible in the underpass, 9 on the city road); the signs were signs
-but for two billboards.
+but for two billboards. A box larger than a fiftieth of the frame is not
+kept as a sign: at that size it was a hotel's banner beside the camera.
+
+**A box says where, not what shape.** The reader's boxes are upright, and
+a plate seen from a mast, a sign on its point and a hoarding seen along
+the road are not. Whatever draws on a plate or a sign takes its shape
+from the picture inside the box, by thresholds and convex outlines; see
+[what sends the illuminator's light back](road_surface.md#what-sends-the-illuminators-light-back).
 
 **From the photograph, not from its reduction.** A pipeline often works on
 a frame smaller than the one the camera took. What names and finds things

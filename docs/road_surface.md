@@ -453,8 +453,8 @@ Road signs, number plates and the glass beads in road paint are made to
 send light back where it came from. To a driver that is what makes them
 show in headlamps. To a camera whose infrared illuminator sits round its
 lens it is the same and stronger, the lens being on the lamp's own axis:
-within the illuminator's reach a sign is a white rectangle with nothing on
-it and a plate is a white bar, which is why cameras that read plates meter
+within the illuminator's reach a sign is a white shape with nothing on it
+and a plate is a white bar, which is why cameras that read plates meter
 for the plate and not for the scene. `NightIrMode(retroreflector_range=...)`
 draws it: road paint, from the labels, returns a few times what a matt
 white would; signs and plates, which the vehicle reader finds, some five
@@ -462,6 +462,40 @@ hundred times. That figure is the middle of a wide range, tens to over a
 thousand by the sheeting's grade, and was not read off a standard. Only
 the camera's own light comes back this way: a street lamp's and a car's go
 back to them, so nothing of the kind is drawn in colour.
+
+Three things keep a plate from being a white box laid on the picture:
+
+- **Its shape is the picture's.** The reader's box is upright and loose;
+  a plate seen from a mast is slanted and fills two thirds of it, a
+  hoarding seen along the road is a wedge, and a sign is as often round
+  or on its point as square. So the box says only where to look. In a
+  window round it several plain guesses are made at which pixels are the
+  thing: those unlike the ring of pixels round the box, the paler and the
+  darker of the two groups the window's brightness falls into and the
+  more coloured of the two its colourfulness falls into (Otsu's threshold
+  each time), and for a plate those of its ground's colour. A guess that
+  takes in the ring as well is what the thing stands against and is
+  dropped. Each of the rest is turned into the convex outline of its
+  largest piece, which fills holes and drops specks, and marked by how
+  much of that outline the piece fills and how well the outline's own
+  upright box agrees with the reader's. The best is kept. Where none is
+  a shape (a white plate on a white car, a plate in deep shade), the box
+  is taken whole.
+- **Its characters are not sheeting.** They are black paint or film, as a
+  sign's black legend is, and return what a matt black does. On a plate
+  or a sign under 16 pixels tall their strokes are under two pixels wide
+  and drown in the ground's return, so the shape is filled; from 32
+  pixels they stay dark, as the picture has them. A plate returns the same whatever it photographed as: one in the
+  shade of its car is as much sheeting as one in the sun. Each returns
+  between a quarter and all of the figure, for road film and for being
+  seen aslant.
+- **Its edge is the lens's.** A source at tens of full scales shows the
+  few hundredths of its light that any lens scatters: the plate grows by
+  a pixel or two, its corners round, and it sits in a haze that fades over
+  a dozen pixels. The scatter is drawn as five Gaussians of doubling
+  width, each with half the light of the one before, which stands for a
+  fall with the cube of the distance; a tenth of the light in all, a
+  housing's window at night and not a clean lens on a bench.
 
 ![signs and plates under infrared](assets/road_surface/retroreflectors.jpg)
 
