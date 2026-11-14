@@ -1,3 +1,5 @@
+"""The synthetic scene every golden image is rendered from, as a fixture."""
+
 import numpy as np
 import pytest
 
@@ -19,4 +21,5 @@ def build_scene() -> np.ndarray:
 
 @pytest.fixture
 def scene() -> np.ndarray:
+    """The shared synthetic scene, as a pytest fixture."""
     return build_scene()

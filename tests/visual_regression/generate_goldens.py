@@ -14,6 +14,11 @@ from tests.visual_regression.test_goldens import GOLDEN_DIR, TRANSFORMS
 
 
 def main() -> None:
+    """Render each golden transform at seed 0 over the shared scene and write its PNG.
+
+    Run deliberately, when an effect's rendering is meant to change, and
+    check the new images before committing them.
+    """
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     img = build_scene()
     for name, transform in TRANSFORMS.items():

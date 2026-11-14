@@ -7,7 +7,84 @@ on:
 
 jobs:
   lint-typecheck-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        # The oldest and the newest interpreter the package metadata claims.
+        python-version: ["3.10", "3.12"]
+        include:
+          # The native kernels' arm64 build has one tier, compiled by another
+          # back end of the compiler, and no machine of the developers'.
+          - os: ubuntu-24.04-arm
+            python-version: "3.12"
+    env:
+      # The editable install below compiles native/*.c. Here a failure to do
+      # so is an error, not the silent fall back to numpy a user gets.
+      SURMENTATIONS_BUILD_NATIVE: require
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # VideoCodecArtifacts encodes with real ffmpeg. Without the binary its
+      # tests skip rather than fail, so a runner that lacks it reports green
+      # while testing none of that transform.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install package with dev extras
+        run: pip install -e ".[dev]"
+
+      - name: Ruff
+        # The same trees the README tells contributors to lint; `docs` and
+        # `scripts` hold code the tests import and execute.
+        run: ruff check src tests docs scripts hatch_build.py
+
+      - name: Native kernels are built, and every tier agrees
+        # The hashes are compared by the tests on this machine; printing them
+        # lets the x86-64 and arm64 jobs be compared with each other.
+        run: |
+          python -c "from surmentations import _native as n; assert n.available(); print(n.tier(), n.tiers())"
+          sh native/check/run.sh
+
+      - name: mypy
+        run: mypy src/surmentations
+
+      - name: pytest
+        # Depth-conditioned effects require CUDA (Phase 2+); those tests are
+        # marked and skipped automatically on this CPU-only runner.
+        run: pytest tests -q
+
+      - name: pytest without the native kernels
+        # What an install with no C compiler runs: the numpy code alone.
+        run: SURMENTATIONS_NATIVE=0 pytest tests -q
+
+      - name: pytest in exact mode
+        # Fast mode is the default and what the runs above used.
+        run: SURMENTATIONS_FAST=0 pytest tests -q
+
+      - name: The codec transforms through PyAV
+        # The optional extra: H.264 and H.265 encoded in the process. Its
+        # tests skip without it, so they are run once with it, in both
+        # modes. PyAV's wheels need Python 3.12 at the version current here.
+        if: matrix.python-version == '3.12'
+        run: |
+          pip install -e ".[codec]"
+          pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py tests/unit/test_camera.py -q
+          SURMENTATIONS_FAST=0 pytest tests/unit/test_inprocess_codec.py tests/unit/test_transmission.py -q
+
+  docs:
+    # The code reference, generated from the source. Warnings are errors: a
+    # docstring autodoc cannot read, or a C comment Hawkmoth cannot attach,
+    # fails the build rather than vanishing from the site.
     runs-on: ubuntu-latest
+    env:
+      # autodoc imports the package; the kernels are not needed for that.
+      SURMENTATIONS_BUILD_NATIVE: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -15,16 +92,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install package with dev extras
-        run: pip install -e ".[dev]"
+      - name: Install package with the docs extra
+        run: pip install -e ".[docs]"
 
-      - name: Ruff
-        run: ruff check src tests
+      - name: Build the code reference
+        run: sphinx-build -W --keep-going -b html docs/site docs/site/_build/html
 
-      - name: mypy
-        run: mypy src/weathermentations
-
-      - name: pytest
-        # Depth-conditioned effects require CUDA (Phase 2+); those tests are
-        # marked and skipped automatically on this CPU-only runner.
-        run: pytest tests -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-reference
+          path: docs/site/_build/html

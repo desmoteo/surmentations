@@ -1,6 +1,8 @@
+"""Compositing helpers: alpha blending, directional blur kernels, and feathered band blends."""
+
 import numpy as np
 
-from weathermentations.utils.compositing import (
+from surmentations.utils.compositing import (
     alpha_composite,
     directional_blur_kernel,
     feathered_band_blend,

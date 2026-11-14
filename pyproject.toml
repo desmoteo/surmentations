@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "weathermentations"
+name = "surmentations"
 version = "0.1.0"
-description = "Physically-grounded weather and lens artifact augmentations for Albumentations"
+description = "Physically-grounded weather, lens and camera-chain augmentations for Albumentations"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-authors = [{ name = "the weathermentations authors" }]
+authors = [{ name = "the surmentations authors" }]
 keywords = [
     "albumentations",
     "data-augmentation",
@@ -29,7 +29,13 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "albumentations>=1.4",
+    # 2.0 is the real floor, not a preference: the InitSchema validators
+    # (`check_range_bounds`), per-transform seeding (`py_random`,
+    # `random_generator`) and `get_params_dependent_on_data` this library is
+    # built on do not exist in 1.4.x in the form used here, and the package
+    # fails at import or construction on every 1.4 release tried (1.4.0,
+    # 1.4.21, 1.4.24). Verified working on 2.0.0, 2.0.4 and 2.0.8.
+    "albumentations>=2.0",
     "numpy>=1.24",
     "opencv-python-headless>=4.8",
     "torch>=2.1",
@@ -38,6 +44,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# H.264 and H.265 encoded inside the process for VideoCodecArtifacts and
+# TransmissionFaults, in place of two ffmpeg processes a frame. Its wheels
+# carry their own FFmpeg, built with GPL components (libx264, libx265).
+codec = ["av>=12"]
+# The code reference site in docs/site, generated from the source: autodoc for
+# Python, Hawkmoth through libclang for C.
+docs = ["sphinx>=8", "myst-parser>=4", "furo", "hawkmoth>=0.19", "libclang>=18"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
@@ -51,7 +64,12 @@ dev = [
 # project has an actual git remote to point to.
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/weathermentations"]
+packages = ["src/surmentations"]
+
+# Compiles native/*.c into the package if there is a C compiler, and goes on
+# without it if there is not: see hatch_build.py and docs/native_kernels.md.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
 
 [tool.ruff]
 line-length = 100
