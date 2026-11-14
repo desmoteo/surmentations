@@ -171,13 +171,13 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![rain 1](../examples/rain_0.png) | ![rain 2](../examples/rain_1.png) | ![rain 3](../examples/rain_2.png) | ![rain 4](../examples/rain_3.png) | ![rain 5](../examples/rain_4.png) |
+| ![rain 1](https://desmoteo.github.io/surmentations/examples/rain_0.webp) | ![rain 2](https://desmoteo.github.io/surmentations/examples/rain_1.webp) | ![rain 3](https://desmoteo.github.io/surmentations/examples/rain_2.webp) | ![rain 4](https://desmoteo.github.io/surmentations/examples/rain_3.webp) | ![rain 5](https://desmoteo.github.io/surmentations/examples/rain_4.webp) |
 
 `wet_ground`
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![wet_ground 1](../examples/wet_ground_0.png) | ![wet_ground 2](../examples/wet_ground_1.png) | ![wet_ground 3](../examples/wet_ground_2.png) | ![wet_ground 4](../examples/wet_ground_3.png) | ![wet_ground 5](../examples/wet_ground_4.png) |
+| ![wet_ground 1](https://desmoteo.github.io/surmentations/examples/wet_ground_0.webp) | ![wet_ground 2](https://desmoteo.github.io/surmentations/examples/wet_ground_1.webp) | ![wet_ground 3](https://desmoteo.github.io/surmentations/examples/wet_ground_2.webp) | ![wet_ground 4](https://desmoteo.github.io/surmentations/examples/wet_ground_3.webp) | ![wet_ground 5](https://desmoteo.github.io/surmentations/examples/wet_ground_4.webp) |
 
 ## References
 

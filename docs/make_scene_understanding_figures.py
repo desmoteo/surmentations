@@ -7,7 +7,8 @@ Two kinds of picture, both made from the photographs the galleries use:
 * four effects on three scenes, each without and with that reading, so that
   what the labels and the geometry change can be seen and not taken on trust.
 
-Run from the repository root, on a machine with a CUDA GPU::
+Run from the repository root, on a machine with a CUDA GPU (without one the
+networks run on the CPU, slowly)::
 
     python docs/make_scene_understanding_figures.py
 
@@ -27,8 +28,12 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from docs.gallery import networks, save  # noqa: E402
+from docs.generate_examples import _base_scene  # noqa: E402
 from docs.generate_scene_examples import (  # noqa: E402
     SCENES,
+    SCENES_DIR,
+    _load,
     draw_horizon,
     label_legend,
     label_picture,
@@ -43,7 +48,6 @@ from surmentations.perception import (  # noqa: E402
 from surmentations.presets.severity import GROUND_SEVERITY, SEVERITY  # noqa: E402
 
 OUT_DIR = REPO / "docs" / "assets" / "scene_understanding"
-REFERENCE = REPO / "docs" / "examples" / "00_base_scene.png"
 
 # The three scenes the effects are compared on: a motorway from a bridge,
 # a city road under a long view, a lamp-lit street at night.
@@ -56,16 +60,9 @@ NIGHT_RAIN = {
 
 
 def _photographs() -> dict[str, np.ndarray]:
-    """The reference photograph and every gallery scene, as RGB."""
-    paths = {"reference": REFERENCE}
-    scenes = REPO / "docs" / "examples" / "scenes"
-    paths |= {name: scenes / name / "original.jpg" for name in SCENES}
-    images = {}
-    for name, path in paths.items():
-        image = cv2.imread(str(path))
-        if image is None:
-            raise SystemExit(f"cannot read {path}")
-        images[name] = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    """The reference photograph and every gallery scene, as RGB, as the galleries draw on them."""
+    images = {"reference": _base_scene()}
+    images |= {name: _load(SCENES_DIR / f"{name}.jpg") for name in SCENES}
     return images
 
 
@@ -85,13 +82,8 @@ def _tile(image: np.ndarray, width: int, height: int) -> np.ndarray:
 
 
 def _save(name: str, image: np.ndarray) -> None:
-    """Write an RGB figure as a JPEG."""
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(
-        str(OUT_DIR / name),
-        cv2.cvtColor(image, cv2.COLOR_RGB2BGR),
-        [cv2.IMWRITE_JPEG_QUALITY, 88],
-    )
+    """Write an RGB figure as WebP."""
+    save(OUT_DIR / name, image)
 
 
 def read_scenes(
@@ -131,7 +123,7 @@ def read_scenes(
         last = np.hstack([tiles[-1], np.full_like(tiles[-1], 255)])
         grid.append(last)
     figure = np.vstack(grid)
-    _save("labels_and_horizon.jpg", np.vstack([figure, label_legend(figure.shape[1])]))
+    _save("labels_and_horizon.webp", np.vstack([figure, label_legend(figure.shape[1])]))
     return rows
 
 
@@ -171,14 +163,14 @@ def compare_effects(
                 transform.set_random_seed(3)
                 tiles.append(transform(image=image)["image"])
             rows.append(np.hstack([_tile(tile, 400, 300) for tile in tiles]))
-        _save(f"{effect}.jpg", np.vstack(rows))
+        _save(f"{effect}.webp", np.vstack(rows))
 
 
 def main() -> None:
     """Make every figure, and print the table of what was read off each scene."""
     images = _photographs()
-    depth = DepthAnythingV2Estimator()
-    labels = SegmentationLabelEstimator()
+    depth = DepthAnythingV2Estimator(**networks())
+    labels = SegmentationLabelEstimator(**networks())
     rows = read_scenes(images, depth, labels)
     compare_effects(images, depth, labels)
     print("| Scene | Horizon | Pitch | Pitch by eye | Height | Depth in metres |")

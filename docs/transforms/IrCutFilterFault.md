@@ -81,7 +81,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![ir_cut_filter_fault 1](../examples/ir_cut_filter_fault_0.png) | ![ir_cut_filter_fault 2](../examples/ir_cut_filter_fault_1.png) | ![ir_cut_filter_fault 3](../examples/ir_cut_filter_fault_2.png) | ![ir_cut_filter_fault 4](../examples/ir_cut_filter_fault_3.png) | ![ir_cut_filter_fault 5](../examples/ir_cut_filter_fault_4.png) |
+| ![ir_cut_filter_fault 1](https://desmoteo.github.io/surmentations/examples/ir_cut_filter_fault_0.webp) | ![ir_cut_filter_fault 2](https://desmoteo.github.io/surmentations/examples/ir_cut_filter_fault_1.webp) | ![ir_cut_filter_fault 3](https://desmoteo.github.io/surmentations/examples/ir_cut_filter_fault_2.webp) | ![ir_cut_filter_fault 4](https://desmoteo.github.io/surmentations/examples/ir_cut_filter_fault_3.webp) | ![ir_cut_filter_fault 5](https://desmoteo.github.io/surmentations/examples/ir_cut_filter_fault_4.webp) |
 
 ## References
 

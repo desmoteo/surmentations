@@ -28,3 +28,14 @@ src/surmentations/_native/_smkernels.*
 
 # The code reference site, built by sphinx-build from docs/site.
 docs/site/_build/
+
+# The documentation's pictures: rendered by docs/*.py and published to GitHub
+# Pages by .github/workflows/gallery.yml, never committed (docs/gallery.py).
+# The reference photograph they are drawn from is an input and stays.
+docs/examples/**/*.webp
+docs/examples/**/*.png
+docs/examples/**/*.jpg
+!docs/examples/reference.webp
+docs/assets/
+# The site docs/gallery.py assembles from them.
+_site/

@@ -93,7 +93,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![night_fog 1](../examples/night_fog_0.png) | ![night_fog 2](../examples/night_fog_1.png) | ![night_fog 3](../examples/night_fog_2.png) | ![night_fog 4](../examples/night_fog_3.png) | ![night_fog 5](../examples/night_fog_4.png) |
+| ![night_fog 1](https://desmoteo.github.io/surmentations/examples/night_fog_0.webp) | ![night_fog 2](https://desmoteo.github.io/surmentations/examples/night_fog_1.webp) | ![night_fog 3](https://desmoteo.github.io/surmentations/examples/night_fog_2.webp) | ![night_fog 4](https://desmoteo.github.io/surmentations/examples/night_fog_3.webp) | ![night_fog 5](https://desmoteo.github.io/surmentations/examples/night_fog_4.webp) |
 
 ## References
 

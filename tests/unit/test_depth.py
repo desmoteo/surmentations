@@ -28,6 +28,32 @@ def test_no_cuda_raises_actionable_error() -> None:
             DepthAnythingV2Estimator()
 
 
+@pytest.mark.parametrize(
+    ("estimator", "loader"),
+    [
+        ("surmentations.depth.estimator.DepthAnythingV2Estimator", "AutoImageProcessor"),
+        ("surmentations.perception.SegmentationLabelEstimator", "AutoImageProcessor"),
+        ("surmentations.perception.OpenVocabularyVehicleEstimator", "AutoProcessor"),
+    ],
+)
+def test_a_cpu_asked_for_by_name_is_honoured(estimator: str, loader: str) -> None:
+    """The documentation's gallery is rendered where there is no GPU. Asked
+    for by name, the CPU gets past the guard and on to loading the network,
+    which is stopped here; the default still refuses."""
+    import importlib
+
+    module, name = estimator.rsplit(".", 1)
+    cls = getattr(importlib.import_module(module), name)
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch(f"transformers.{loader}.from_pretrained", side_effect=LookupError("loading")),
+    ):
+        with pytest.raises(RuntimeError, match="requires a CUDA GPU"):
+            cls()
+        with pytest.raises(LookupError, match="loading"):
+            cls(device="cpu")
+
+
 class _FakeEstimator(DepthEstimator):
     """Counts calls so the provider's caching behavior can be verified without a GPU."""
 

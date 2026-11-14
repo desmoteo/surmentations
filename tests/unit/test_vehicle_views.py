@@ -11,7 +11,6 @@ reference scene, where which cars are coming on is plain to see.
 from __future__ import annotations
 
 import pickle
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -753,10 +752,10 @@ def test_the_bundled_network_tells_the_reference_scene_s_fronts_from_its_rears()
     coming on and that on its right is driving away. Not a test of the
     network's accuracy, which is its authors' to report: a test that what
     it finds arrives on the right vehicles, in the frame's own pixels."""
+    from docs.generate_examples import _base_scene
     from surmentations.perception import OpenVocabularyVehicleEstimator, SegmentationLabelEstimator
 
-    path = Path(__file__).resolve().parents[2] / "docs" / "examples" / "00_base_scene.png"
-    image = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+    image = _base_scene()
     vehicles = SegmentationLabelEstimator().estimate(image) == int(SceneClass.VEHICLE)
     views = OpenVocabularyVehicleEstimator().estimate(image, vehicles)
     assert views and all(isinstance(view, VehicleView) for view in views)

@@ -72,7 +72,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![wdr_tone_mapping 1](../examples/wdr_tone_mapping_0.png) | ![wdr_tone_mapping 2](../examples/wdr_tone_mapping_1.png) | ![wdr_tone_mapping 3](../examples/wdr_tone_mapping_2.png) | ![wdr_tone_mapping 4](../examples/wdr_tone_mapping_3.png) | ![wdr_tone_mapping 5](../examples/wdr_tone_mapping_4.png) |
+| ![wdr_tone_mapping 1](https://desmoteo.github.io/surmentations/examples/wdr_tone_mapping_0.webp) | ![wdr_tone_mapping 2](https://desmoteo.github.io/surmentations/examples/wdr_tone_mapping_1.webp) | ![wdr_tone_mapping 3](https://desmoteo.github.io/surmentations/examples/wdr_tone_mapping_2.webp) | ![wdr_tone_mapping 4](https://desmoteo.github.io/surmentations/examples/wdr_tone_mapping_3.webp) | ![wdr_tone_mapping 5](https://desmoteo.github.io/surmentations/examples/wdr_tone_mapping_4.webp) |
 
 ## References
 

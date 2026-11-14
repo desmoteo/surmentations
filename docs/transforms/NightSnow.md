@@ -96,7 +96,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![night_snow 1](../examples/night_snow_0.png) | ![night_snow 2](../examples/night_snow_1.png) | ![night_snow 3](../examples/night_snow_2.png) | ![night_snow 4](../examples/night_snow_3.png) | ![night_snow 5](../examples/night_snow_4.png) |
+| ![night_snow 1](https://desmoteo.github.io/surmentations/examples/night_snow_0.webp) | ![night_snow 2](https://desmoteo.github.io/surmentations/examples/night_snow_1.webp) | ![night_snow 3](https://desmoteo.github.io/surmentations/examples/night_snow_2.webp) | ![night_snow 4](https://desmoteo.github.io/surmentations/examples/night_snow_3.webp) | ![night_snow 5](https://desmoteo.github.io/surmentations/examples/night_snow_4.webp) |
 
 ## References
 

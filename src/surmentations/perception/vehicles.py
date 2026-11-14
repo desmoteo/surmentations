@@ -130,6 +130,8 @@ _NO_CUDA_MESSAGE = (
     "device was found (torch.cuda.is_available() is False). Vehicle views are optional: "
     "leave `vehicles` out of the SharedDepthProvider and the spray and the lamps fall back "
     "to what they read from colour."
+    " A device of 'cpu', asked for by name, is honoured: slow, but enough to render a "
+    "few pictures where there is no GPU, which is what the documentation's gallery does."
 )
 
 
@@ -607,9 +609,9 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         model_name: the checkpoint: anything ``transformers`` loads as a
             zero-shot object detector. The default is OWLv2 on a ViT-B/16,
             Apache-2.0, about 620 MB.
-        device: where to run it. CUDA only, for the reason
+        device: where to run it. CUDA, for the reason
             :class:`~surmentations.depth.estimator.DepthAnythingV2Estimator`
-            gives.
+            gives, unless ``"cpu"`` is asked for by name.
         grid: vehicles to a side of the mosaic. Four, the default, shows
             the network each vehicle at 240 pixels, which is enough for it
             to find a lamp; five is a third faster on a busy road and finds
@@ -643,7 +645,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         """
         import torch
 
-        if not torch.cuda.is_available():
+        if torch.device(device).type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(_NO_CUDA_MESSAGE.format(cls=type(self).__name__))
         if grid < 1 or max_vehicles < 1:
             raise ValueError(

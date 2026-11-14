@@ -1,0 +1,109 @@
+# The documentation's pictures, rendered and published to GitHub Pages.
+#
+# None of them is kept in git: each is rendered from the code and the
+# photographs that are, and a picture kept in git is kept again at every
+# regeneration. So they are rendered here, on a runner with no GPU, which the
+# generators handle by running the networks on the CPU (docs/gallery.py), and
+# published with the code reference. The pages in the repository link to them
+# at https://desmoteo.github.io/surmentations/.
+#
+# On a push to main that touches what the pictures are drawn from, they are
+# rendered and published. Run by hand on another branch, they are rendered and
+# kept as a build artifact to look at, and nothing is published.
+
+name: Gallery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "native/**"
+      - "docs/**"
+      - "sample_scenes/**"
+      - "pyproject.toml"
+      - ".github/workflows/gallery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push renders the newer code; the older render is of no use.
+concurrency:
+  group: gallery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      # The kernels make the effects several times quicker, and a failure to
+      # compile them is a failure here, as in the CI workflow.
+      SURMENTATIONS_BUILD_NATIVE: require
+      HF_HOME: ${{ github.workspace }}/.hf
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ffmpeg for the codec rows, DejaVu for the banner's lettering.
+      - name: Install ffmpeg and fonts
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+
+      # torch built for the CPU: the default wheel carries CUDA's libraries,
+      # gigabytes this runner has no use for.
+      - name: Install the package, torch for the CPU, and the docs extra
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,docs]"
+
+      # The three checkpoints, fetched once and kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: .hf
+          key: hf-${{ hashFiles('src/surmentations/depth/estimator.py', 'src/surmentations/perception/labels.py', 'src/surmentations/perception/vehicles.py') }}
+          restore-keys: hf-
+
+      - name: Render the severity gallery
+        run: python docs/generate_examples.py
+
+      - name: Render every effect over the sample scenes
+        run: python docs/generate_scene_examples.py
+
+      - name: Draw the guides' figures and the banner
+        run: |
+          python docs/make_scene_understanding_figures.py
+          python docs/make_road_surface_figures.py
+          python docs/make_banner.py
+
+      # With the pictures on disk, every link of every page is checked
+      # against them, not only for its form.
+      - name: Check the pages against what was rendered
+        run: pytest tests/unit/test_scene_examples.py -q
+
+      - name: Build the code reference
+        run: SURMENTATIONS_BUILD_NATIVE=0 sphinx-build -W --keep-going -b html docs/site _site/reference
+
+      - name: Assemble the site
+        run: python docs/gallery.py _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: render
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

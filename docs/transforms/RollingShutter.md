@@ -69,7 +69,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![rolling_shutter 1](../examples/rolling_shutter_0.png) | ![rolling_shutter 2](../examples/rolling_shutter_1.png) | ![rolling_shutter 3](../examples/rolling_shutter_2.png) | ![rolling_shutter 4](../examples/rolling_shutter_3.png) | ![rolling_shutter 5](../examples/rolling_shutter_4.png) |
+| ![rolling_shutter 1](https://desmoteo.github.io/surmentations/examples/rolling_shutter_0.webp) | ![rolling_shutter 2](https://desmoteo.github.io/surmentations/examples/rolling_shutter_1.webp) | ![rolling_shutter 3](https://desmoteo.github.io/surmentations/examples/rolling_shutter_2.webp) | ![rolling_shutter 4](https://desmoteo.github.io/surmentations/examples/rolling_shutter_3.webp) | ![rolling_shutter 5](https://desmoteo.github.io/surmentations/examples/rolling_shutter_4.webp) |
 
 ## References
 

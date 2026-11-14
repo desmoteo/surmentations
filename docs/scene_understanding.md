@@ -82,24 +82,24 @@ A soaked road. The far road keeps its sheen, the rain's veil is over the
 scene's real distances, and at night the lamps stand above a horizon that is
 where the picture has it:
 
-![wet road](assets/scene_understanding/wet_road.jpg)
+![wet road](https://desmoteo.github.io/surmentations/assets/scene_understanding/wet_road.webp)
 
 Settled snow. Traffic carries the share of snow it was given and no more,
 and the verge is buried as ground:
 
-![settled snow](assets/scene_understanding/settled_snow.jpg)
+![settled snow](https://desmoteo.github.io/surmentations/assets/scene_understanding/settled_snow.webp)
 
 Infrared night. Trees are bright and the sky is dark. The first scene is
 seen from a bridge the estimator puts fourteen metres up, where no
 illuminator reaches the road: it is lit by the ambient term alone, evenly,
 with no hot spot:
 
-![infrared night](assets/scene_understanding/night_ir.jpg)
+![infrared night](https://desmoteo.github.io/surmentations/assets/scene_understanding/night_ir.webp)
 
 Ground fog. The layer is a few metres deep, and a camera above it looks
 down on it:
 
-![ground fog](assets/scene_understanding/ground_fog.jpg)
+![ground fog](https://desmoteo.github.io/surmentations/assets/scene_understanding/ground_fog.webp)
 
 With labels the library can also follow the road itself: its lanes, wheel
 tracks in snow, water in the ruts, spray behind vehicles and their lamps
@@ -138,7 +138,7 @@ one is right about the sky, the vegetation and the vehicles in every scene,
 including the lamp-lit street, and names a road seen from directly above
 "building":
 
-![labels and horizon](assets/scene_understanding/labels_and_horizon.jpg)
+![labels and horizon](https://desmoteo.github.io/surmentations/assets/scene_understanding/labels_and_horizon.webp)
 
 So no effect *requires* a class. Labels remove what plainly is not ground
 (a vehicle, a person, a tree, the sky), and add what plainly is (a road the
@@ -352,7 +352,7 @@ Each vehicle by its own outline: green is read as a front and red as a
 rear, grey was not read or leans neither way, and the lamps found are
 boxed in yellow:
 
-![vehicles as read](assets/road_surface/vehicle_views.jpg)
+![vehicles as read](https://desmoteo.github.io/surmentations/assets/road_surface/vehicle_views.webp)
 
 **How good at which end.** On the 22 vehicles of these sample scenes that
 the labels already had as outlines of their own, labelled by eye:

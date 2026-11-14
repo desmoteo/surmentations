@@ -90,7 +90,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![transmission_faults 1](../examples/transmission_faults_0.png) | ![transmission_faults 2](../examples/transmission_faults_1.png) | ![transmission_faults 3](../examples/transmission_faults_2.png) | ![transmission_faults 4](../examples/transmission_faults_3.png) | ![transmission_faults 5](../examples/transmission_faults_4.png) |
+| ![transmission_faults 1](https://desmoteo.github.io/surmentations/examples/transmission_faults_0.webp) | ![transmission_faults 2](https://desmoteo.github.io/surmentations/examples/transmission_faults_1.webp) | ![transmission_faults 3](https://desmoteo.github.io/surmentations/examples/transmission_faults_2.webp) | ![transmission_faults 4](https://desmoteo.github.io/surmentations/examples/transmission_faults_3.webp) | ![transmission_faults 5](https://desmoteo.github.io/surmentations/examples/transmission_faults_4.webp) |
 
 ## References
 

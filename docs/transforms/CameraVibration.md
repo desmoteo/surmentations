@@ -81,7 +81,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![camera_vibration 1](../examples/camera_vibration_0.png) | ![camera_vibration 2](../examples/camera_vibration_1.png) | ![camera_vibration 3](../examples/camera_vibration_2.png) | ![camera_vibration 4](../examples/camera_vibration_3.png) | ![camera_vibration 5](../examples/camera_vibration_4.png) |
+| ![camera_vibration 1](https://desmoteo.github.io/surmentations/examples/camera_vibration_0.webp) | ![camera_vibration 2](https://desmoteo.github.io/surmentations/examples/camera_vibration_1.webp) | ![camera_vibration 3](https://desmoteo.github.io/surmentations/examples/camera_vibration_2.webp) | ![camera_vibration 4](https://desmoteo.github.io/surmentations/examples/camera_vibration_3.webp) | ![camera_vibration 5](https://desmoteo.github.io/surmentations/examples/camera_vibration_4.webp) |
 
 ## References
 

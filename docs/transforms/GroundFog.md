@@ -114,7 +114,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![ground_fog 1](../examples/ground_fog_0.png) | ![ground_fog 2](../examples/ground_fog_1.png) | ![ground_fog 3](../examples/ground_fog_2.png) | ![ground_fog 4](../examples/ground_fog_3.png) | ![ground_fog 5](../examples/ground_fog_4.png) |
+| ![ground_fog 1](https://desmoteo.github.io/surmentations/examples/ground_fog_0.webp) | ![ground_fog 2](https://desmoteo.github.io/surmentations/examples/ground_fog_1.webp) | ![ground_fog 3](https://desmoteo.github.io/surmentations/examples/ground_fog_2.webp) | ![ground_fog 4](https://desmoteo.github.io/surmentations/examples/ground_fog_3.webp) | ![ground_fog 5](https://desmoteo.github.io/surmentations/examples/ground_fog_4.webp) |
 
 ## References
 

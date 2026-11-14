@@ -91,7 +91,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![heat_shimmer 1](../examples/heat_shimmer_0.png) | ![heat_shimmer 2](../examples/heat_shimmer_1.png) | ![heat_shimmer 3](../examples/heat_shimmer_2.png) | ![heat_shimmer 4](../examples/heat_shimmer_3.png) | ![heat_shimmer 5](../examples/heat_shimmer_4.png) |
+| ![heat_shimmer 1](https://desmoteo.github.io/surmentations/examples/heat_shimmer_0.webp) | ![heat_shimmer 2](https://desmoteo.github.io/surmentations/examples/heat_shimmer_1.webp) | ![heat_shimmer 3](https://desmoteo.github.io/surmentations/examples/heat_shimmer_2.webp) | ![heat_shimmer 4](https://desmoteo.github.io/surmentations/examples/heat_shimmer_3.webp) | ![heat_shimmer 5](https://desmoteo.github.io/surmentations/examples/heat_shimmer_4.webp) |
 
 ## References
 

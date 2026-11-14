@@ -2,7 +2,7 @@
 
 Near-vertical view of a crossing; people, cyclists, vehicles; no sky.
 
-![original](original.jpg)
+![original](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/original.webp)
 
 Source: [Crosswalk of Market at Third, San Francisco.jpg](https://commons.wikimedia.org/wiki/File:Crosswalk_of_Market_at_Third,_San_Francisco.jpg) by Dllu, CC BY-SA 4.0. Every image in this folder is derived from it and is available under the same licence.
 
@@ -24,7 +24,7 @@ found drawn across both. See
 [scene understanding](../../../scene_understanding.md) for how each is made
 and how far to trust it.
 
-![labels and horizon](reading.jpg)
+![labels and horizon](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/reading.webp)
 
 | | |
 | --- | --- |
@@ -57,51 +57,51 @@ at each photograph at the size it was taken at, not at the reduced frame.
 
 | `fog` without | `fog` with |
 | --- | --- |
-| ![`fog` without](effects/fog.jpg) | ![`fog` with](aware/fog.jpg) |
+| ![`fog` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/fog.webp) | ![`fog` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/fog.webp) |
 
 | `rain` without | `rain` with |
 | --- | --- |
-| ![`rain` without](effects/rain.jpg) | ![`rain` with](aware/rain.jpg) |
+| ![`rain` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/rain.webp) | ![`rain` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/rain.webp) |
 
 | `snow` without | `snow` with |
 | --- | --- |
-| ![`snow` without](effects/snow.jpg) | ![`snow` with](aware/snow.jpg) |
+| ![`snow` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/snow.webp) | ![`snow` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/snow.webp) |
 
 | `cast_shadows` without | `cast_shadows` with |
 | --- | --- |
-| ![`cast_shadows` without](effects/cast_shadows.jpg) | ![`cast_shadows` with](aware/cast_shadows.jpg) |
+| ![`cast_shadows` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/cast_shadows.webp) | ![`cast_shadows` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/cast_shadows.webp) |
 
 | `night_ir` without | `night_ir` with |
 | --- | --- |
-| ![`night_ir` without](effects/night_ir.jpg) | ![`night_ir` with](aware/night_ir.jpg) |
+| ![`night_ir` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_ir.webp) | ![`night_ir` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/night_ir.webp) |
 
 | `night_rain` without | `night_rain` with |
 | --- | --- |
-| ![`night_rain` without](effects/night_rain.jpg) | ![`night_rain` with](aware/night_rain.jpg) |
+| ![`night_rain` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_rain.webp) | ![`night_rain` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/night_rain.webp) |
 
 | `night_snow` without | `night_snow` with |
 | --- | --- |
-| ![`night_snow` without](effects/night_snow.jpg) | ![`night_snow` with](aware/night_snow.jpg) |
+| ![`night_snow` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_snow.webp) | ![`night_snow` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/night_snow.webp) |
 
 | `wet_ground` without | `wet_ground` with |
 | --- | --- |
-| ![`wet_ground` without](effects/wet_ground.jpg) | ![`wet_ground` with](aware/wet_ground.jpg) |
+| ![`wet_ground` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/wet_ground.webp) | ![`wet_ground` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/wet_ground.webp) |
 
 | `snow_cover` without | `snow_cover` with |
 | --- | --- |
-| ![`snow_cover` without](effects/snow_cover.jpg) | ![`snow_cover` with](aware/snow_cover.jpg) |
+| ![`snow_cover` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/snow_cover.webp) | ![`snow_cover` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/snow_cover.webp) |
 
 | `ground_fog` without | `ground_fog` with |
 | --- | --- |
-| ![`ground_fog` without](effects/ground_fog.jpg) | ![`ground_fog` with](aware/ground_fog.jpg) |
+| ![`ground_fog` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/ground_fog.webp) | ![`ground_fog` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/ground_fog.webp) |
 
 | `local_plumes` without | `local_plumes` with |
 | --- | --- |
-| ![`local_plumes` without](effects/local_plumes.jpg) | ![`local_plumes` with](aware/local_plumes.jpg) |
+| ![`local_plumes` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/local_plumes.webp) | ![`local_plumes` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/local_plumes.webp) |
 
 | `night_color` without | `night_color` with |
 | --- | --- |
-| ![`night_color` without](effects/night_color.jpg) | ![`night_color` with](aware/night_color.jpg) |
+| ![`night_color` without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_color.webp) | ![`night_color` with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/aware/night_color.webp) |
 
 ## The other effects at severity 3
 
@@ -110,39 +110,39 @@ These do not read the scene, and are the same with either provider.
 
 | water_droplets | dirt_soil | sun_flare |
 | --- | --- | --- |
-| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![sun_flare](effects/sun_flare.jpg) |
+| ![water_droplets](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/water_droplets.webp) | ![dirt_soil](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/dirt_soil.webp) | ![sun_flare](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/sun_flare.webp) |
 
 | housing_occluders | ac_flicker | rolling_shutter |
 | --- | --- | --- |
-| ![housing_occluders](effects/housing_occluders.jpg) | ![ac_flicker](effects/ac_flicker.jpg) | ![rolling_shutter](effects/rolling_shutter.jpg) |
+| ![housing_occluders](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/housing_occluders.webp) | ![ac_flicker](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/ac_flicker.webp) | ![rolling_shutter](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/rolling_shutter.webp) |
 
 | exposure_transient | wdr_tone_mapping | denoise_artifacts |
 | --- | --- | --- |
-| ![exposure_transient](effects/exposure_transient.jpg) | ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) | ![denoise_artifacts](effects/denoise_artifacts.jpg) |
+| ![exposure_transient](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/exposure_transient.webp) | ![wdr_tone_mapping](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/wdr_tone_mapping.webp) | ![denoise_artifacts](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/denoise_artifacts.webp) |
 
 | video_codec | night_droplets | sensor_noise |
 | --- | --- | --- |
-| ![video_codec](effects/video_codec.jpg) | ![night_droplets](effects/night_droplets.jpg) | ![sensor_noise](effects/sensor_noise.jpg) |
+| ![video_codec](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/video_codec.webp) | ![night_droplets](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_droplets.webp) | ![sensor_noise](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/sensor_noise.webp) |
 
 | transmission_faults | spider_web | night_insects |
 | --- | --- | --- |
-| ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) |
+| ![transmission_faults](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/transmission_faults.webp) | ![spider_web](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/spider_web.webp) | ![night_insects](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_insects.webp) |
 
 | ir_dome_glare | frost_on_glass | snow_on_housing |
 | --- | --- | --- |
-| ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![frost_on_glass](effects/frost_on_glass.jpg) | ![snow_on_housing](effects/snow_on_housing.jpg) |
+| ![ir_dome_glare](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/ir_dome_glare.webp) | ![frost_on_glass](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/frost_on_glass.webp) | ![snow_on_housing](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/snow_on_housing.webp) |
 
 | lens_tamper | foliage_intrusion | ir_cut_filter_fault |
 | --- | --- | --- |
-| ![lens_tamper](effects/lens_tamper.jpg) | ![foliage_intrusion](effects/foliage_intrusion.jpg) | ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) |
+| ![lens_tamper](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/lens_tamper.webp) | ![foliage_intrusion](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/foliage_intrusion.webp) | ![ir_cut_filter_fault](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/ir_cut_filter_fault.webp) |
 
 | demosaic_artifacts | analog_video | focus_shift |
 | --- | --- | --- |
-| ![demosaic_artifacts](effects/demosaic_artifacts.jpg) | ![analog_video](effects/analog_video.jpg) | ![focus_shift](effects/focus_shift.jpg) |
+| ![demosaic_artifacts](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/demosaic_artifacts.webp) | ![analog_video](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/analog_video.webp) | ![focus_shift](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/focus_shift.webp) |
 
 | camera_vibration | on_screen_overlay | night_foliage |
 | --- | --- | --- |
-| ![camera_vibration](effects/camera_vibration.jpg) | ![on_screen_overlay](effects/on_screen_overlay.jpg) | ![night_foliage](effects/night_foliage.jpg) |
+| ![camera_vibration](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/camera_vibration.webp) | ![on_screen_overlay](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/on_screen_overlay.webp) | ![night_foliage](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/effects/night_foliage.webp) |
 
 Not rendered: `night_fog`, `source_glare` — it acts on artificial lights at night, and this is a daylit scene.
 
@@ -156,16 +156,16 @@ provider that read the scene.
 
 | draw 0 without | draw 0 with |
 | --- | --- |
-| ![draw 0 without](pipelines/surveillance_0.jpg) | ![draw 0 with](pipelines_aware/surveillance_0.jpg) |
+| ![draw 0 without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines/surveillance_0.webp) | ![draw 0 with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines_aware/surveillance_0.webp) |
 
 | draw 1 without | draw 1 with |
 | --- | --- |
-| ![draw 1 without](pipelines/surveillance_1.jpg) | ![draw 1 with](pipelines_aware/surveillance_1.jpg) |
+| ![draw 1 without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines/surveillance_1.webp) | ![draw 1 with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines_aware/surveillance_1.webp) |
 
 | draw 2 without | draw 2 with |
 | --- | --- |
-| ![draw 2 without](pipelines/surveillance_2.jpg) | ![draw 2 with](pipelines_aware/surveillance_2.jpg) |
+| ![draw 2 without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines/surveillance_2.webp) | ![draw 2 with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines_aware/surveillance_2.webp) |
 
 | draw 3 without | draw 3 with |
 | --- | --- |
-| ![draw 3 without](pipelines/surveillance_3.jpg) | ![draw 3 with](pipelines_aware/surveillance_3.jpg) |
+| ![draw 3 without](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines/surveillance_3.webp) | ![draw 3 with](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/pipelines_aware/surveillance_3.webp) |

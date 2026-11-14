@@ -94,13 +94,13 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![foliage_intrusion 1](../examples/foliage_intrusion_0.png) | ![foliage_intrusion 2](../examples/foliage_intrusion_1.png) | ![foliage_intrusion 3](../examples/foliage_intrusion_2.png) | ![foliage_intrusion 4](../examples/foliage_intrusion_3.png) | ![foliage_intrusion 5](../examples/foliage_intrusion_4.png) |
+| ![foliage_intrusion 1](https://desmoteo.github.io/surmentations/examples/foliage_intrusion_0.webp) | ![foliage_intrusion 2](https://desmoteo.github.io/surmentations/examples/foliage_intrusion_1.webp) | ![foliage_intrusion 3](https://desmoteo.github.io/surmentations/examples/foliage_intrusion_2.webp) | ![foliage_intrusion 4](https://desmoteo.github.io/surmentations/examples/foliage_intrusion_3.webp) | ![foliage_intrusion 5](https://desmoteo.github.io/surmentations/examples/foliage_intrusion_4.webp) |
 
 `night_foliage`
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![night_foliage 1](../examples/night_foliage_0.png) | ![night_foliage 2](../examples/night_foliage_1.png) | ![night_foliage 3](../examples/night_foliage_2.png) | ![night_foliage 4](../examples/night_foliage_3.png) | ![night_foliage 5](../examples/night_foliage_4.png) |
+| ![night_foliage 1](https://desmoteo.github.io/surmentations/examples/night_foliage_0.webp) | ![night_foliage 2](https://desmoteo.github.io/surmentations/examples/night_foliage_1.webp) | ![night_foliage 3](https://desmoteo.github.io/surmentations/examples/night_foliage_2.webp) | ![night_foliage 4](https://desmoteo.github.io/surmentations/examples/night_foliage_3.webp) | ![night_foliage 5](https://desmoteo.github.io/surmentations/examples/night_foliage_4.webp) |
 
 ## References
 

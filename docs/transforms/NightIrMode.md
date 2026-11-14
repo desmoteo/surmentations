@@ -111,7 +111,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![night_ir 1](../examples/night_ir_0.png) | ![night_ir 2](../examples/night_ir_1.png) | ![night_ir 3](../examples/night_ir_2.png) | ![night_ir 4](../examples/night_ir_3.png) | ![night_ir 5](../examples/night_ir_4.png) |
+| ![night_ir 1](https://desmoteo.github.io/surmentations/examples/night_ir_0.webp) | ![night_ir 2](https://desmoteo.github.io/surmentations/examples/night_ir_1.webp) | ![night_ir 3](https://desmoteo.github.io/surmentations/examples/night_ir_2.webp) | ![night_ir 4](https://desmoteo.github.io/surmentations/examples/night_ir_3.webp) | ![night_ir 5](https://desmoteo.github.io/surmentations/examples/night_ir_4.webp) |
 
 ## References
 

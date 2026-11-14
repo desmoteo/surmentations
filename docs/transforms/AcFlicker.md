@@ -100,7 +100,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![ac_flicker 1](../examples/ac_flicker_0.png) | ![ac_flicker 2](../examples/ac_flicker_1.png) | ![ac_flicker 3](../examples/ac_flicker_2.png) | ![ac_flicker 4](../examples/ac_flicker_3.png) | ![ac_flicker 5](../examples/ac_flicker_4.png) |
+| ![ac_flicker 1](https://desmoteo.github.io/surmentations/examples/ac_flicker_0.webp) | ![ac_flicker 2](https://desmoteo.github.io/surmentations/examples/ac_flicker_1.webp) | ![ac_flicker 3](https://desmoteo.github.io/surmentations/examples/ac_flicker_2.webp) | ![ac_flicker 4](https://desmoteo.github.io/surmentations/examples/ac_flicker_3.webp) | ![ac_flicker 5](https://desmoteo.github.io/surmentations/examples/ac_flicker_4.webp) |
 
 ## References
 

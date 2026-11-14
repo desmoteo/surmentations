@@ -481,13 +481,12 @@ def test_the_bundled_network_names_the_reference_scene() -> None:
     """A motorway under an open sky, with traffic and verges. Not a test of
     the network's accuracy, which is its authors' to report: a test that its
     classes arrive folded, at the frame's size, and say what is plainly there."""
-    from pathlib import Path
 
+    from docs.generate_examples import _base_scene
     from surmentations import mode
     from surmentations.perception import SegmentationLabelEstimator
 
-    path = Path(__file__).resolve().parents[2] / "docs" / "examples" / "00_base_scene.png"
-    image = cv2.cvtColor(cv2.imread(str(path)), cv2.COLOR_BGR2RGB)
+    image = _base_scene()
     estimator = SegmentationLabelEstimator()
     labels = estimator.estimate(image)
     assert labels.shape == image.shape[:2] and labels.dtype == np.uint8

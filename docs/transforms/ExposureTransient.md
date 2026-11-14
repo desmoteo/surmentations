@@ -75,7 +75,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![exposure_transient 1](../examples/exposure_transient_0.png) | ![exposure_transient 2](../examples/exposure_transient_1.png) | ![exposure_transient 3](../examples/exposure_transient_2.png) | ![exposure_transient 4](../examples/exposure_transient_3.png) | ![exposure_transient 5](../examples/exposure_transient_4.png) |
+| ![exposure_transient 1](https://desmoteo.github.io/surmentations/examples/exposure_transient_0.webp) | ![exposure_transient 2](https://desmoteo.github.io/surmentations/examples/exposure_transient_1.webp) | ![exposure_transient 3](https://desmoteo.github.io/surmentations/examples/exposure_transient_2.webp) | ![exposure_transient 4](https://desmoteo.github.io/surmentations/examples/exposure_transient_3.webp) | ![exposure_transient 5](https://desmoteo.github.io/surmentations/examples/exposure_transient_4.webp) |
 
 ## References
 

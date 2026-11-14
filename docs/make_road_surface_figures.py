@@ -17,7 +17,8 @@ provider that carries scene labels and an estimated geometry:
   what is in the air;
 * infrared night without and with what signs, plates and paint send back.
 
-Run from the repository root, on a machine with a CUDA GPU::
+Run from the repository root, on a machine with a CUDA GPU (without one the
+networks run on the CPU, slowly)::
 
     python docs/make_road_surface_figures.py
 
@@ -37,6 +38,8 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from docs.gallery import networks, save  # noqa: E402
+from docs.generate_examples import _base_scene  # noqa: E402
 from docs.generate_scene_examples import SCENES, SCENES_DIR, _load, _original  # noqa: E402
 from surmentations.atmosphere import RandomRain, RandomSnow  # noqa: E402
 from surmentations.atmosphere.night_fog import NightFog  # noqa: E402
@@ -61,7 +64,6 @@ from surmentations.utils.road import (  # noqa: E402
 )
 
 OUT_DIR = REPO / "docs" / "assets" / "road_surface"
-REFERENCE = REPO / "docs" / "examples" / "00_base_scene.png"
 # The scenes shown: a motorway from a bridge, a city road, a street, a bend.
 SHOWN = ("reference", "urban_road_day", "urban_street_wet", "underpass_from_above")
 # How fast the traffic of each is taken to be going, in km/h: a frame does
@@ -77,7 +79,7 @@ SPEEDS_KMH = {
 def _photograph(name: str) -> np.ndarray:
     """One of the shown scenes, as RGB."""
     if name == "reference":
-        return cv2.cvtColor(cv2.imread(str(REFERENCE)), cv2.COLOR_BGR2RGB)
+        return _base_scene()
     return _load(SCENES_DIR / f"{name}.jpg")
 
 
@@ -109,15 +111,11 @@ def _pitch(name: str) -> tuple[float, float]:
 
 
 def _save(name: str, tiles: list[np.ndarray], columns: int) -> None:
-    """Write tiles as one JPEG, ``columns`` to a row."""
+    """Write tiles as one WebP, ``columns`` to a row."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     sized = [cv2.resize(tile, (640, 420), interpolation=cv2.INTER_AREA) for tile in tiles]
     rows = [np.hstack(sized[start : start + columns]) for start in range(0, len(sized), columns)]
-    cv2.imwrite(
-        str(OUT_DIR / name),
-        cv2.cvtColor(np.vstack(rows), cv2.COLOR_RGB2BGR),
-        [cv2.IMWRITE_JPEG_QUALITY, 88],
-    )
+    save(OUT_DIR / name, np.vstack(rows))
 
 
 def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
@@ -156,7 +154,7 @@ def read_roads(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPr
             last = (int(column + 6 * dx), int(row + 6 * dy))
             cv2.line(out, first, last, (255, 255, 0), 1, cv2.LINE_AA)
         tiles.append(out)
-    _save("lanes.jpg", tiles, 2)
+    _save("lanes.webp", tiles, 2)
 
 
 def read_vehicles(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
@@ -183,7 +181,7 @@ def read_vehicles(images: dict[str, np.ndarray], providers: dict[str, SharedDept
                 last = (round(x + half_wide), round(y + half_tall))
                 cv2.rectangle(out, first, last, (255, 255, 0), 1)
         tiles.append(out)
-    _save("vehicle_views.jpg", tiles, 2)
+    _save("vehicle_views.webp", tiles, 2)
 
 
 def compare(
@@ -220,7 +218,7 @@ def compare(
                 )
             transform.set_random_seed(4)
             tiles.append(transform(image=image)["image"])
-    _save("wheel_tracks.jpg" if effect == "snow" else "wet_road_and_spray.jpg", tiles, 2)
+    _save("wheel_tracks.webp" if effect == "snow" else "wet_road_and_spray.webp", tiles, 2)
 
 
 def night_lamps(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
@@ -239,7 +237,7 @@ def night_lamps(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles
             night = NightIrMode(depth_provider=provider, p=1.0, **lamps)
             night.set_random_seed(5)
             tiles.append(night(image=images[name])["image"])
-    _save("night_lamps.jpg", tiles, 2)
+    _save("night_lamps.webp", tiles, 2)
 
 
 def far_field(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
@@ -274,7 +272,7 @@ def far_field(images: dict[str, np.ndarray], providers: dict[str, SharedDepthPro
                         interpolation=cv2.INTER_NEAREST,
                     )
                 )
-    _save("far_field.jpg", tiles, 2)
+    _save("far_field.webp", tiles, 2)
 
 
 def night_colour(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
@@ -294,7 +292,7 @@ def night_colour(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicle
             )
             night.set_random_seed(5)
             tiles.append(night(image=images[name])["image"])
-    _save("night_colour.jpg", tiles, 3)
+    _save("night_colour.webp", tiles, 3)
 
 
 def lamp_cones(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
@@ -324,7 +322,7 @@ def lamp_cones(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles:
                 [mode, weather(p=1.0, lamp_cone_range=(cone, cone), **settings)], seed=5
             )
             tiles.append(chain(image=images[name])["image"])
-    _save("lamp_cones.jpg", tiles, 2)
+    _save("lamp_cones.webp", tiles, 2)
 
 
 def retroreflectors(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
@@ -347,14 +345,14 @@ def retroreflectors(images: dict[str, np.ndarray], depth: Any, labels: Any, vehi
             night.set_random_seed(5)
             out = night(image=images[name])["image"]
             tiles.append(out[top : top + tall, left : left + wide])
-    _save("retroreflectors.jpg", tiles, 2)
+    _save("retroreflectors.webp", tiles, 2)
 
 
 def main() -> None:
     """Make the nine figures."""
-    depth, labels = DepthAnythingV2Estimator(), SegmentationLabelEstimator()
+    depth, labels = DepthAnythingV2Estimator(**networks()), SegmentationLabelEstimator(**networks())
     images = {name: _photograph(name) for name in SHOWN}
-    vehicles = OpenVocabularyVehicleEstimator()
+    vehicles = OpenVocabularyVehicleEstimator(**networks())
     providers = {name: _provider(name, depth, labels, vehicles, images[name]) for name in SHOWN}
     read_roads(images, providers)
     read_vehicles(images, providers)

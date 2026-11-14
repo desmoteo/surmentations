@@ -71,7 +71,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![demosaic_artifacts 1](../examples/demosaic_artifacts_0.png) | ![demosaic_artifacts 2](../examples/demosaic_artifacts_1.png) | ![demosaic_artifacts 3](../examples/demosaic_artifacts_2.png) | ![demosaic_artifacts 4](../examples/demosaic_artifacts_3.png) | ![demosaic_artifacts 5](../examples/demosaic_artifacts_4.png) |
+| ![demosaic_artifacts 1](https://desmoteo.github.io/surmentations/examples/demosaic_artifacts_0.webp) | ![demosaic_artifacts 2](https://desmoteo.github.io/surmentations/examples/demosaic_artifacts_1.webp) | ![demosaic_artifacts 3](https://desmoteo.github.io/surmentations/examples/demosaic_artifacts_2.webp) | ![demosaic_artifacts 4](https://desmoteo.github.io/surmentations/examples/demosaic_artifacts_3.webp) | ![demosaic_artifacts 5](https://desmoteo.github.io/surmentations/examples/demosaic_artifacts_4.webp) |
 
 ## References
 

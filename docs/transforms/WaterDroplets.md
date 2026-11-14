@@ -151,13 +151,13 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![water_droplets 1](../examples/water_droplets_0.png) | ![water_droplets 2](../examples/water_droplets_1.png) | ![water_droplets 3](../examples/water_droplets_2.png) | ![water_droplets 4](../examples/water_droplets_3.png) | ![water_droplets 5](../examples/water_droplets_4.png) |
+| ![water_droplets 1](https://desmoteo.github.io/surmentations/examples/water_droplets_0.webp) | ![water_droplets 2](https://desmoteo.github.io/surmentations/examples/water_droplets_1.webp) | ![water_droplets 3](https://desmoteo.github.io/surmentations/examples/water_droplets_2.webp) | ![water_droplets 4](https://desmoteo.github.io/surmentations/examples/water_droplets_3.webp) | ![water_droplets 5](https://desmoteo.github.io/surmentations/examples/water_droplets_4.webp) |
 
 `night_droplets`
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![night_droplets 1](../examples/night_droplets_0.png) | ![night_droplets 2](../examples/night_droplets_1.png) | ![night_droplets 3](../examples/night_droplets_2.png) | ![night_droplets 4](../examples/night_droplets_3.png) | ![night_droplets 5](../examples/night_droplets_4.png) |
+| ![night_droplets 1](https://desmoteo.github.io/surmentations/examples/night_droplets_0.webp) | ![night_droplets 2](https://desmoteo.github.io/surmentations/examples/night_droplets_1.webp) | ![night_droplets 3](https://desmoteo.github.io/surmentations/examples/night_droplets_2.webp) | ![night_droplets 4](https://desmoteo.github.io/surmentations/examples/night_droplets_3.webp) | ![night_droplets 5](https://desmoteo.github.io/surmentations/examples/night_droplets_4.webp) |
 
 ## References
 

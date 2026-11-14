@@ -89,7 +89,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![sensor_noise 1](../examples/sensor_noise_0.png) | ![sensor_noise 2](../examples/sensor_noise_1.png) | ![sensor_noise 3](../examples/sensor_noise_2.png) | ![sensor_noise 4](../examples/sensor_noise_3.png) | ![sensor_noise 5](../examples/sensor_noise_4.png) |
+| ![sensor_noise 1](https://desmoteo.github.io/surmentations/examples/sensor_noise_0.webp) | ![sensor_noise 2](https://desmoteo.github.io/surmentations/examples/sensor_noise_1.webp) | ![sensor_noise 3](https://desmoteo.github.io/surmentations/examples/sensor_noise_2.webp) | ![sensor_noise 4](https://desmoteo.github.io/surmentations/examples/sensor_noise_3.webp) | ![sensor_noise 5](https://desmoteo.github.io/surmentations/examples/sensor_noise_4.webp) |
 
 ## References
 

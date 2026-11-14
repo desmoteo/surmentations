@@ -10,17 +10,20 @@ this library were found.
 
 Output goes to ``docs/examples/scenes/<scene>/``::
 
-    original.jpg             the scene as rendered from, 800 px wide
-    reading.jpg              its labels and horizon, as a provider reads them
-    effects/<effect>.jpg     one representative draw per effect
-    aware/<effect>.jpg       the same draw with scene labels and geometry; for rain
-                             and wet ground, with the traffic's spray and lamps too
-    pipelines/<name>_<n>.jpg draws of the pipeline that fits the scene
-    pipelines_aware/...      the same draws with scene labels and geometry
-    README.md                the same images as a browsable page
+    original.webp             the scene as rendered from, 800 px wide
+    reading.webp              its labels and horizon, as a provider reads them
+    effects/<effect>.webp     one representative draw per effect
+    aware/<effect>.webp       the same draw with scene labels and geometry; for rain
+                              and wet ground, with the traffic's spray and lamps too
+    pipelines/<name>_<n>.webp draws of the pipeline that fits the scene
+    pipelines_aware/...       the same draws with scene labels and geometry
+    README.md                 the same images as a browsable page
+
+The pictures are ignored by git and published by CI (see ``docs/gallery.py``);
+the pages are kept, and link to the published pictures.
 
 Run from the repo root with ``python docs/generate_scene_examples.py``.
-Requires a CUDA GPU.
+A CUDA GPU makes it quick; without one the networks run on the CPU, slowly.
 
 Three things here are not in the picture and have to be told to the
 transforms, which is the point of showing it done:
@@ -69,6 +72,7 @@ from tqdm import tqdm
 # is not, so `docs.generate_examples` would not resolve.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from docs.gallery import networks, save, url  # noqa: E402
 from docs.generate_examples import (  # noqa: E402
     _GALLERY_DRAWS,
     _NEEDS_FFMPEG,
@@ -94,7 +98,6 @@ SCENES_DIR = REPO / "sample_scenes"
 OUT_DIR = Path(__file__).parent / "examples" / "scenes"
 
 WIDTH_PX = 800
-JPEG_QUALITY = 86
 # The middle of the ladder: plainly visible, not a fault report.
 SEVERITY_LEVEL = 3
 # Which of generate_examples' per-variant overrides to use; 2 is the middle one.
@@ -459,11 +462,8 @@ def _load(path: Path) -> np.ndarray:
 
 
 def _save(path: Path, image: np.ndarray) -> None:
-    """Write an RGB image as a JPEG, making its directory."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(
-        str(path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-    )
+    """Write an RGB image as WebP, making its directory."""
+    save(path, image)
 
 
 def _sources() -> dict[str, dict[str, str]]:
@@ -482,7 +482,7 @@ def _sources() -> dict[str, dict[str, str]]:
 
 
 def _table(cells: list[tuple[str, str]], columns: int = 3) -> list[str]:
-    """Markdown image table: ``cells`` are ``(caption, relative path)``."""
+    """Markdown image table: ``cells`` are ``(caption, address)``."""
     lines = []
     for start in range(0, len(cells), columns):
         row = cells[start : start + columns]
@@ -514,6 +514,12 @@ def _scene_readme(
     as pairs, without it and with it, and so are the pipeline's draws when
     ``pipeline_compared``.
     """
+    folder = OUT_DIR / name
+
+    def at(relative: str) -> str:
+        """Where a picture of this scene's folder is published."""
+        return url(folder / relative)
+
     near, far = scene.depth_range_m
     fog_m, rain_m, snow_m = (
         factor * far for factor in (FOG_VISIBILITY, RAIN_VISIBILITY_FLOOR, SNOW_VISIBILITY_FLOOR)
@@ -525,7 +531,7 @@ def _scene_readme(
         "",
         f"{source['stresses'].capitalize()}.",
         "",
-        "![original](original.jpg)",
+        f"![original]({at('original.webp')})",
         "",
         f"Source: [{source['title']}]({source['url']}) by {source['author']}, "
         f"{source['licence']}. Every image in this folder is derived from it and is "
@@ -550,7 +556,7 @@ def _scene_readme(
         "[scene understanding](../../../scene_understanding.md) for how each is made",
         "and how far to trust it.",
         "",
-        "![labels and horizon](reading.jpg)",
+        f"![labels and horizon]({at('reading.webp')})",
         "",
         "| | |",
         "| --- | --- |",
@@ -579,8 +585,8 @@ def _scene_readme(
     compared = [effect for effect in effects if effect in COMPARED]
     for effect in compared:
         pair = [
-            (f"`{effect}` without", f"effects/{effect}.jpg"),
-            (f"`{effect}` with", f"aware/{effect}.jpg"),
+            (f"`{effect}` without", at(f"effects/{effect}.webp")),
+            (f"`{effect}` with", at(f"aware/{effect}.webp")),
         ]
         lines += _table(pair, columns=2)
     others = [effect for effect in effects if effect not in COMPARED]
@@ -590,7 +596,7 @@ def _scene_readme(
         "One representative draw each: the median of seven by how much the frame changed.",
         "These do not read the scene, and are the same with either provider.",
         "",
-        *_table([(effect, f"effects/{effect}.jpg") for effect in others]),
+        *_table([(effect, at(f"effects/{effect}.webp")) for effect in others]),
     ]
     for reason, names in skipped.items():
         listed = ", ".join(f"`{name}`" for name in names)
@@ -604,10 +610,10 @@ def _scene_readme(
             "",
         ]
         for index in range(PIPELINE_DRAWS):
-            name_ = f"{pipeline_name}_{index}.jpg"
+            name_ = f"{pipeline_name}_{index}.webp"
             pair = [
-                (f"draw {index} without", f"pipelines/{name_}"),
-                (f"draw {index} with", f"pipelines_aware/{name_}"),
+                (f"draw {index} without", at(f"pipelines/{name_}")),
+                (f"draw {index} with", at(f"pipelines_aware/{name_}")),
             ]
             lines += _table(pair, columns=2)
     else:
@@ -617,7 +623,7 @@ def _scene_readme(
             "",
             *_table(
                 [
-                    (f"draw {index}", f"pipelines/{pipeline_name}_{index}.jpg")
+                    (f"draw {index}", at(f"pipelines/{pipeline_name}_{index}.webp"))
                     for index in range(PIPELINE_DRAWS)
                 ],
                 columns=2,
@@ -647,8 +653,9 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "for itself, and every effect that depends on it twice, side by side: without",
         "it and with it, from the same parameters and the same seed.",
         "",
-        "Regenerate with `python docs/generate_scene_examples.py` (needs a CUDA GPU).",
-        "The inputs are in [`sample_scenes/`](../../../sample_scenes/), with their authors",
+        "Regenerate with `python docs/generate_scene_examples.py`: quick on a CUDA GPU,",
+        "slow without one. CI renders the pictures and publishes them; they are not kept",
+        "in git. The inputs are in [`sample_scenes/`](../../../sample_scenes/), with their authors",
         "and licences in [`SOURCES.md`](../../../sample_scenes/SOURCES.md). The images here",
         "are derived from them and carry the same licences, not the library's.",
         "",
@@ -656,8 +663,9 @@ def _index_readme(sources: dict[str, dict[str, str]]) -> str:
         "| --- | --- | --- |",
     ]
     for name in SCENES:
+        picture = url(OUT_DIR / name / "original.webp")
         lines.append(
-            f"| [`{name}`]({name}/README.md) | [![{name}]({name}/original.jpg)]({name}/README.md) "
+            f"| [`{name}`]({name}/README.md) | [![{name}]({picture})]({name}/README.md) "
             f"| {sources[name]['stresses']} |"
         )
     lines += [
@@ -726,9 +734,9 @@ def main() -> None:
     if missing:
         raise SystemExit(f"No entry in sample_scenes/SOURCES.md for: {missing}")
 
-    estimator = DepthAnythingV2Estimator()
-    labeller = SegmentationLabelEstimator()
-    reader = OpenVocabularyVehicleEstimator()
+    estimator = DepthAnythingV2Estimator(**networks())
+    labeller = SegmentationLabelEstimator(**networks())
+    reader = OpenVocabularyVehicleEstimator(**networks())
     names = [n for n in EFFECTS if n not in _NEEDS_FFMPEG or ffmpeg_path() is not None]
     if len(names) != len(EFFECTS):
         print("ffmpeg not found; skipping the video-codec examples")
@@ -740,7 +748,7 @@ def main() -> None:
         provider = SharedDepthProvider(estimator, depth_range_m=scene.depth_range_m)
         # Seeded per scene, so adding a scene re-rolls none of the others.
         rng = np.random.default_rng(sum(scene_name.encode()))
-        _save(out / "original.jpg", image)
+        _save(out / "original.webp", image)
 
         # First everything with the plain provider, and only then the
         # second one: a transform with no provider of its own asks whichever
@@ -760,7 +768,7 @@ def main() -> None:
             before = rng.bit_generator.state
             transform = _build(effect, SEVERITY_LEVEL, VARIANT, rng, provider, overrides)
             drawn, seed = _representative(transform, _base(effect, image, provider, scene), rng)
-            _save(out / "effects" / f"{effect}.jpg", drawn)
+            _save(out / "effects" / f"{effect}.webp", drawn)
             rendered.append(effect)
             if effect in COMPARED:
                 twins.append((effect, overrides, before, seed))
@@ -772,7 +780,7 @@ def main() -> None:
         pipeline.set_random_seed(pipeline_seed)
         for index in range(PIPELINE_DRAWS):
             _save(
-                out / "pipelines" / f"{pipeline_name}_{index}.jpg", pipeline(image=image)["image"]
+                out / "pipelines" / f"{pipeline_name}_{index}.webp", pipeline(image=image)["image"]
             )
 
         # Then the twin, which reads the scene's labels and geometry as
@@ -789,7 +797,7 @@ def main() -> None:
         # number plate is a few pixels in a frame 800 across.
         aware.remember(image, original=_original(SCENES_DIR / f"{scene_name}.jpg"))
         picture, reading = _reading(image, aware, scene)
-        _save(out / "reading.jpg", picture)
+        _save(out / "reading.webp", picture)
         for effect, overrides, before, seed in twins:
             twin_rng = np.random.default_rng()
             twin_rng.bit_generator.state = before
@@ -804,7 +812,7 @@ def main() -> None:
             twin = _build(effect, SEVERITY_LEVEL, VARIANT, twin_rng, aware, overrides)
             twin.set_random_seed(seed)
             again = twin(image=_base(effect, image, aware, scene))["image"]
-            _save(out / "aware" / f"{effect}.jpg", again)
+            _save(out / "aware" / f"{effect}.webp", again)
 
         # The pipeline that takes a provider is drawn again over the twin.
         pipeline_compared = pipeline_name == "surveillance"
@@ -813,7 +821,7 @@ def main() -> None:
             twin_pipeline.set_random_seed(pipeline_seed)
             for index in range(PIPELINE_DRAWS):
                 _save(
-                    out / "pipelines_aware" / f"{pipeline_name}_{index}.jpg",
+                    out / "pipelines_aware" / f"{pipeline_name}_{index}.webp",
                     twin_pipeline(image=image)["image"],
                 )
 

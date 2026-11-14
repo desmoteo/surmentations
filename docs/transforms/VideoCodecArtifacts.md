@@ -93,7 +93,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![video_codec 1](../examples/video_codec_0.png) | ![video_codec 2](../examples/video_codec_1.png) | ![video_codec 3](../examples/video_codec_2.png) | ![video_codec 4](../examples/video_codec_3.png) | ![video_codec 5](../examples/video_codec_4.png) |
+| ![video_codec 1](https://desmoteo.github.io/surmentations/examples/video_codec_0.webp) | ![video_codec 2](https://desmoteo.github.io/surmentations/examples/video_codec_1.webp) | ![video_codec 3](https://desmoteo.github.io/surmentations/examples/video_codec_2.webp) | ![video_codec 4](https://desmoteo.github.io/surmentations/examples/video_codec_3.webp) | ![video_codec 5](https://desmoteo.github.io/surmentations/examples/video_codec_4.webp) |
 
 ## References
 

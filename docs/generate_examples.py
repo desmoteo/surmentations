@@ -26,6 +26,7 @@ within one set of ranges, and every row reads as five takes of one picture.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,11 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+# Run as a script, this file's own directory is on the path and the repo root
+# is not, so `docs.gallery` would not resolve.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from docs.gallery import networks, save  # noqa: E402
 from surmentations.atmosphere import GroundFog, HeatShimmer, LocalPlumes, NightInsects
 from surmentations.atmosphere.fog import RandomFog
 from surmentations.atmosphere.night_fog import NightFog
@@ -534,7 +540,7 @@ def _lamp_scene(max_dim: int = 640) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
-# The rows drawn a second time, as `<row>_aware_<n>.png`, with a provider
+# The rows drawn a second time, as `<row>_aware_<n>.webp`, with a provider
 # that reads the scene: its labels, its camera, its vehicles and its street
 # lamps. They are the rows whose picture depends on that reading. Rain and
 # the wet road gain the traffic's spray and lamps, which are off by default
@@ -642,12 +648,12 @@ def main() -> None:
     """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     scene = _base_scene()
-    cv2.imwrite(str(OUT_DIR / "00_base_scene.png"), cv2.cvtColor(scene, cv2.COLOR_RGB2BGR))
+    save(OUT_DIR / "00_base_scene.webp", scene, lossless=True)
 
     # One provider for every depth-conditioned transform, so depth is estimated
     # once for the whole run rather than per transform — the same sharing the
     # library asks pipelines to do.
-    depth_provider = SharedDepthProvider(DepthAnythingV2Estimator())
+    depth_provider = SharedDepthProvider(DepthAnythingV2Estimator(**networks()))
 
     rng = np.random.default_rng(42)
     # Most of the time here goes into depth estimation, so show progress
@@ -675,19 +681,17 @@ def main() -> None:
             if name in NEEDS_LAMPS:
                 base = _lamp_scene()
             out = _render_representative(transform, base, rng)
-            cv2.imwrite(
-                str(OUT_DIR / f"{name}_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
-            )
+            save(OUT_DIR / f"{name}_{index}.webp", out)
 
     # The same rows with a provider that reads the scene, each from the
     # generator its plain twin started from: the same variant and, as near
     # as a median of draws allows, the same draw.
     aware = SharedDepthProvider(
-        DepthAnythingV2Estimator(),
+        DepthAnythingV2Estimator(**networks()),
         depth_range_m=REFERENCE_DEPTH_M,
-        labels=SegmentationLabelEstimator(),
+        labels=SegmentationLabelEstimator(**networks()),
         geometry=GroundPlaneGeometryEstimator(),
-        vehicles=OpenVocabularyVehicleEstimator(),
+        vehicles=OpenVocabularyVehicleEstimator(**networks()),
     )
     for name in tqdm(AWARE_ROWS, desc="with scene reading"):
         for index, level in enumerate(LEVELS):
@@ -703,9 +707,7 @@ def main() -> None:
                 # lamps, and the fog is lit by them.
                 base = _colour_night_base(scene, aware, level)
             out = _render_representative(transform, base, twin_rng)
-            cv2.imwrite(
-                str(OUT_DIR / f"{name}_aware_{index}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
-            )
+            save(OUT_DIR / f"{name}_aware_{index}.webp", out)
 
     print(f"Wrote {len(names)} effects x {len(LEVELS)} severities to {OUT_DIR}")
     print(f"and {len(AWARE_ROWS)} of them again with a provider that reads the scene")

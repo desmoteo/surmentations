@@ -29,6 +29,8 @@ _NO_CUDA_MESSAGE = (
     "an NVIDIA GPU and a CUDA-enabled torch build, or (2) don't use "
     "depth-conditioned transforms (WaterDroplets/DirtSoil/SunFlare need no "
     "depth model and work on CPU)."
+    " A device of 'cpu', asked for by name, is honoured: slow, but enough to render a "
+    "few pictures where there is no GPU, which is what the documentation's gallery does."
 )
 
 
@@ -67,7 +69,9 @@ class DepthAnythingV2Estimator(DepthEstimator):
     CUDA-only by design (see module-level ``_NO_CUDA_MESSAGE``): raises a
     clear ``RuntimeError`` at construction time rather than silently falling
     back to a CPU inference path slow enough to blow the training-step time
-    budget this library is built to respect.
+    budget this library is built to respect. A ``device`` of ``"cpu"`` asked
+    for by name is the exception: it is honoured, for rendering a handful of
+    pictures, as the documentation's gallery is on a runner with no GPU.
 
     Note on sign convention *and* on the shape of the conversion: Depth
     Anything (V1 and V2) predicts a **disparity**-like quantity — larger raw
@@ -108,7 +112,7 @@ class DepthAnythingV2Estimator(DepthEstimator):
         """
         import torch
 
-        if not torch.cuda.is_available():
+        if torch.device(device).type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(_NO_CUDA_MESSAGE.format(cls=type(self).__name__))
         if disparity_offset <= 0:
             raise ValueError("disparity_offset must be > 0 (it bounds the farthest depth)")

@@ -79,7 +79,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![focus_shift 1](../examples/focus_shift_0.png) | ![focus_shift 2](../examples/focus_shift_1.png) | ![focus_shift 3](../examples/focus_shift_2.png) | ![focus_shift 4](../examples/focus_shift_3.png) | ![focus_shift 5](../examples/focus_shift_4.png) |
+| ![focus_shift 1](https://desmoteo.github.io/surmentations/examples/focus_shift_0.webp) | ![focus_shift 2](https://desmoteo.github.io/surmentations/examples/focus_shift_1.webp) | ![focus_shift 3](https://desmoteo.github.io/surmentations/examples/focus_shift_2.webp) | ![focus_shift 4](https://desmoteo.github.io/surmentations/examples/focus_shift_3.webp) | ![focus_shift 5](https://desmoteo.github.io/surmentations/examples/focus_shift_4.webp) |
 
 ## References
 

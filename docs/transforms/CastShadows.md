@@ -94,7 +94,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![cast_shadows 1](../examples/cast_shadows_0.png) | ![cast_shadows 2](../examples/cast_shadows_1.png) | ![cast_shadows 3](../examples/cast_shadows_2.png) | ![cast_shadows 4](../examples/cast_shadows_3.png) | ![cast_shadows 5](../examples/cast_shadows_4.png) |
+| ![cast_shadows 1](https://desmoteo.github.io/surmentations/examples/cast_shadows_0.webp) | ![cast_shadows 2](https://desmoteo.github.io/surmentations/examples/cast_shadows_1.webp) | ![cast_shadows 3](https://desmoteo.github.io/surmentations/examples/cast_shadows_2.webp) | ![cast_shadows 4](https://desmoteo.github.io/surmentations/examples/cast_shadows_3.webp) | ![cast_shadows 5](https://desmoteo.github.io/surmentations/examples/cast_shadows_4.webp) |
 
 ## References
 

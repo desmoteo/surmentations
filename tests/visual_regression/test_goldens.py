@@ -89,7 +89,7 @@ MAX_MEAN_ABS_DIFF = 1.5
 
 
 def test_goldens_exist() -> None:
-    missing = [name for name in TRANSFORMS if not (GOLDEN_DIR / f"{name}.png").exists()]
+    missing = [name for name in TRANSFORMS if not (GOLDEN_DIR / f"{name}.webp").exists()]
     assert not missing, (
         f"Missing golden images for {missing}; run "
         "`python tests/visual_regression/generate_goldens.py` once to create them."
@@ -98,7 +98,7 @@ def test_goldens_exist() -> None:
 
 def test_matches_golden(scene: np.ndarray) -> None:
     for name, transform in TRANSFORMS.items():
-        golden_path = GOLDEN_DIR / f"{name}.png"
+        golden_path = GOLDEN_DIR / f"{name}.webp"
         if not golden_path.exists():
             continue  # covered by test_goldens_exist
         golden = cv2.imread(str(golden_path))

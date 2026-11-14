@@ -38,6 +38,7 @@ OUT = DOCS / "transforms"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from docs.gallery import url  # noqa: E402
 from docs.generate_examples import EFFECTS  # noqa: E402
 from surmentations.presets.pipeline import stage_of  # noqa: E402
 
@@ -909,8 +910,8 @@ def page(name: str) -> str:
         parts.append(f"| `{parameter}` | {default} | {meaning} |")
     parts.append("")
 
+    # Every row of the gallery is rendered; the pictures are published, not kept here.
     rows = [key for key, owner in EFFECTS.items() if owner == name]
-    rows = [key for key in rows if (DOCS / "examples" / f"{key}_0.png").exists()]
     if rows:
         parts += [
             "## Samples",
@@ -919,7 +920,9 @@ def page(name: str) -> str:
             "",
         ]
         for key in rows:
-            cells = " | ".join(f"![{key} {i + 1}](../examples/{key}_{i}.png)" for i in range(5))
+            cells = " | ".join(
+                f"![{key} {i + 1}]({url(DOCS / 'examples' / f'{key}_{i}.webp')})" for i in range(5)
+            )
             parts += [f"`{key}`", "", "| 1 | 2 | 3 | 4 | 5 |", "| --- | --- | --- | --- | --- |"]
             parts += [f"| {cells} |", ""]
 

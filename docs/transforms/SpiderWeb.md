@@ -117,7 +117,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![spider_web 1](../examples/spider_web_0.png) | ![spider_web 2](../examples/spider_web_1.png) | ![spider_web 3](../examples/spider_web_2.png) | ![spider_web 4](../examples/spider_web_3.png) | ![spider_web 5](../examples/spider_web_4.png) |
+| ![spider_web 1](https://desmoteo.github.io/surmentations/examples/spider_web_0.webp) | ![spider_web 2](https://desmoteo.github.io/surmentations/examples/spider_web_1.webp) | ![spider_web 3](https://desmoteo.github.io/surmentations/examples/spider_web_2.webp) | ![spider_web 4](https://desmoteo.github.io/surmentations/examples/spider_web_3.webp) | ![spider_web 5](https://desmoteo.github.io/surmentations/examples/spider_web_4.webp) |
 
 ## References
 

@@ -3,6 +3,11 @@
 Nothing here renders. These check the bookkeeping that goes stale without
 anyone noticing: a photograph added without its licence, a page that links an
 image nobody generated, a README pointing at a file that has moved.
+
+The pictures are not in the repository: CI renders and publishes them, and
+the pages link to them there. So the pages are checked always, and the
+pictures on disk only where the gallery has been rendered, which the gallery
+workflow does before it runs these.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from docs.gallery import local
 from docs.generate_examples import EFFECTS
 from docs.generate_scene_examples import (
     COMPARED,
@@ -34,10 +40,16 @@ PAGES = sorted(
         REPO / "README.md",
         REPO / "sample_scenes" / "SOURCES.md",
         *(REPO / "docs").glob("*.md"),
+        *(REPO / "docs" / "transforms").glob("*.md"),
         *SCENES_OUT.rglob("README.md"),
     ]
 )
 _LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
+
+
+def _rendered(folder: Path) -> bool:
+    """Whether the pictures of a scene's folder have been rendered here."""
+    return (folder / "original.webp").is_file()
 
 
 def test_every_photograph_is_configured_and_credited() -> None:
@@ -62,26 +74,28 @@ def test_a_scene_page_shows_what_was_rendered(name: str) -> None:
     source = _sources()[name]
     assert source["author"] in page and source["licence"] in page
 
-    assert (folder / "original.jpg").is_file()
+    rendered = _rendered(folder)
+    assert "/original.webp)" in page
     for effect in EFFECTS:
-        image = folder / "effects" / f"{effect}.jpg"
+        image = folder / "effects" / f"{effect}.webp"
         if _why_not(effect, scene) is None:
-            assert image.is_file(), f"{name}: {effect} was not rendered"
-            assert f"effects/{effect}.jpg" in page
+            assert f"effects/{effect}.webp)" in page, f"{name}: {effect} is not on the page"
+            assert image.is_file() or not rendered, f"{name}: {effect} was not rendered"
         else:
+            assert f"effects/{effect}.webp)" not in page
             assert not image.exists(), f"{name}: {effect} does not apply but has an image"
             assert f"`{effect}`" in page, f"{name}: {effect} was skipped without saying so"
-    assert len(list((folder / "pipelines").glob("*.jpg"))) == PIPELINE_DRAWS
+    assert len(re.findall(r"/pipelines/\w+_\d+\.webp\)", page)) == PIPELINE_DRAWS
     # The pipeline that takes a depth provider is drawn a second time over
     # one that read the scene; the other has nothing to compare.
     twice = "surveillance" if not (scene.night or scene.sheltered) else None
-    again = list((folder / "pipelines_aware").glob("*.jpg"))
+    again = re.findall(r"/pipelines_aware/\w+_\d+\.webp\)", page)
     assert len(again) == (PIPELINE_DRAWS if twice else 0)
-    for path in again:
-        assert f"pipelines_aware/{path.name}" in page
-    assert not [path for path in folder.rglob("*.jpg") if path.name not in page], (
-        f"{name}: an image on disk is not shown on the page"
-    )
+    if rendered:
+        assert len(list((folder / "pipelines_aware").glob("*.webp"))) == len(again)
+        assert not [path for path in folder.rglob("*.webp") if path.name not in page], (
+            f"{name}: an image on disk is not shown on the page"
+        )
 
 
 @pytest.mark.parametrize("name", sorted(SCENES))
@@ -91,24 +105,46 @@ def test_a_scene_page_compares_what_the_provider_s_reading_changes(name: str) ->
     picture exists exactly when the effect applies and reads the scene."""
     scene, folder = SCENES[name], SCENES_OUT / name
     page = (folder / "README.md").read_text()
-    assert (folder / "reading.jpg").is_file() and "(reading.jpg)" in page
+    assert "/reading.webp)" in page
+    assert (folder / "reading.webp").is_file() or not _rendered(folder)
     for row in ("Field of view", "Horizon", "Camera pitch below level", "Camera height", "Depth"):
         assert f"| {row} |" in page, f"{name}: the page does not say what was read for {row!r}"
     for effect in EFFECTS:
-        image = folder / "aware" / f"{effect}.jpg"
+        image = folder / "aware" / f"{effect}.webp"
         if effect in COMPARED and _why_not(effect, scene) is None:
-            assert image.is_file(), f"{name}: {effect} was not rendered a second time"
-            assert f"aware/{effect}.jpg" in page and f"`{effect}` without" in page
+            assert image.is_file() or not _rendered(folder), (
+                f"{name}: {effect} was not rendered a second time"
+            )
+            assert f"aware/{effect}.webp)" in page and f"`{effect}` without" in page
         else:
+            assert f"aware/{effect}.webp)" not in page
             assert not image.exists(), f"{name}: {effect} has a second picture it should not"
     assert set(COMPARED) <= set(EFFECTS)
 
 
 @pytest.mark.parametrize("page", PAGES, ids=lambda path: str(path.relative_to(REPO)))
 def test_published_links_resolve(page: Path) -> None:
+    """A link to a file of the repository finds it. A link to a published
+    picture is a WebP, and finds it too where the gallery has been rendered."""
     broken = []
     for target in _LINK.findall(page.read_text()):
+        published = local(target.split("#")[0])
+        if published is not None and published.suffix:
+            # The folder's pictures are all rendered together, or none are.
+            rendered = any(published.parent.glob("*.webp")) and (
+                published.parent.name != "examples"
+                or (published.parent / "00_base_scene.webp").is_file()
+            )
+            if published.suffix != ".webp" or (rendered and not published.is_file()):
+                broken.append(target)
+            continue
         if re.match(r"[a-z]+:", target) or target.startswith("#"):
+            continue
+        if re.search(r"\.(png|jpe?g|webp)$", target, re.IGNORECASE) and "sample_scenes" not in str(
+            (page.parent / target).resolve()
+        ):
+            # A picture the documentation draws is published, not kept here.
+            broken.append(target)
             continue
         path = (page.parent / target.split("#")[0]).resolve()
         if not path.exists():

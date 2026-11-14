@@ -118,7 +118,7 @@ guessed. Tracks ruled across a junction are worse than none.
 
 Cues in yellow, paint in magenta, lane lines in cyan, tracks in orange:
 
-![roads as read](assets/road_surface/lanes.jpg)
+![roads as read](https://desmoteo.github.io/surmentations/assets/road_surface/lanes.webp)
 
 ## Wheel tracks in snow
 
@@ -133,7 +133,7 @@ do to the eye. The road under them is wet and darker than it was dry.
 `wheel_track_range` runs from untouched snow (0) through two ruts a tyre
 wide (0.3) to lanes worn bare (1). Left, without; right, with:
 
-![wheel tracks](assets/road_surface/wheel_tracks.jpg)
+![wheel tracks](https://desmoteo.github.io/surmentations/assets/road_surface/wheel_tracks.webp)
 
 ## The wet road
 
@@ -219,7 +219,7 @@ tail light ([vehicle views](scene_understanding.md#vehicle-views)). Which
 it is surer of is the end that is seen, and it was right for all 22 of
 the single vehicles in these scenes, where colour was right for 12:
 
-![vehicles as read](assets/road_surface/vehicle_views.jpg)
+![vehicles as read](https://desmoteo.github.io/surmentations/assets/road_surface/vehicle_views.webp)
 
 **What one vehicle shows, by colour**
 ([`vehicle_facing`](../src/surmentations/utils/road.py)), which is what is
@@ -282,7 +282,7 @@ traffic's lamps lit, and each scene's traffic at its own speed (about 105
 km/h on the motorway, 85 on the city road, under 45 in the street and at
 the junction, where there is next to no spray to see):
 
-![wet road and spray](assets/road_surface/wet_road_and_spray.jpg)
+![wet road and spray](https://desmoteo.github.io/surmentations/assets/road_surface/wet_road_and_spray.webp)
 
 Spray is off by default because of what one frame cannot say: how fast the
 traffic is moving, which is the caller's to give, and, on a road none of
@@ -421,7 +421,7 @@ shadows still in it. That is the first picture of each row below; the
 others are the same draw with a provider that reads the scene, under
 sodium and under a cool LED:
 
-![a night in colour](assets/road_surface/night_colour.jpg)
+![a night in colour](https://desmoteo.github.io/surmentations/assets/road_surface/night_colour.webp)
 
 ### What is in the air shows in the lamps' light
 
@@ -445,7 +445,7 @@ over a lit road was a white sheet. On a frame whose lamps are known it is
 lit by them. Without (left) and with (right), fog and rain over a night in
 colour and snow over an infrared one:
 
-![fog, rain and snow in the lamps' light](assets/road_surface/lamp_cones.jpg)
+![fog, rain and snow in the lamps' light](https://desmoteo.github.io/surmentations/assets/road_surface/lamp_cones.webp)
 
 ### What sends the illuminator's light back
 
@@ -497,7 +497,7 @@ Three things keep a plate from being a white box laid on the picture:
   fall with the cube of the distance; a tenth of the light in all, a
   housing's window at night and not a clean lens on a bench.
 
-![signs and plates under infrared](assets/road_surface/retroreflectors.jpg)
+![signs and plates under infrared](https://desmoteo.github.io/surmentations/assets/road_surface/retroreflectors.webp)
 
 ### A frame taken at night
 
@@ -515,7 +515,7 @@ two dozen vehicles lit) at 1024 px.
 The same draw with the lamps turned off, which is how every scene looked
 before, and with them:
 
-![infrared night, lit evenly and lit by its lamps](assets/road_surface/night_lamps.jpg)
+![infrared night, lit evenly and lit by its lamps](https://desmoteo.github.io/surmentations/assets/road_surface/night_lamps.webp)
 
 ## Limits
 

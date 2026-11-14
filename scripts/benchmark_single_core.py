@@ -122,13 +122,19 @@ PER_FRAME = ("depth_estimate", "scene_labels", "scene_geometry", "scene_vehicles
 
 
 def _scene_image(scene: str, size: int) -> np.ndarray:
-    """An example photograph as RGB, resized to ``size`` by ``size``."""
+    """An example photograph as RGB, resized to ``size`` by ``size``.
+
+    Brought to the galleries' 800 pixels across first, as the gallery's own
+    copy of it, which this used to read, was.
+    """
     import cv2
 
-    path = REPO / "docs" / "examples" / "scenes" / scene / "original.jpg"
+    path = REPO / "sample_scenes" / f"{scene}.jpg"
     image = cv2.imread(str(path))
     if image is None:
         raise SystemExit(f"cannot read {path}")
+    height, width = image.shape[:2]
+    image = cv2.resize(image, (800, round(height * 800 / width)), interpolation=cv2.INTER_AREA)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     return np.ascontiguousarray(cv2.resize(image, (size, size), interpolation=cv2.INTER_CUBIC))
 

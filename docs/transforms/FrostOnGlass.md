@@ -81,7 +81,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![frost_on_glass 1](../examples/frost_on_glass_0.png) | ![frost_on_glass 2](../examples/frost_on_glass_1.png) | ![frost_on_glass 3](../examples/frost_on_glass_2.png) | ![frost_on_glass 4](../examples/frost_on_glass_3.png) | ![frost_on_glass 5](../examples/frost_on_glass_4.png) |
+| ![frost_on_glass 1](https://desmoteo.github.io/surmentations/examples/frost_on_glass_0.webp) | ![frost_on_glass 2](https://desmoteo.github.io/surmentations/examples/frost_on_glass_1.webp) | ![frost_on_glass 3](https://desmoteo.github.io/surmentations/examples/frost_on_glass_2.webp) | ![frost_on_glass 4](https://desmoteo.github.io/surmentations/examples/frost_on_glass_3.webp) | ![frost_on_glass 5](https://desmoteo.github.io/surmentations/examples/frost_on_glass_4.webp) |
 
 ## References
 

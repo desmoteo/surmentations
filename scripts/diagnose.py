@@ -7,7 +7,7 @@ Produces, in the output directory:
 * ``draws.jsonl`` — one compact record per transform call: the constructor
   ranges, the physical quantities actually drawn, and a summary of every
   parameter handed to the renderer.
-* ``<effect>_sev<N>_seed<M>.png`` — the frame each record produced.
+* ``<effect>_sev<N>_seed<M>.webp`` — the frame each record produced, lossless.
 
 The point is to make the *derived chain* auditable. Most quantities here are
 consequences rather than choices — a rain rate fixes a size distribution,
@@ -49,7 +49,11 @@ def main() -> None:
 
     args.out.mkdir(parents=True, exist_ok=True)
     scene = _base_scene(args.size)
-    cv2.imwrite(str(args.out / "00_scene.png"), cv2.cvtColor(scene, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(
+        str(args.out / "00_scene.webp"),
+        cv2.cvtColor(scene, cv2.COLOR_RGB2BGR),
+        [cv2.IMWRITE_WEBP_QUALITY, 101],
+    )
 
     provider = SharedDepthProvider(DepthAnythingV2Estimator())
     names = [
@@ -72,13 +76,17 @@ def main() -> None:
                     out = transform(image=scene)["image"]
 
                 stem = f"{name}_sev{level}_seed{seed_index}"
-                cv2.imwrite(str(args.out / f"{stem}.png"), cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(
+                    str(args.out / f"{stem}.webp"),
+                    cv2.cvtColor(out, cv2.COLOR_RGB2BGR),
+                    [cv2.IMWRITE_WEBP_QUALITY, 101],
+                )
 
                 for record in log:
                     record["effect"] = name
                     record["severity"] = level
                     record["seed"] = seed
-                    record["image"] = f"{stem}.png"
+                    record["image"] = f"{stem}.webp"
                     # Cheap whole-frame summary, so the log alone says how much
                     # the effect actually changed and in which direction.
                     delta = out.astype(np.float32) - scene.astype(np.float32)

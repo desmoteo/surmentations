@@ -2,7 +2,7 @@
 
 Covered car park; pillars and a ceiling; short depth range.
 
-![original](original.jpg)
+![original](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/original.webp)
 
 Source: [Interior of Rupert Street parking garage - DSC 8051.jpg](https://commons.wikimedia.org/wiki/File:Interior_of_Rupert_Street_parking_garage_-_DSC_8051.jpg) by Tadeusz Hare, CC BY-SA 4.0. Every image in this folder is derived from it and is available under the same licence.
 
@@ -24,7 +24,7 @@ found drawn across both. See
 [scene understanding](../../../scene_understanding.md) for how each is made
 and how far to trust it.
 
-![labels and horizon](reading.jpg)
+![labels and horizon](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/reading.webp)
 
 | | |
 | --- | --- |
@@ -57,19 +57,19 @@ at each photograph at the size it was taken at, not at the reduced frame.
 
 | `fog` without | `fog` with |
 | --- | --- |
-| ![`fog` without](effects/fog.jpg) | ![`fog` with](aware/fog.jpg) |
+| ![`fog` without](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/fog.webp) | ![`fog` with](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/aware/fog.webp) |
 
 | `night_ir` without | `night_ir` with |
 | --- | --- |
-| ![`night_ir` without](effects/night_ir.jpg) | ![`night_ir` with](aware/night_ir.jpg) |
+| ![`night_ir` without](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/night_ir.webp) | ![`night_ir` with](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/aware/night_ir.webp) |
 
 | `local_plumes` without | `local_plumes` with |
 | --- | --- |
-| ![`local_plumes` without](effects/local_plumes.jpg) | ![`local_plumes` with](aware/local_plumes.jpg) |
+| ![`local_plumes` without](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/local_plumes.webp) | ![`local_plumes` with](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/aware/local_plumes.webp) |
 
 | `night_color` without | `night_color` with |
 | --- | --- |
-| ![`night_color` without](effects/night_color.jpg) | ![`night_color` with](aware/night_color.jpg) |
+| ![`night_color` without](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/night_color.webp) | ![`night_color` with](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/aware/night_color.webp) |
 
 ## The other effects at severity 3
 
@@ -78,35 +78,35 @@ These do not read the scene, and are the same with either provider.
 
 | water_droplets | dirt_soil | housing_occluders |
 | --- | --- | --- |
-| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![housing_occluders](effects/housing_occluders.jpg) |
+| ![water_droplets](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/water_droplets.webp) | ![dirt_soil](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/dirt_soil.webp) | ![housing_occluders](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/housing_occluders.webp) |
 
 | ac_flicker | rolling_shutter | exposure_transient |
 | --- | --- | --- |
-| ![ac_flicker](effects/ac_flicker.jpg) | ![rolling_shutter](effects/rolling_shutter.jpg) | ![exposure_transient](effects/exposure_transient.jpg) |
+| ![ac_flicker](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/ac_flicker.webp) | ![rolling_shutter](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/rolling_shutter.webp) | ![exposure_transient](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/exposure_transient.webp) |
 
 | wdr_tone_mapping | denoise_artifacts | video_codec |
 | --- | --- | --- |
-| ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) | ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) |
+| ![wdr_tone_mapping](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/wdr_tone_mapping.webp) | ![denoise_artifacts](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/denoise_artifacts.webp) | ![video_codec](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/video_codec.webp) |
 
 | night_droplets | sensor_noise | transmission_faults |
 | --- | --- | --- |
-| ![night_droplets](effects/night_droplets.jpg) | ![sensor_noise](effects/sensor_noise.jpg) | ![transmission_faults](effects/transmission_faults.jpg) |
+| ![night_droplets](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/night_droplets.webp) | ![sensor_noise](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/sensor_noise.webp) | ![transmission_faults](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/transmission_faults.webp) |
 
 | spider_web | night_insects | ir_dome_glare |
 | --- | --- | --- |
-| ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) | ![ir_dome_glare](effects/ir_dome_glare.jpg) |
+| ![spider_web](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/spider_web.webp) | ![night_insects](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/night_insects.webp) | ![ir_dome_glare](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/ir_dome_glare.webp) |
 
 | lens_tamper | ir_cut_filter_fault | demosaic_artifacts |
 | --- | --- | --- |
-| ![lens_tamper](effects/lens_tamper.jpg) | ![ir_cut_filter_fault](effects/ir_cut_filter_fault.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) |
+| ![lens_tamper](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/lens_tamper.webp) | ![ir_cut_filter_fault](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/ir_cut_filter_fault.webp) | ![demosaic_artifacts](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/demosaic_artifacts.webp) |
 
 | analog_video | focus_shift | camera_vibration |
 | --- | --- | --- |
-| ![analog_video](effects/analog_video.jpg) | ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) |
+| ![analog_video](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/analog_video.webp) | ![focus_shift](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/focus_shift.webp) | ![camera_vibration](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/camera_vibration.webp) |
 
 | on_screen_overlay |  |  |
 | --- | --- | --- |
-| ![on_screen_overlay](effects/on_screen_overlay.jpg) |  |  |
+| ![on_screen_overlay](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/effects/on_screen_overlay.webp) |  |  |
 
 Not rendered: `sun_flare`, `rain`, `snow`, `cast_shadows`, `night_rain`, `night_snow`, `wet_ground`, `snow_cover`, `frost_on_glass`, `snow_on_housing`, `foliage_intrusion`, `ground_fog`, `night_foliage` — the scene is under a roof.
 
@@ -121,8 +121,8 @@ This pipeline takes no depth provider, so there is nothing to compare.
 
 | draw 0 | draw 1 |
 | --- | --- |
-| ![draw 0](pipelines/surveillance_lite_0.jpg) | ![draw 1](pipelines/surveillance_lite_1.jpg) |
+| ![draw 0](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/pipelines/surveillance_lite_0.webp) | ![draw 1](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/pipelines/surveillance_lite_1.webp) |
 
 | draw 2 | draw 3 |
 | --- | --- |
-| ![draw 2](pipelines/surveillance_lite_2.jpg) | ![draw 3](pipelines/surveillance_lite_3.jpg) |
+| ![draw 2](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/pipelines/surveillance_lite_2.webp) | ![draw 3](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/pipelines/surveillance_lite_3.webp) |

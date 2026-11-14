@@ -84,7 +84,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![housing_occluders 1](../examples/housing_occluders_0.png) | ![housing_occluders 2](../examples/housing_occluders_1.png) | ![housing_occluders 3](../examples/housing_occluders_2.png) | ![housing_occluders 4](../examples/housing_occluders_3.png) | ![housing_occluders 5](../examples/housing_occluders_4.png) |
+| ![housing_occluders 1](https://desmoteo.github.io/surmentations/examples/housing_occluders_0.webp) | ![housing_occluders 2](https://desmoteo.github.io/surmentations/examples/housing_occluders_1.webp) | ![housing_occluders 3](https://desmoteo.github.io/surmentations/examples/housing_occluders_2.webp) | ![housing_occluders 4](https://desmoteo.github.io/surmentations/examples/housing_occluders_3.webp) | ![housing_occluders 5](https://desmoteo.github.io/surmentations/examples/housing_occluders_4.webp) |
 
 ## References
 

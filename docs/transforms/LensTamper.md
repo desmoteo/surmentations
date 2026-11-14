@@ -76,7 +76,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![lens_tamper 1](../examples/lens_tamper_0.png) | ![lens_tamper 2](../examples/lens_tamper_1.png) | ![lens_tamper 3](../examples/lens_tamper_2.png) | ![lens_tamper 4](../examples/lens_tamper_3.png) | ![lens_tamper 5](../examples/lens_tamper_4.png) |
+| ![lens_tamper 1](https://desmoteo.github.io/surmentations/examples/lens_tamper_0.webp) | ![lens_tamper 2](https://desmoteo.github.io/surmentations/examples/lens_tamper_1.webp) | ![lens_tamper 3](https://desmoteo.github.io/surmentations/examples/lens_tamper_2.webp) | ![lens_tamper 4](https://desmoteo.github.io/surmentations/examples/lens_tamper_3.webp) | ![lens_tamper 5](https://desmoteo.github.io/surmentations/examples/lens_tamper_4.webp) |
 
 ## References
 

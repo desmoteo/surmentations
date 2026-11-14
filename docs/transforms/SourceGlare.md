@@ -67,7 +67,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![source_glare 1](../examples/source_glare_0.png) | ![source_glare 2](../examples/source_glare_1.png) | ![source_glare 3](../examples/source_glare_2.png) | ![source_glare 4](../examples/source_glare_3.png) | ![source_glare 5](../examples/source_glare_4.png) |
+| ![source_glare 1](https://desmoteo.github.io/surmentations/examples/source_glare_0.webp) | ![source_glare 2](https://desmoteo.github.io/surmentations/examples/source_glare_1.webp) | ![source_glare 3](https://desmoteo.github.io/surmentations/examples/source_glare_2.webp) | ![source_glare 4](https://desmoteo.github.io/surmentations/examples/source_glare_3.webp) | ![source_glare 5](https://desmoteo.github.io/surmentations/examples/source_glare_4.webp) |
 
 ## References
 

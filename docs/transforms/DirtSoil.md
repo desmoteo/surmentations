@@ -135,7 +135,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![dirt_soil 1](../examples/dirt_soil_0.png) | ![dirt_soil 2](../examples/dirt_soil_1.png) | ![dirt_soil 3](../examples/dirt_soil_2.png) | ![dirt_soil 4](../examples/dirt_soil_3.png) | ![dirt_soil 5](../examples/dirt_soil_4.png) |
+| ![dirt_soil 1](https://desmoteo.github.io/surmentations/examples/dirt_soil_0.webp) | ![dirt_soil 2](https://desmoteo.github.io/surmentations/examples/dirt_soil_1.webp) | ![dirt_soil 3](https://desmoteo.github.io/surmentations/examples/dirt_soil_2.webp) | ![dirt_soil 4](https://desmoteo.github.io/surmentations/examples/dirt_soil_3.webp) | ![dirt_soil 5](https://desmoteo.github.io/surmentations/examples/dirt_soil_4.webp) |
 
 ## References
 

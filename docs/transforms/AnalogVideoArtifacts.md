@@ -103,7 +103,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![analog_video 1](../examples/analog_video_0.png) | ![analog_video 2](../examples/analog_video_1.png) | ![analog_video 3](../examples/analog_video_2.png) | ![analog_video 4](../examples/analog_video_3.png) | ![analog_video 5](../examples/analog_video_4.png) |
+| ![analog_video 1](https://desmoteo.github.io/surmentations/examples/analog_video_0.webp) | ![analog_video 2](https://desmoteo.github.io/surmentations/examples/analog_video_1.webp) | ![analog_video 3](https://desmoteo.github.io/surmentations/examples/analog_video_2.webp) | ![analog_video 4](https://desmoteo.github.io/surmentations/examples/analog_video_3.webp) | ![analog_video 5](https://desmoteo.github.io/surmentations/examples/analog_video_4.webp) |
 
 ## References
 

@@ -75,7 +75,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![snow_on_housing 1](../examples/snow_on_housing_0.png) | ![snow_on_housing 2](../examples/snow_on_housing_1.png) | ![snow_on_housing 3](../examples/snow_on_housing_2.png) | ![snow_on_housing 4](../examples/snow_on_housing_3.png) | ![snow_on_housing 5](../examples/snow_on_housing_4.png) |
+| ![snow_on_housing 1](https://desmoteo.github.io/surmentations/examples/snow_on_housing_0.webp) | ![snow_on_housing 2](https://desmoteo.github.io/surmentations/examples/snow_on_housing_1.webp) | ![snow_on_housing 3](https://desmoteo.github.io/surmentations/examples/snow_on_housing_2.webp) | ![snow_on_housing 4](https://desmoteo.github.io/surmentations/examples/snow_on_housing_3.webp) | ![snow_on_housing 5](https://desmoteo.github.io/surmentations/examples/snow_on_housing_4.webp) |
 
 ## References
 

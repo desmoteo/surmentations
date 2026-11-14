@@ -2,7 +2,7 @@
 
 Real night street under sodium lamps.
 
-![original](original.jpg)
+![original](https://desmoteo.github.io/surmentations/examples/scenes/street_night/original.webp)
 
 Source: [Great Holm Milton Keynes at night.jpg](https://commons.wikimedia.org/wiki/File:Great_Holm_Milton_Keynes_at_night.jpg) by John Chryslar, CC0. Every image in this folder is derived from it and is available under the same licence.
 
@@ -24,7 +24,7 @@ found drawn across both. See
 [scene understanding](../../../scene_understanding.md) for how each is made
 and how far to trust it.
 
-![labels and horizon](reading.jpg)
+![labels and horizon](https://desmoteo.github.io/surmentations/examples/scenes/street_night/reading.webp)
 
 | | |
 | --- | --- |
@@ -57,43 +57,43 @@ at each photograph at the size it was taken at, not at the reduced frame.
 
 | `rain` without | `rain` with |
 | --- | --- |
-| ![`rain` without](effects/rain.jpg) | ![`rain` with](aware/rain.jpg) |
+| ![`rain` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/rain.webp) | ![`rain` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/rain.webp) |
 
 | `snow` without | `snow` with |
 | --- | --- |
-| ![`snow` without](effects/snow.jpg) | ![`snow` with](aware/snow.jpg) |
+| ![`snow` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/snow.webp) | ![`snow` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/snow.webp) |
 
 | `night_ir` without | `night_ir` with |
 | --- | --- |
-| ![`night_ir` without](effects/night_ir.jpg) | ![`night_ir` with](aware/night_ir.jpg) |
+| ![`night_ir` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_ir.webp) | ![`night_ir` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/night_ir.webp) |
 
 | `night_rain` without | `night_rain` with |
 | --- | --- |
-| ![`night_rain` without](effects/night_rain.jpg) | ![`night_rain` with](aware/night_rain.jpg) |
+| ![`night_rain` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_rain.webp) | ![`night_rain` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/night_rain.webp) |
 
 | `night_snow` without | `night_snow` with |
 | --- | --- |
-| ![`night_snow` without](effects/night_snow.jpg) | ![`night_snow` with](aware/night_snow.jpg) |
+| ![`night_snow` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_snow.webp) | ![`night_snow` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/night_snow.webp) |
 
 | `night_fog` without | `night_fog` with |
 | --- | --- |
-| ![`night_fog` without](effects/night_fog.jpg) | ![`night_fog` with](aware/night_fog.jpg) |
+| ![`night_fog` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_fog.webp) | ![`night_fog` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/night_fog.webp) |
 
 | `wet_ground` without | `wet_ground` with |
 | --- | --- |
-| ![`wet_ground` without](effects/wet_ground.jpg) | ![`wet_ground` with](aware/wet_ground.jpg) |
+| ![`wet_ground` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/wet_ground.webp) | ![`wet_ground` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/wet_ground.webp) |
 
 | `snow_cover` without | `snow_cover` with |
 | --- | --- |
-| ![`snow_cover` without](effects/snow_cover.jpg) | ![`snow_cover` with](aware/snow_cover.jpg) |
+| ![`snow_cover` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/snow_cover.webp) | ![`snow_cover` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/snow_cover.webp) |
 
 | `ground_fog` without | `ground_fog` with |
 | --- | --- |
-| ![`ground_fog` without](effects/ground_fog.jpg) | ![`ground_fog` with](aware/ground_fog.jpg) |
+| ![`ground_fog` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/ground_fog.webp) | ![`ground_fog` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/ground_fog.webp) |
 
 | `local_plumes` without | `local_plumes` with |
 | --- | --- |
-| ![`local_plumes` without](effects/local_plumes.jpg) | ![`local_plumes` with](aware/local_plumes.jpg) |
+| ![`local_plumes` without](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/local_plumes.webp) | ![`local_plumes` with](https://desmoteo.github.io/surmentations/examples/scenes/street_night/aware/local_plumes.webp) |
 
 ## The other effects at severity 3
 
@@ -102,39 +102,39 @@ These do not read the scene, and are the same with either provider.
 
 | water_droplets | dirt_soil | housing_occluders |
 | --- | --- | --- |
-| ![water_droplets](effects/water_droplets.jpg) | ![dirt_soil](effects/dirt_soil.jpg) | ![housing_occluders](effects/housing_occluders.jpg) |
+| ![water_droplets](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/water_droplets.webp) | ![dirt_soil](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/dirt_soil.webp) | ![housing_occluders](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/housing_occluders.webp) |
 
 | ac_flicker | rolling_shutter | exposure_transient |
 | --- | --- | --- |
-| ![ac_flicker](effects/ac_flicker.jpg) | ![rolling_shutter](effects/rolling_shutter.jpg) | ![exposure_transient](effects/exposure_transient.jpg) |
+| ![ac_flicker](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/ac_flicker.webp) | ![rolling_shutter](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/rolling_shutter.webp) | ![exposure_transient](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/exposure_transient.webp) |
 
 | wdr_tone_mapping | denoise_artifacts | video_codec |
 | --- | --- | --- |
-| ![wdr_tone_mapping](effects/wdr_tone_mapping.jpg) | ![denoise_artifacts](effects/denoise_artifacts.jpg) | ![video_codec](effects/video_codec.jpg) |
+| ![wdr_tone_mapping](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/wdr_tone_mapping.webp) | ![denoise_artifacts](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/denoise_artifacts.webp) | ![video_codec](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/video_codec.webp) |
 
 | night_droplets | sensor_noise | source_glare |
 | --- | --- | --- |
-| ![night_droplets](effects/night_droplets.jpg) | ![sensor_noise](effects/sensor_noise.jpg) | ![source_glare](effects/source_glare.jpg) |
+| ![night_droplets](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_droplets.webp) | ![sensor_noise](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/sensor_noise.webp) | ![source_glare](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/source_glare.webp) |
 
 | transmission_faults | spider_web | night_insects |
 | --- | --- | --- |
-| ![transmission_faults](effects/transmission_faults.jpg) | ![spider_web](effects/spider_web.jpg) | ![night_insects](effects/night_insects.jpg) |
+| ![transmission_faults](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/transmission_faults.webp) | ![spider_web](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/spider_web.webp) | ![night_insects](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_insects.webp) |
 
 | ir_dome_glare | frost_on_glass | snow_on_housing |
 | --- | --- | --- |
-| ![ir_dome_glare](effects/ir_dome_glare.jpg) | ![frost_on_glass](effects/frost_on_glass.jpg) | ![snow_on_housing](effects/snow_on_housing.jpg) |
+| ![ir_dome_glare](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/ir_dome_glare.webp) | ![frost_on_glass](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/frost_on_glass.webp) | ![snow_on_housing](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/snow_on_housing.webp) |
 
 | lens_tamper | foliage_intrusion | demosaic_artifacts |
 | --- | --- | --- |
-| ![lens_tamper](effects/lens_tamper.jpg) | ![foliage_intrusion](effects/foliage_intrusion.jpg) | ![demosaic_artifacts](effects/demosaic_artifacts.jpg) |
+| ![lens_tamper](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/lens_tamper.webp) | ![foliage_intrusion](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/foliage_intrusion.webp) | ![demosaic_artifacts](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/demosaic_artifacts.webp) |
 
 | analog_video | focus_shift | camera_vibration |
 | --- | --- | --- |
-| ![analog_video](effects/analog_video.jpg) | ![focus_shift](effects/focus_shift.jpg) | ![camera_vibration](effects/camera_vibration.jpg) |
+| ![analog_video](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/analog_video.webp) | ![focus_shift](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/focus_shift.webp) | ![camera_vibration](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/camera_vibration.webp) |
 
 | on_screen_overlay | night_foliage |  |
 | --- | --- | --- |
-| ![on_screen_overlay](effects/on_screen_overlay.jpg) | ![night_foliage](effects/night_foliage.jpg) |  |
+| ![on_screen_overlay](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/on_screen_overlay.webp) | ![night_foliage](https://desmoteo.github.io/surmentations/examples/scenes/street_night/effects/night_foliage.webp) |  |
 
 Not rendered: `sun_flare`, `cast_shadows` — it needs the sun, and the scene is at night.
 
@@ -153,8 +153,8 @@ This pipeline takes no depth provider, so there is nothing to compare.
 
 | draw 0 | draw 1 |
 | --- | --- |
-| ![draw 0](pipelines/surveillance_lite_0.jpg) | ![draw 1](pipelines/surveillance_lite_1.jpg) |
+| ![draw 0](https://desmoteo.github.io/surmentations/examples/scenes/street_night/pipelines/surveillance_lite_0.webp) | ![draw 1](https://desmoteo.github.io/surmentations/examples/scenes/street_night/pipelines/surveillance_lite_1.webp) |
 
 | draw 2 | draw 3 |
 | --- | --- |
-| ![draw 2](pipelines/surveillance_lite_2.jpg) | ![draw 3](pipelines/surveillance_lite_3.jpg) |
+| ![draw 2](https://desmoteo.github.io/surmentations/examples/scenes/street_night/pipelines/surveillance_lite_2.webp) | ![draw 3](https://desmoteo.github.io/surmentations/examples/scenes/street_night/pipelines/surveillance_lite_3.webp) |

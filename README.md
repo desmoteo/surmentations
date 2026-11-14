@@ -1,6 +1,6 @@
 # surmentations
 
-![surmentations: physically grounded weather, lens and camera augmentations](docs/assets/social_banner.png)
+![surmentations: physically grounded weather, lens and camera augmentations](https://desmoteo.github.io/surmentations/assets/social_banner.webp)
 
 Albumentations-compatible, physically-grounded augmentations for training
 models that run on real camera feeds: surveillance cameras first, and any
@@ -223,20 +223,20 @@ horizon; and where the camera's height is known, depth is in metres measured
 from it and `depth_range_m` is not needed. Each scene below with its labels
 and the horizon the estimator found:
 
-![what the provider reads off each sample scene](docs/assets/scene_understanding/labels_and_horizon.jpg)
+![what the provider reads off each sample scene](https://desmoteo.github.io/surmentations/assets/scene_understanding/labels_and_horizon.webp)
 
 **Vehicle views.** A semantic mask runs touching vehicles together and
 says nothing of which way they face. The vehicle reader tells them apart,
 says which end of each is seen (green outlines are fronts, red are rears)
 and finds its lamps (yellow):
 
-![vehicles as the reader sees them](docs/assets/road_surface/vehicle_views.jpg)
+![vehicles as the reader sees them](https://desmoteo.github.io/surmentations/assets/road_surface/vehicle_views.webp)
 
 That is what `RandomRain` needs to lay spray behind each vehicle and light
 its lamps (`spray_range`, `vehicle_lamp_range`, `traffic_speed_range_kmh`),
 left as the road was and right with both:
 
-![a soaked road without and with its traffic's spray and lamps](docs/assets/road_surface/wet_road_and_spray.jpg)
+![a soaked road without and with its traffic's spray and lamps](https://desmoteo.github.io/surmentations/assets/road_surface/wet_road_and_spray.webp)
 
 and what `NightIrMode` and `NightColorMode` need to light a scene as a road
 is lit at night: from its street lamps, each throwing a pool that falls off
@@ -244,18 +244,18 @@ with distance, and its traffic's lamps and beams, in place of one even
 level of light. The same draw with the lamps turned off, which is a
 daylight frame in grey, and with them:
 
-![infrared night lit evenly, and lit by its lamps](docs/assets/road_surface/night_lamps.jpg)
+![infrared night lit evenly, and lit by its lamps](https://desmoteo.github.io/surmentations/assets/road_surface/night_lamps.webp)
 
 In colour, the same scene lit by the sky's glow alone, which is all a
 provider with depth alone can do, and by sodium and by LED street lighting:
 
-![a night in colour: unlit, sodium, LED](docs/assets/road_surface/night_colour.jpg)
+![a night in colour: unlit, sodium, LED](https://desmoteo.github.io/surmentations/assets/road_surface/night_colour.webp)
 
 A night lit this way has lamps whose places are known, and what is in the
 air shows in their light. `NightFog`, `NightRain` and `NightSnow` without
 it (left) and with it (right):
 
-![fog, rain and snow in the lamps' light](docs/assets/road_surface/lamp_cones.jpg)
+![fog, rain and snow in the lamps' light](https://desmoteo.github.io/surmentations/assets/road_surface/lamp_cones.webp)
 
 Under the camera's own infrared illuminator, the road signs and number
 plates the reader finds send its light straight back, as they do on a real
@@ -263,7 +263,7 @@ camera. The reader's box says only where each is: its shape (a slanted
 plate, a sign on its point) is taken from the picture, and its edge is
 the haze a lens makes of something that bright. Without and with:
 
-![signs and plates under infrared](docs/assets/road_surface/retroreflectors.jpg)
+![signs and plates under infrared](https://desmoteo.github.io/surmentations/assets/road_surface/retroreflectors.webp)
 
 All of these are evidence and not a verdict: an effect weighs what a reader
 says against what it reads from depth and colour itself.
@@ -799,13 +799,13 @@ with worker count — construct the provider inside the worker init, and size
 
 Rendered by [`docs/generate_examples.py`](docs/generate_examples.py) on the
 reference photo below. Each effect gets one image per severity level, so
-`<effect>_0.png` is severity 1 and `<effect>_4.png` is severity 5. Each
+`<effect>_0.webp` is severity 1 and `<effect>_4.webp` is severity 5. Each
 variant also re-rolls the setup knobs severity leaves alone — sun position,
 camera pitch, deposit mix, mains frequency — since those change the picture as
 much as the weather does.
 
 **Twice, where the scene's reading matters.** Nine rows are drawn a second
-time, as `<effect>_aware_<n>.png`, with a provider that reads the scene: its
+time, as `<effect>_aware_<n>.webp`, with a provider that reads the scene: its
 [labels, its camera, its vehicles and its street lamps](#what-a-provider-can-read--optional).
 Those are the rows whose picture depends on it, and each twin starts from
 the same variant as its plain row. The plain picture is what any provider
@@ -814,8 +814,12 @@ the road, the traffic and the lamps are.
 
 Each cell shows the **median of seven draws**, not the first: effects that can
 legitimately draw themselves out of existence otherwise produce a cell the
-reader cannot tell from a bug. See [`docs/examples/`](docs/examples/) for the
-full sweep of 39 rows at five levels.
+reader cannot tell from a bug. The full sweep of 39 rows at five levels is on
+[the gallery's site](https://desmoteo.github.io/surmentations/#examples).
+
+None of these pictures is kept in git. CI renders them from the code on every
+push to `main` and publishes them to GitHub Pages, and the pages here link to
+them there; see [Development](#development).
 
 The same effects over eight other scenes — a crossing from straight above, a
 covered car park, a real night street, mountains across a valley — are in
@@ -827,7 +831,7 @@ that reads the scene read off it, its labels with the horizon drawn across
 them, and every effect that depends on that reading twice: without it and
 with it, from the same parameters and the same seed.
 
-![base](docs/examples/00_base_scene.png)
+![base](https://desmoteo.github.io/surmentations/examples/00_base_scene.webp)
 
 ### Weather, by level and with the scene read
 
@@ -838,29 +842,29 @@ speed and drive with their lamps on.
 
 | Rain, severity 1 | severity 3 | severity 5 | severity 4, scene read: spray and lamps |
 | --- | --- | --- | --- |
-| ![rain, severity 1](docs/examples/rain_0.png) | ![severity 3](docs/examples/rain_2.png) | ![severity 5](docs/examples/rain_4.png) | ![severity 4, scene read: spray and lamps](docs/examples/rain_aware_3.png) |
+| ![rain, severity 1](https://desmoteo.github.io/surmentations/examples/rain_0.webp) | ![severity 3](https://desmoteo.github.io/surmentations/examples/rain_2.webp) | ![severity 5](https://desmoteo.github.io/surmentations/examples/rain_4.webp) | ![severity 4, scene read: spray and lamps](https://desmoteo.github.io/surmentations/examples/rain_aware_3.webp) |
 
 Snow: with the road known, traffic has worn wheel tracks in what has settled.
 
 | Snow, severity 1 | severity 3 | severity 5 | severity 4, scene read: wheel tracks |
 | --- | --- | --- | --- |
-| ![snow, severity 1](docs/examples/snow_0.png) | ![severity 3](docs/examples/snow_2.png) | ![severity 5](docs/examples/snow_4.png) | ![severity 4, scene read: wheel tracks](docs/examples/snow_aware_3.png) |
+| ![snow, severity 1](https://desmoteo.github.io/surmentations/examples/snow_0.webp) | ![severity 3](https://desmoteo.github.io/surmentations/examples/snow_2.webp) | ![severity 5](https://desmoteo.github.io/surmentations/examples/snow_4.webp) | ![severity 4, scene read: wheel tracks](https://desmoteo.github.io/surmentations/examples/snow_aware_3.webp) |
 
 Fog needs depth and nothing else, and reads the same with either provider.
 
 | Fog, severity 1 | severity 3 | severity 5 | Ground fog |
 | --- | --- | --- | --- |
-| ![fog, severity 1](docs/examples/fog_0.png) | ![severity 3](docs/examples/fog_2.png) | ![severity 5](docs/examples/fog_4.png) | ![ground fog](docs/examples/ground_fog_2.png) |
+| ![fog, severity 1](https://desmoteo.github.io/surmentations/examples/fog_0.webp) | ![severity 3](https://desmoteo.github.io/surmentations/examples/fog_2.webp) | ![severity 5](https://desmoteo.github.io/surmentations/examples/fog_4.webp) | ![ground fog](https://desmoteo.github.io/surmentations/examples/ground_fog_2.webp) |
 
 The ground has its own ladder, under light weather that does not change:
 
 | Soaked road, light rain | scene read: spray and lamps | Deep snow, light fall | scene read: wheel tracks |
 | --- | --- | --- | --- |
-| ![soaked road, light rain](docs/examples/wet_ground_4.png) | ![scene read: spray and lamps](docs/examples/wet_ground_aware_4.png) | ![deep snow, light fall](docs/examples/snow_cover_4.png) | ![scene read: wheel tracks](docs/examples/snow_cover_aware_4.png) |
+| ![soaked road, light rain](https://desmoteo.github.io/surmentations/examples/wet_ground_4.webp) | ![scene read: spray and lamps](https://desmoteo.github.io/surmentations/examples/wet_ground_aware_4.webp) | ![deep snow, light fall](https://desmoteo.github.io/surmentations/examples/snow_cover_4.webp) | ![scene read: wheel tracks](https://desmoteo.github.io/surmentations/examples/snow_cover_aware_4.webp) |
 
 | Sun flare | Cast shadows | Plumes | Heat shimmer, through a long lens |
 | --- | --- | --- | --- |
-| ![sun flare](docs/examples/sun_flare_3.png) | ![cast shadows](docs/examples/cast_shadows_3.png) | ![plumes](docs/examples/local_plumes_3.png) | ![heat shimmer, through a long lens](docs/examples/heat_shimmer_4.png) |
+| ![sun flare](https://desmoteo.github.io/surmentations/examples/sun_flare_3.webp) | ![cast shadows](https://desmoteo.github.io/surmentations/examples/cast_shadows_3.webp) | ![plumes](https://desmoteo.github.io/surmentations/examples/local_plumes_3.webp) | ![heat shimmer, through a long lens](https://desmoteo.github.io/surmentations/examples/heat_shimmer_4.webp) |
 
 ### Night
 
@@ -871,50 +875,50 @@ light back.
 
 | Night IR | Night IR, scene read | Night in colour, sky glow only | Night in colour, scene read |
 | --- | --- | --- | --- |
-| ![night ir](docs/examples/night_ir_3.png) | ![night ir, scene read](docs/examples/night_ir_aware_3.png) | ![night in colour, sky glow only](docs/examples/night_color_3.png) | ![night in colour, scene read](docs/examples/night_color_aware_3.png) |
+| ![night ir](https://desmoteo.github.io/surmentations/examples/night_ir_3.webp) | ![night ir, scene read](https://desmoteo.github.io/surmentations/examples/night_ir_aware_3.webp) | ![night in colour, sky glow only](https://desmoteo.github.io/surmentations/examples/night_color_3.webp) | ![night in colour, scene read](https://desmoteo.github.io/surmentations/examples/night_color_aware_3.webp) |
 
 What falls at night is lit by the camera, and with the scene read by the
 scene's own lamps as well: a cone under each street lamp.
 
 | Night rain | Night rain, scene read | Night snow | Night snow, scene read |
 | --- | --- | --- | --- |
-| ![night rain](docs/examples/night_rain_3.png) | ![night rain, scene read](docs/examples/night_rain_aware_3.png) | ![night snow](docs/examples/night_snow_3.png) | ![night snow, scene read](docs/examples/night_snow_aware_3.png) |
+| ![night rain](https://desmoteo.github.io/surmentations/examples/night_rain_3.webp) | ![night rain, scene read](https://desmoteo.github.io/surmentations/examples/night_rain_aware_3.webp) | ![night snow](https://desmoteo.github.io/surmentations/examples/night_snow_3.webp) | ![night snow, scene read](https://desmoteo.github.io/surmentations/examples/night_snow_aware_3.webp) |
 
 | Night fog, over a night photograph | Night fog, over this scene, its lamps known | Glare from lamps | Insects in the beam |
 | --- | --- | --- | --- |
-| ![night fog, over a night photograph](docs/examples/night_fog_3.png) | ![night fog, over this scene, its lamps known](docs/examples/night_fog_aware_3.png) | ![glare from lamps](docs/examples/source_glare_3.png) | ![insects in the beam](docs/examples/night_insects_3.png) |
+| ![night fog, over a night photograph](https://desmoteo.github.io/surmentations/examples/night_fog_3.webp) | ![night fog, over this scene, its lamps known](https://desmoteo.github.io/surmentations/examples/night_fog_aware_3.webp) | ![glare from lamps](https://desmoteo.github.io/surmentations/examples/source_glare_3.webp) | ![insects in the beam](https://desmoteo.github.io/surmentations/examples/night_insects_3.webp) |
 
 ### Glass and housing
 
 | Water on the glass, iris open | iris stopped down | under the infrared ring | Dirt and soil |
 | --- | --- | --- | --- |
-| ![water on the glass, iris open](docs/examples/water_droplets_1.png) | ![iris stopped down](docs/examples/water_droplets_2.png) | ![under the infrared ring](docs/examples/night_droplets_3.png) | ![dirt and soil](docs/examples/dirt_soil_2.png) |
+| ![water on the glass, iris open](https://desmoteo.github.io/surmentations/examples/water_droplets_1.webp) | ![iris stopped down](https://desmoteo.github.io/surmentations/examples/water_droplets_2.webp) | ![under the infrared ring](https://desmoteo.github.io/surmentations/examples/night_droplets_3.webp) | ![dirt and soil](https://desmoteo.github.io/surmentations/examples/dirt_soil_2.webp) |
 
 | Frost | Snow on the housing | The ring in the dome | Tampering |
 | --- | --- | --- | --- |
-| ![frost](docs/examples/frost_on_glass_2.png) | ![snow on the housing](docs/examples/snow_on_housing_3.png) | ![the ring in the dome](docs/examples/ir_dome_glare_2.png) | ![tampering](docs/examples/lens_tamper_3.png) |
+| ![frost](https://desmoteo.github.io/surmentations/examples/frost_on_glass_2.webp) | ![snow on the housing](https://desmoteo.github.io/surmentations/examples/snow_on_housing_3.webp) | ![the ring in the dome](https://desmoteo.github.io/surmentations/examples/ir_dome_glare_2.webp) | ![tampering](https://desmoteo.github.io/surmentations/examples/lens_tamper_3.webp) |
 
 | A spider's web, far | nearer | against the housing | The housing's own edge |
 | --- | --- | --- | --- |
-| ![a spider's web, far](docs/examples/spider_web_0.png) | ![nearer](docs/examples/spider_web_2.png) | ![against the housing](docs/examples/spider_web_4.png) | ![the housing's own edge](docs/examples/housing_occluders_3.png) |
+| ![a spider's web, far](https://desmoteo.github.io/surmentations/examples/spider_web_0.webp) | ![nearer](https://desmoteo.github.io/surmentations/examples/spider_web_2.webp) | ![against the housing](https://desmoteo.github.io/surmentations/examples/spider_web_4.webp) | ![the housing's own edge](https://desmoteo.github.io/surmentations/examples/housing_occluders_3.webp) |
 
 | A branch | A branch under the infrared ring | Focus | Vibration |
 | --- | --- | --- | --- |
-| ![a branch](docs/examples/foliage_intrusion_3.png) | ![a branch under the infrared ring](docs/examples/night_foliage_2.png) | ![focus](docs/examples/focus_shift_3.png) | ![vibration](docs/examples/camera_vibration_3.png) |
+| ![a branch](https://desmoteo.github.io/surmentations/examples/foliage_intrusion_3.webp) | ![a branch under the infrared ring](https://desmoteo.github.io/surmentations/examples/night_foliage_2.webp) | ![focus](https://desmoteo.github.io/surmentations/examples/focus_shift_3.webp) | ![vibration](https://desmoteo.github.io/surmentations/examples/camera_vibration_3.webp) |
 
 ### Sensor, processor and link
 
 | Sensor noise | AC flicker | Rolling shutter | Exposure hunting |
 | --- | --- | --- | --- |
-| ![sensor noise](docs/examples/sensor_noise_3.png) | ![ac flicker](docs/examples/ac_flicker_4.png) | ![rolling shutter](docs/examples/rolling_shutter_3.png) | ![exposure hunting](docs/examples/exposure_transient_3.png) |
+| ![sensor noise](https://desmoteo.github.io/surmentations/examples/sensor_noise_3.webp) | ![ac flicker](https://desmoteo.github.io/surmentations/examples/ac_flicker_4.webp) | ![rolling shutter](https://desmoteo.github.io/surmentations/examples/rolling_shutter_3.webp) | ![exposure hunting](https://desmoteo.github.io/surmentations/examples/exposure_transient_3.webp) |
 
 | Wide dynamic range | Temporal denoising | Demosaicing | Filter stuck open |
 | --- | --- | --- | --- |
-| ![wide dynamic range](docs/examples/wdr_tone_mapping_3.png) | ![temporal denoising](docs/examples/denoise_artifacts_3.png) | ![demosaicing](docs/examples/demosaic_artifacts_4.png) | ![filter stuck open](docs/examples/ir_cut_filter_fault_3.png) |
+| ![wide dynamic range](https://desmoteo.github.io/surmentations/examples/wdr_tone_mapping_3.webp) | ![temporal denoising](https://desmoteo.github.io/surmentations/examples/denoise_artifacts_3.webp) | ![demosaicing](https://desmoteo.github.io/surmentations/examples/demosaic_artifacts_4.webp) | ![filter stuck open](https://desmoteo.github.io/surmentations/examples/ir_cut_filter_fault_3.webp) |
 
 | Codec | Packet loss | Analog link | Overlay |
 | --- | --- | --- | --- |
-| ![codec](docs/examples/video_codec_3.png) | ![packet loss](docs/examples/transmission_faults_3.png) | ![analog link](docs/examples/analog_video_3.png) | ![overlay](docs/examples/on_screen_overlay_2.png) |
+| ![codec](https://desmoteo.github.io/surmentations/examples/video_codec_3.webp) | ![packet loss](https://desmoteo.github.io/surmentations/examples/transmission_faults_3.webp) | ![analog link](https://desmoteo.github.io/surmentations/examples/analog_video_3.webp) | ![overlay](https://desmoteo.github.io/surmentations/examples/on_screen_overlay_2.webp) |
 
 The `rain` and `snow` rows raise the ground with the weather, level for
 level, because a row has one axis. `wet_ground` and `snow_cover` hold the
@@ -1013,11 +1017,28 @@ intentionally changes:
 
 ```bash
 python -m tests.visual_regression.generate_goldens
+```
+
+The documentation's pictures are rendered, not kept: they are ignored by git,
+and [`.github/workflows/gallery.yml`](.github/workflows/gallery.yml) renders
+them on every push to `main` that touches the code, the docs or the
+photographs, and publishes them with the code reference to
+[GitHub Pages](https://desmoteo.github.io/surmentations/). Run it by hand from
+the Actions tab to render a branch; it keeps the pictures as a build artifact
+and publishes only `main`'s. To look at them locally, render them, in this
+order, into the places the site serves them from:
+
+```bash
 python docs/generate_examples.py          # the severity gallery
 python docs/generate_scene_examples.py    # every effect over sample_scenes/
 python docs/make_scene_understanding_figures.py   # the labels and geometry guide's figures
 python docs/make_road_surface_figures.py          # the road surface guide's figures
+python docs/make_banner.py                        # the banner, from the severity gallery
 ```
+
+They are quick on a CUDA GPU. Without one the networks run on the CPU, as
+they do in CI: slowly, but to the same pictures within the difference
+between half and full precision.
 
 The code reference is a site generated from the source: Python by autodoc,
 the C kernels by Hawkmoth through libclang, the shell scripts and CI
@@ -1044,7 +1065,7 @@ the gallery once discarded a library fix while every library test passed.
 MIT — see [LICENSE](LICENSE).
 
 The photographs in [`sample_scenes/`](sample_scenes/) and the images derived
-from them under [`docs/examples/scenes/`](docs/examples/scenes/) are not
+from them, shown on the pages under [`docs/examples/scenes/`](docs/examples/scenes/), are not
 covered by it. They are from Wikimedia Commons under CC BY, CC BY-SA and CC0
 licences, listed with their authors in
 [`sample_scenes/SOURCES.md`](sample_scenes/SOURCES.md).

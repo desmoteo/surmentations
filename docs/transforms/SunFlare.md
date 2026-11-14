@@ -119,7 +119,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![sun_flare 1](../examples/sun_flare_0.png) | ![sun_flare 2](../examples/sun_flare_1.png) | ![sun_flare 3](../examples/sun_flare_2.png) | ![sun_flare 4](../examples/sun_flare_3.png) | ![sun_flare 5](../examples/sun_flare_4.png) |
+| ![sun_flare 1](https://desmoteo.github.io/surmentations/examples/sun_flare_0.webp) | ![sun_flare 2](https://desmoteo.github.io/surmentations/examples/sun_flare_1.webp) | ![sun_flare 3](https://desmoteo.github.io/surmentations/examples/sun_flare_2.webp) | ![sun_flare 4](https://desmoteo.github.io/surmentations/examples/sun_flare_3.webp) | ![sun_flare 5](https://desmoteo.github.io/surmentations/examples/sun_flare_4.webp) |
 
 ## References
 

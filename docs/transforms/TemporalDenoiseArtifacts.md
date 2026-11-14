@@ -74,7 +74,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![denoise_artifacts 1](../examples/denoise_artifacts_0.png) | ![denoise_artifacts 2](../examples/denoise_artifacts_1.png) | ![denoise_artifacts 3](../examples/denoise_artifacts_2.png) | ![denoise_artifacts 4](../examples/denoise_artifacts_3.png) | ![denoise_artifacts 5](../examples/denoise_artifacts_4.png) |
+| ![denoise_artifacts 1](https://desmoteo.github.io/surmentations/examples/denoise_artifacts_0.webp) | ![denoise_artifacts 2](https://desmoteo.github.io/surmentations/examples/denoise_artifacts_1.webp) | ![denoise_artifacts 3](https://desmoteo.github.io/surmentations/examples/denoise_artifacts_2.webp) | ![denoise_artifacts 4](https://desmoteo.github.io/surmentations/examples/denoise_artifacts_3.webp) | ![denoise_artifacts 5](https://desmoteo.github.io/surmentations/examples/denoise_artifacts_4.webp) |
 
 ## References
 

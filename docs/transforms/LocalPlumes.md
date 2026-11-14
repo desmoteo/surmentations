@@ -86,7 +86,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![local_plumes 1](../examples/local_plumes_0.png) | ![local_plumes 2](../examples/local_plumes_1.png) | ![local_plumes 3](../examples/local_plumes_2.png) | ![local_plumes 4](../examples/local_plumes_3.png) | ![local_plumes 5](../examples/local_plumes_4.png) |
+| ![local_plumes 1](https://desmoteo.github.io/surmentations/examples/local_plumes_0.webp) | ![local_plumes 2](https://desmoteo.github.io/surmentations/examples/local_plumes_1.webp) | ![local_plumes 3](https://desmoteo.github.io/surmentations/examples/local_plumes_2.webp) | ![local_plumes 4](https://desmoteo.github.io/surmentations/examples/local_plumes_3.webp) | ![local_plumes 5](https://desmoteo.github.io/surmentations/examples/local_plumes_4.webp) |
 
 ## References
 

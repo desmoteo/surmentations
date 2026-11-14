@@ -16,21 +16,22 @@ Each page then shows what a provider with
 for itself, and every effect that depends on it twice, side by side: without
 it and with it, from the same parameters and the same seed.
 
-Regenerate with `python docs/generate_scene_examples.py` (needs a CUDA GPU).
-The inputs are in [`sample_scenes/`](../../../sample_scenes/), with their authors
+Regenerate with `python docs/generate_scene_examples.py`: quick on a CUDA GPU,
+slow without one. CI renders the pictures and publishes them; they are not kept
+in git. The inputs are in [`sample_scenes/`](../../../sample_scenes/), with their authors
 and licences in [`SOURCES.md`](../../../sample_scenes/SOURCES.md). The images here
 are derived from them and carry the same licences, not the library's.
 
 | Scene | | What it stresses |
 | --- | --- | --- |
-| [`crosswalk_day`](crosswalk_day/README.md) | [![crosswalk_day](crosswalk_day/original.jpg)](crosswalk_day/README.md) | near-vertical view of a crossing; people, cyclists, vehicles; no sky |
-| [`parking_garage`](parking_garage/README.md) | [![parking_garage](parking_garage/original.jpg)](parking_garage/README.md) | covered car park; pillars and a ceiling; short depth range |
-| [`street_night`](street_night/README.md) | [![street_night](street_night/original.jpg)](street_night/README.md) | real night street under sodium lamps |
-| [`underpass_from_above`](underpass_from_above/README.md) | [![underpass_from_above](underpass_from_above/original.jpg)](underpass_from_above/README.md) | road passing under a flyover, seen from slightly above; cars; foliage in the foreground |
-| [`wooded_hills`](wooded_hills/README.md) | [![wooded_hills](wooded_hills/original.jpg)](wooded_hills/README.md) | wooded hills and a village seen from a hilltop; very long depth range |
-| [`mountain`](mountain/README.md) | [![mountain](mountain/original.jpg)](mountain/README.md) | mountain face with snow seen across a valley; conifers in the foreground |
-| [`urban_road_day`](urban_road_day/README.md) | [![urban_road_day](urban_road_day/original.jpg)](urban_road_day/README.md) | urban road by day from overpass height; traffic, lamp posts, skyline |
-| [`urban_street_wet`](urban_street_wet/README.md) | [![urban_street_wet](urban_street_wet/original.jpg)](urban_street_wet/README.md) | city street from a first-floor balcony on a genuinely wet day |
+| [`crosswalk_day`](crosswalk_day/README.md) | [![crosswalk_day](https://desmoteo.github.io/surmentations/examples/scenes/crosswalk_day/original.webp)](crosswalk_day/README.md) | near-vertical view of a crossing; people, cyclists, vehicles; no sky |
+| [`parking_garage`](parking_garage/README.md) | [![parking_garage](https://desmoteo.github.io/surmentations/examples/scenes/parking_garage/original.webp)](parking_garage/README.md) | covered car park; pillars and a ceiling; short depth range |
+| [`street_night`](street_night/README.md) | [![street_night](https://desmoteo.github.io/surmentations/examples/scenes/street_night/original.webp)](street_night/README.md) | real night street under sodium lamps |
+| [`underpass_from_above`](underpass_from_above/README.md) | [![underpass_from_above](https://desmoteo.github.io/surmentations/examples/scenes/underpass_from_above/original.webp)](underpass_from_above/README.md) | road passing under a flyover, seen from slightly above; cars; foliage in the foreground |
+| [`wooded_hills`](wooded_hills/README.md) | [![wooded_hills](https://desmoteo.github.io/surmentations/examples/scenes/wooded_hills/original.webp)](wooded_hills/README.md) | wooded hills and a village seen from a hilltop; very long depth range |
+| [`mountain`](mountain/README.md) | [![mountain](https://desmoteo.github.io/surmentations/examples/scenes/mountain/original.webp)](mountain/README.md) | mountain face with snow seen across a valley; conifers in the foreground |
+| [`urban_road_day`](urban_road_day/README.md) | [![urban_road_day](https://desmoteo.github.io/surmentations/examples/scenes/urban_road_day/original.webp)](urban_road_day/README.md) | urban road by day from overpass height; traffic, lamp posts, skyline |
+| [`urban_street_wet`](urban_street_wet/README.md) | [![urban_street_wet](https://desmoteo.github.io/surmentations/examples/scenes/urban_street_wet/original.webp)](urban_street_wet/README.md) | city street from a first-floor balcony on a genuinely wet day |
 
 ## What these show that is not right
 

@@ -82,7 +82,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![ir_dome_glare 1](../examples/ir_dome_glare_0.png) | ![ir_dome_glare 2](../examples/ir_dome_glare_1.png) | ![ir_dome_glare 3](../examples/ir_dome_glare_2.png) | ![ir_dome_glare 4](../examples/ir_dome_glare_3.png) | ![ir_dome_glare 5](../examples/ir_dome_glare_4.png) |
+| ![ir_dome_glare 1](https://desmoteo.github.io/surmentations/examples/ir_dome_glare_0.webp) | ![ir_dome_glare 2](https://desmoteo.github.io/surmentations/examples/ir_dome_glare_1.webp) | ![ir_dome_glare 3](https://desmoteo.github.io/surmentations/examples/ir_dome_glare_2.webp) | ![ir_dome_glare 4](https://desmoteo.github.io/surmentations/examples/ir_dome_glare_3.webp) | ![ir_dome_glare 5](https://desmoteo.github.io/surmentations/examples/ir_dome_glare_4.webp) |
 
 ## References
 

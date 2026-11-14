@@ -99,7 +99,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![fog 1](../examples/fog_0.png) | ![fog 2](../examples/fog_1.png) | ![fog 3](../examples/fog_2.png) | ![fog 4](../examples/fog_3.png) | ![fog 5](../examples/fog_4.png) |
+| ![fog 1](https://desmoteo.github.io/surmentations/examples/fog_0.webp) | ![fog 2](https://desmoteo.github.io/surmentations/examples/fog_1.webp) | ![fog 3](https://desmoteo.github.io/surmentations/examples/fog_2.webp) | ![fog 4](https://desmoteo.github.io/surmentations/examples/fog_3.webp) | ![fog 5](https://desmoteo.github.io/surmentations/examples/fog_4.webp) |
 
 ## References
 

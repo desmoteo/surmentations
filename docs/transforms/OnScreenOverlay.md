@@ -81,7 +81,7 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![on_screen_overlay 1](../examples/on_screen_overlay_0.png) | ![on_screen_overlay 2](../examples/on_screen_overlay_1.png) | ![on_screen_overlay 3](../examples/on_screen_overlay_2.png) | ![on_screen_overlay 4](../examples/on_screen_overlay_3.png) | ![on_screen_overlay 5](../examples/on_screen_overlay_4.png) |
+| ![on_screen_overlay 1](https://desmoteo.github.io/surmentations/examples/on_screen_overlay_0.webp) | ![on_screen_overlay 2](https://desmoteo.github.io/surmentations/examples/on_screen_overlay_1.webp) | ![on_screen_overlay 3](https://desmoteo.github.io/surmentations/examples/on_screen_overlay_2.webp) | ![on_screen_overlay 4](https://desmoteo.github.io/surmentations/examples/on_screen_overlay_3.webp) | ![on_screen_overlay 5](https://desmoteo.github.io/surmentations/examples/on_screen_overlay_4.webp) |
 
 ## References
 

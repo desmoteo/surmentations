@@ -333,7 +333,7 @@ what the illuminator lights and the lens cannot resolve has the grain of
 the nearest band of it (`backscatter_grain_range` on `NightRain` and
 `NightSnow`). Left, the veil even; right, with its grain:
 
-![the far field of rain and snow](assets/road_surface/far_field.jpg)
+![the far field of rain and snow](https://desmoteo.github.io/surmentations/assets/road_surface/far_field.webp)
 
 The **resolvability cut is on projected width, not diameter**. A 2 mm drop
 at 1 m is 0.7 px wide and worth drawing; the same drop at 20 m is 0.035 px

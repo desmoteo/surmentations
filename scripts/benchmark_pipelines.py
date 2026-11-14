@@ -110,12 +110,15 @@ def _run(
              "effects": effects}
         )
         cv2.imwrite(
-            str(directory / f"{index:02d}.png"), cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
+            str(directory / f"{index:02d}.webp"),
+            cv2.cvtColor(result, cv2.COLOR_RGB2BGR),
+            [cv2.IMWRITE_WEBP_QUALITY, 101],
         )
 
     cv2.imwrite(
-        str(out / f"{name}_sheet.png"),
+        str(out / f"{name}_sheet.webp"),
         cv2.cvtColor(_contact_sheet(frames, columns=5), cv2.COLOR_RGB2BGR),
+        [cv2.IMWRITE_WEBP_QUALITY, 90],
     )
     (directory / "manifest.json").write_text(json.dumps(manifest, indent=1))
 
@@ -152,7 +155,11 @@ def main() -> int:
 
     scene = _scene(args.size)
     args.out.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(args.out / "00_reference.png"), cv2.cvtColor(scene, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(
+        str(args.out / "00_reference.webp"),
+        cv2.cvtColor(scene, cv2.COLOR_RGB2BGR),
+        [cv2.IMWRITE_WEBP_QUALITY, 101],
+    )
 
     builders: list[tuple[str, Any]] = [("surveillance_lite", surveillance_lite())]
     if not args.no_depth:

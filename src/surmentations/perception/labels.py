@@ -222,6 +222,8 @@ _NO_CUDA_MESSAGE = (
     "found (torch.cuda.is_available() is False). Scene labels are optional: leave "
     "`labels` out of the SharedDepthProvider and every effect falls back to what it "
     "reads from depth and colour."
+    " A device of 'cpu', asked for by name, is honoured: slow, but enough to render a "
+    "few pictures where there is no GPU, which is what the documentation's gallery does."
 )
 
 
@@ -237,9 +239,9 @@ class SegmentationLabelEstimator(SceneLabelEstimator):
 
     Args:
         model_name: the checkpoint.
-        device: where to run it. CUDA only, for the reason
+        device: where to run it. CUDA, for the reason
             :class:`~surmentations.depth.estimator.DepthAnythingV2Estimator`
-            gives.
+            gives, unless ``"cpu"`` is asked for by name.
         half_precision: run the network in float16. ``None`` follows the
             mode (:mod:`surmentations.mode`): half in fast mode, full in
             exact mode.
@@ -270,7 +272,7 @@ class SegmentationLabelEstimator(SceneLabelEstimator):
         """
         import torch
 
-        if not torch.cuda.is_available():
+        if torch.device(device).type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(_NO_CUDA_MESSAGE.format(cls=type(self).__name__))
         if not 0.0 <= min_confidence < 1.0:
             raise ValueError(f"min_confidence must be in [0, 1), got {min_confidence}")

@@ -173,13 +173,13 @@ Severity 1 to 5, left to right, from the severity gallery.
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![snow 1](../examples/snow_0.png) | ![snow 2](../examples/snow_1.png) | ![snow 3](../examples/snow_2.png) | ![snow 4](../examples/snow_3.png) | ![snow 5](../examples/snow_4.png) |
+| ![snow 1](https://desmoteo.github.io/surmentations/examples/snow_0.webp) | ![snow 2](https://desmoteo.github.io/surmentations/examples/snow_1.webp) | ![snow 3](https://desmoteo.github.io/surmentations/examples/snow_2.webp) | ![snow 4](https://desmoteo.github.io/surmentations/examples/snow_3.webp) | ![snow 5](https://desmoteo.github.io/surmentations/examples/snow_4.webp) |
 
 `snow_cover`
 
 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- |
-| ![snow_cover 1](../examples/snow_cover_0.png) | ![snow_cover 2](../examples/snow_cover_1.png) | ![snow_cover 3](../examples/snow_cover_2.png) | ![snow_cover 4](../examples/snow_cover_3.png) | ![snow_cover 5](../examples/snow_cover_4.png) |
+| ![snow_cover 1](https://desmoteo.github.io/surmentations/examples/snow_cover_0.webp) | ![snow_cover 2](https://desmoteo.github.io/surmentations/examples/snow_cover_1.webp) | ![snow_cover 3](https://desmoteo.github.io/surmentations/examples/snow_cover_2.webp) | ![snow_cover 4](https://desmoteo.github.io/surmentations/examples/snow_cover_3.webp) | ![snow_cover 5](https://desmoteo.github.io/surmentations/examples/snow_cover_4.webp) |
 
 ## References
 

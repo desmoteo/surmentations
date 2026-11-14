@@ -39,6 +39,10 @@ the continuous-integration workflows.
 .. automodule:: generate_scene_examples
 ```
 
+```{eval-rst}
+.. automodule:: gallery
+```
+
 ## Shell scripts
 
 ```{script} native/check/run.sh
@@ -50,6 +54,9 @@ the continuous-integration workflows.
 ## Continuous integration
 
 ```{script} .github/workflows/ci.yml
+```
+
+```{script} .github/workflows/gallery.yml
 ```
 
 ```{script} .github/workflows/publish.yml

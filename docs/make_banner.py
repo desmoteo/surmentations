@@ -4,9 +4,11 @@ Run with::
 
     python docs/make_banner.py
 
-It writes ``docs/assets/social_banner.png``, 1280 by 640 pixels, which is the
-size GitHub asks for a repository's social preview (Settings, General,
-Social preview) and is also the picture at the top of the README.
+It writes ``docs/assets/social_banner.webp``, 1280 by 640 pixels, the
+picture at the top of the README, and the same picture as
+``social_banner.png`` beside it: that is the size GitHub asks for a
+repository's social preview (Settings, General, Social preview), which takes
+PNG and not WebP. Both are published with the gallery and not kept in git.
 
 The banner is one photograph cut into slanted strips, each strip taken from
 a different effect's cell of the severity gallery in ``docs/examples``.
@@ -39,7 +41,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 DOCS = Path(__file__).resolve().parent
 EXAMPLES = DOCS / "examples"
-OUT = DOCS / "assets" / "social_banner.png"
+OUT = DOCS / "assets" / "social_banner.webp"
 
 WIDTH, HEIGHT = 1280, 640
 # How far the foot of each strip is to the left of its head, in pixels.
@@ -92,9 +94,9 @@ def _packet_loss() -> np.ndarray:
     # Imported here: the rest of the banner needs neither the library nor a codec.
     from surmentations.camera import TransmissionFaults
 
-    base = cv2.imread(str(EXAMPLES / "00_base_scene.png"))
+    base = cv2.imread(str(EXAMPLES / "00_base_scene.webp"))
     if base is None:
-        raise FileNotFoundError(f"00_base_scene.png is not in {EXAMPLES}")
+        raise FileNotFoundError(f"00_base_scene.webp is not in {EXAMPLES}")
     faults = TransmissionFaults(p=1.0, **PACKET_LOSS)
     faults.set_random_seed(PACKET_LOSS_SEED)
     lossy: np.ndarray = faults(image=cv2.cvtColor(base, cv2.COLOR_BGR2RGB))["image"]
@@ -106,9 +108,9 @@ def _cell(name: str) -> np.ndarray:
 
     Or, for :data:`RENDERED`, the draw of packet loss made here.
     """
-    image = _packet_loss() if name == RENDERED else cv2.imread(str(EXAMPLES / f"{name}.png"))
+    image = _packet_loss() if name == RENDERED else cv2.imread(str(EXAMPLES / f"{name}.webp"))
     if image is None:
-        raise FileNotFoundError(f"{name}.png is not in {EXAMPLES}; regenerate the gallery first")
+        raise FileNotFoundError(f"{name}.webp is not in {EXAMPLES}; regenerate the gallery first")
     scale = WIDTH / image.shape[1]
     image = cv2.resize(
         image, (WIDTH, round(image.shape[0] * scale)), interpolation=cv2.INTER_LANCZOS4
@@ -178,8 +180,9 @@ def main() -> None:
     draw.text((60, 582), FACTS, font=_font("DejaVuSans.ttf", 20), fill=(170, 200, 230, 255))
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    image.save(OUT, optimize=True)
-    print(f"wrote {OUT.relative_to(DOCS.parent)}, {image.width} by {image.height}")
+    image.save(OUT, quality=90, method=6)
+    image.save(OUT.with_suffix(".png"), optimize=True)
+    print(f"wrote {OUT.relative_to(DOCS.parent)} and its PNG, {image.width} by {image.height}")
 
 
 if __name__ == "__main__":

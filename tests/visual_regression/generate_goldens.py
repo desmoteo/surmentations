@@ -14,7 +14,7 @@ from tests.visual_regression.test_goldens import GOLDEN_DIR, TRANSFORMS
 
 
 def main() -> None:
-    """Render each golden transform at seed 0 over the shared scene and write its PNG.
+    """Render each golden transform at seed 0 over the shared scene and write it, as lossless WebP.
 
     Run deliberately, when an effect's rendering is meant to change, and
     check the new images before committing them.
@@ -24,8 +24,8 @@ def main() -> None:
     for name, transform in TRANSFORMS.items():
         transform.set_random_seed(0)
         out = transform(image=img)["image"]
-        cv2.imwrite(str(GOLDEN_DIR / f"{name}.png"), out)
-        print(f"wrote {name}.png")
+        cv2.imwrite(str(GOLDEN_DIR / f"{name}.webp"), out, [cv2.IMWRITE_WEBP_QUALITY, 101])
+        print(f"wrote {name}.webp")
 
 
 if __name__ == "__main__":
