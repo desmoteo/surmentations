@@ -166,14 +166,18 @@ _OCCLUDERS_BY_LIGHT = {"day": 0.25, "street": 0.4, "infrared": 1.7}
 # Mains banding needs mains light and a short shutter. The camera's own
 # infrared LEDs are not on the mains, and band only what street lamps light.
 _FLICKER_BY_LIGHT = {"day": 0.02, "street": 0.15, "infrared": 0.05}
-# The noise reducer is a setting, and at night it is on.
-_DENOISE_BY_LIGHT = {"day": 0.2, "street": 0.8, "infrared": 0.8}
+# The noise reducer is a setting, and at night it is on: the share of
+# ``denoise`` at which its artefacts show in each light. By day there is
+# little noise for it to work on, and it shows a quarter as often.
+_DENOISE_BY_LIGHT = {"day": 0.25, "street": 1.0, "infrared": 1.0}
+#: How often the noise reducer's artefacts show at night, and wide dynamic
+#: range's in any light: what ``denoise`` and ``wdr`` are unless given.
+DEFAULT_DENOISE = 0.8
+DEFAULT_WDR = 0.30
 # A whole-frame shear needs the mount to move: wind, not traffic.
 _ROLLING_SHUTTER = 0.10
 # An exposure caught mid-correction is an event of a second or two.
 _EXPOSURE_TRANSIENT = 0.05
-# Wide dynamic range is a setting of some cameras.
-_WDR = 0.30
 
 
 def _sensor_noise(*, light: str, own_noise: bool, severity: int) -> list[Any]:
@@ -204,6 +208,8 @@ def _stream(
     faults: float,
     severity: int,
     own_noise: bool | None = None,
+    wdr: float = DEFAULT_WDR,
+    denoise: float = DEFAULT_DENOISE,
 ) -> list[Any]:
     """Glass, sensor, ISP and transmission: independent draws, physical order.
 
@@ -211,6 +217,9 @@ def _stream(
     street lighting, or the camera's own illuminator. ``own_noise`` says
     the frame was made into a night by a transform that has its own sensor
     noise; unset, that is taken to be so under infrared and nowhere else.
+    ``wdr`` and ``denoise`` are how often the two settings of the camera's
+    own processing show: wide dynamic range in any light, the noise
+    reducer at night and a quarter as often by day.
 
     Written in order by hand rather than through
     :func:`~surmentations.presets.pipeline.physical_order`, which sorts a
@@ -243,11 +252,11 @@ def _stream(
         *_sensor_noise(light=light, own_noise=own_noise, severity=severity),
         # ISP.
         _at(ExposureTransient, "ExposureTransient", _EXPOSURE_TRANSIENT, severity),
-        _at(WdrToneMapping, "WdrToneMapping", _WDR, severity),
+        _at(WdrToneMapping, "WdrToneMapping", wdr, severity),
         _at(
             TemporalDenoiseArtifacts,
             "TemporalDenoiseArtifacts",
-            _DENOISE_BY_LIGHT[light],
+            min(1.0, denoise * _DENOISE_BY_LIGHT[light]),
             severity,
         ),
     ]
@@ -695,6 +704,8 @@ def surveillance(
     occluders: float = 0.12,
     shadows: float = 0.30,
     flare: float = 0.12,
+    wdr: float = DEFAULT_WDR,
+    denoise: float = DEFAULT_DENOISE,
     severity: int = DEFAULT_SEVERITY,
     weather_severity: int | None = None,
     ground_severity: int | None = None,
@@ -729,6 +740,13 @@ def surveillance(
         dirt, occluders: probability of grime, and of insects and webs on
             the housing under the infrared ring, which is where they
             gather; by day and under street lamps a share of it.
+        wdr: probability of wide dynamic range's artefacts, in any light.
+            It is a setting of some cameras: 0 for a fleet that has it
+            off, which is also a few milliseconds a frame less.
+        denoise: probability of the noise reducer's artefacts at night;
+            by day it is a quarter of this. A setting too, and at night
+            the costliest stage of the camera's chain: 0 for cameras that
+            have it off.
         shadows, flare: probability of hard cast shadows and of a sun
             flare, in the day frames that can have a sun: dry air, over a
             dry road or over lying snow.
@@ -770,6 +788,8 @@ def surveillance(
         "occluders": occluders,
         "codec": codec,
         "faults": _fault_rate(faults, codec),
+        "wdr": wdr,
+        "denoise": denoise,
     }
     shared: dict[str, Any] = {
         "severity": weather_severity,
@@ -872,6 +892,8 @@ def surveillance_lite(
     occluders: float = 0.12,
     droplets: float = 0.10,
     flare: float = 0.05,
+    wdr: float = DEFAULT_WDR,
+    denoise: float = DEFAULT_DENOISE,
     severity: int = DEFAULT_SEVERITY,
 ) -> A.Compose:
     """Everything that does not need depth. **CPU only, no GPU required.**
@@ -904,6 +926,11 @@ def surveillance_lite(
         flare: probability of a sun flare by day. Lower than
             :func:`surveillance`'s, which draws it only on the frames it
             knows to be dry: here nothing says whether the sun is out.
+        wdr, denoise: probability of wide dynamic range's artefacts, and of
+            the noise reducer's at night (a quarter of it by day), as for
+            :func:`surveillance`. Both are settings of a camera, and the
+            two stages of this pipeline that cost the most: 0 for cameras
+            that have them off.
         severity: level 1-5, as for :func:`surveillance`.
     """
     tail = {
@@ -911,6 +938,8 @@ def surveillance_lite(
         "occluders": occluders,
         "codec": codec,
         "faults": _fault_rate(faults, codec),
+        "wdr": wdr,
+        "denoise": denoise,
     }
     return A.Compose(
         [

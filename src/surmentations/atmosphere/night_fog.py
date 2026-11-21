@@ -52,6 +52,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
+from surmentations import _native
 from surmentations.base import (
     CameraTransform,
     first_frame,
@@ -62,7 +63,7 @@ from surmentations.base import (
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
 from surmentations.lens.dirt import scatter_psf
-from surmentations.utils.channels import channel_sum
+from surmentations.utils.channels import channel_sum, frame_mean
 from surmentations.utils.color import TYPICAL_SCENE_ALBEDO
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.sky import lift_sky, scene_extent_m, sky_to_depth_edge, sky_weight
@@ -286,8 +287,7 @@ class NightFog(CameraTransform):
         illuminated = backscatter > 0.0
 
         # Lit by the camera, the scene's light crosses the fog twice.
-        one_way = np.exp(-optical_depth)[..., None]
-        transmission = one_way * one_way if illuminated else one_way
+        through = np.exp(-optical_depth)
 
         # Lamps counted at what they plausibly were, not at where the
         # sensor clipped: a lamp seen through thin fog is still clipped.
@@ -297,43 +297,71 @@ class NightFog(CameraTransform):
         # a ragged edge where its grain crossed the level.
         # And a lamp stands in the dark: where everything round a bright
         # patch is bright too, it is a lit surface, however compact the
-        # part of it that reaches full scale.
-        around = light_field(linear, _LAMP_STANDS_ALONE[0]).max(axis=2)
+        # part of it that reaches full scale. (Channel against channel: a
+        # maximum along an axis of three is several times slower.)
+        nearby = light_field(linear, _LAMP_STANDS_ALONE[0])
+        around = np.maximum(np.maximum(nearby[..., 0], nearby[..., 1]), nearby[..., 2])
         alone = np.clip(
             (_LAMP_STANDS_ALONE[1] - around)
             / (_LAMP_STANDS_ALONE[1] - _LAMP_STANDS_ALONE[2]),
             0.0,
             1.0,
         )
-        clipped = (lamp_mask(linear) * alone)[..., None]
-        radiance = linear * (1.0 + (_OVER_RANGE - 1.0) * clipped)
+        lamps = lamp_mask(linear) * alone
 
         # The halo: what the fog took from each lamp, returned around it.
         # More fog in front of the lamps, wider halo.
-        removed = radiance * clipped * (1.0 - one_way)
-        weight = channel_sum(removed)
+        lost = _native.fog_lost(linear, lamps, through, _OVER_RANGE - 1.0)
+        if lost is not None:
+            radiance, removed, weight = lost
+        else:
+            clipped = lamps[..., None]
+            radiance = linear * (1.0 + (_OVER_RANGE - 1.0) * clipped)
+            removed = radiance * clipped * (1.0 - through[..., None])
+            weight = channel_sum(removed)
         thickness = float((optical_depth * weight).sum() / max(float(weight.sum()), 1e-9))
         halo = scatter_psf(removed, glow_radius * (0.5 + min(thickness, 3.0)))
 
-        out = radiance * transmission + _FORWARD_FRACTION * halo
+        # What the fog itself sends. Lit by lamps whose places are known,
+        # it glows where their light is, and by the scene's general level
+        # elsewhere. Without them it is the veil: fog lit by the lamps, as
+        # bright as the light the surfaces around it show. Under the
+        # illuminator those surfaces are lit by the camera, and the fog
+        # the camera lights is the wall, so the veil would count it twice.
+        level = np.zeros(3, dtype=np.float32)
+        diffuse = np.zeros(3, dtype=np.float32)
+        veil_share = lit_part = 0.0
+        lit = wall = None
         if cones is not None:
-            # Lit by lamps whose places are known: the fog glows where
-            # their light is, and by the scene's general level elsewhere.
-            level = linear.reshape(-1, linear.shape[-1]).mean(axis=0).reshape(1, 1, -1)
             share = _FOG_RADIANCE_SHARE * _DIFFUSE_SHARE / TYPICAL_SCENE_ALBEDO
-            out = out + cones + share * level * (1.0 - one_way)
+            level = (share * frame_mean(linear)).astype(np.float32)
         elif not illuminated:
-            # The veil: fog lit by the lamps, as bright as the light the
-            # surfaces around it show. Under the illuminator those surfaces
-            # are lit by the camera, and the fog the camera lights is the
-            # wall below, so the term would count it twice.
             lit = light_field(linear, _LIT_VOLUME_SIGMA)
-            diffuse = linear.reshape(-1, linear.shape[-1]).mean(axis=0)
-            fog_radiance = (_FOG_RADIANCE_SHARE / TYPICAL_SCENE_ALBEDO) * (
-                (1.0 - _DIFFUSE_SHARE) * lit + _DIFFUSE_SHARE * diffuse.reshape(1, 1, -1)
-            )
-            out = out + fog_radiance * (1.0 - one_way)
+            veil_share = _FOG_RADIANCE_SHARE / TYPICAL_SCENE_ALBEDO
+            lit_part = 1.0 - _DIFFUSE_SHARE
+            diffuse = (_DIFFUSE_SHARE * frame_mean(linear)).astype(np.float32)
         if illuminated:
-            wall = backscatter * beam * (1.0 - np.exp(-2.0 * optical_depth))
-            out = out + wall[..., None]
+            wall = (backscatter * beam * (1.0 - np.exp(-2.0 * optical_depth))).astype(np.float32)
+        out = _native.fog_veil(
+            radiance,
+            halo,
+            through,
+            [_FORWARD_FRACTION, float(illuminated), *level, veil_share, lit_part, *diffuse],
+            cones,
+            lit,
+            wall,
+        )
+        if out is None:
+            one_way = through[..., None]
+            transmission = one_way * one_way if illuminated else one_way
+            out = radiance * transmission + _FORWARD_FRACTION * halo
+            if cones is not None:
+                out = out + cones + level.reshape(1, 1, -1) * (1.0 - one_way)
+            elif lit is not None:
+                fog_radiance = np.float32(veil_share) * (
+                    np.float32(lit_part) * lit + diffuse.reshape(1, 1, -1)
+                )
+                out = out + fog_radiance * (1.0 - one_way)
+            if wall is not None:
+                out = out + wall[..., None]
         return from_linear_unit(out, scale, is_integer, img.dtype)

@@ -96,7 +96,7 @@ from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
 from surmentations.perception.labels import GROUND, NOT_GROUND, PAVED, SceneClass, class_weight
 from surmentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
-from surmentations.utils.filters import wide_blur
+from surmentations.utils.filters import blur_of_lights, wide_blur
 from surmentations.utils.ground import (
     fill_to_edges,
     ground_noise,
@@ -132,6 +132,7 @@ from surmentations.utils.road import (
     vehicle_lamps,
     vehicle_spray,
     vehicles_as_seen,
+    wake_lies,
     wheel_tracks,
 )
 from surmentations.utils.sky import (
@@ -1014,10 +1015,15 @@ class RandomRain(CameraTransform):
             # The wakes are laid on the ground, behind each vehicle as its
             # own picture shows it turned, and not down the frame.
             plane = ground_view(depth_pm, np.isin(labels, [int(one) for one in GROUND]), focal)
+            lies = None
             if plane is not None and traffic:
-                traffic = spaced_speeds(road, traffic, plane, (height, width))
+                # Where each stands on the ground, once: its speed does
+                # not move it. No faster than the gaps between them allow:
+                # a queue drawn at a motorway's speed throws up no spray.
+                lies = wake_lies(road, traffic, plane, (height, width))
+                traffic = spaced_speeds(road, traffic, plane, (height, width), lies)
             plumes = vehicle_spray(
-                road, named_vehicles, rng, linear_scene, traffic, depth_pm, plane
+                road, named_vehicles, rng, linear_scene, traffic, depth_pm, plane, lies
             )
             mist = road_mist(road, named_vehicles, depth_pm, traffic)
             if float(plumes.max()) > 0.0 or float(mist.max()) > 0.0:
@@ -1045,8 +1051,8 @@ class RandomRain(CameraTransform):
                 if burning is not None and float(burning.max()) > 0.0:
                     lit_already = linear_scene * burning[..., None]
                     reach = _BURNING_GLOW_REACH * float(np.hypot(height, width))
-                    glow += np.float32(_BURNING_GLOW) * cv2.GaussianBlur(
-                        lit_already, (0, 0), sigmaX=max(reach, 1.0)
+                    glow += np.float32(_BURNING_GLOW) * blur_of_lights(
+                        lit_already, max(reach, 1.0)
                     )
                     cores = np.maximum(cores, burning)
                 drawn["lamp_light"], drawn["lamp_glow"], drawn["lights"] = light, glow, cores
@@ -1198,7 +1204,8 @@ class RandomRain(CameraTransform):
             # the camera. Up to full scale here, which is what the road
             # below reflects as it does any lamp in the picture; the rest
             # of their light is added once the road and the spray are drawn.
-            out = out + np.minimum(lamp_light, 1.0) * through
+            if not _native.lamps_lit(out, lamp_light, veil_transmission):
+                out = out + np.minimum(lamp_light, 1.0) * through
 
         if draw_wetness:
             out = _apply_ground_wetness(
@@ -1215,23 +1222,30 @@ class RandomRain(CameraTransform):
                 lights=lights,
             )
 
-        if spray is not None:
-            # Over the road and what is on it: the spray hangs in the air
-            # above the water it was lifted from, and is lit as the rain's
-            # own veil is.
-            share = spray[..., None]
-            out = out * (1.0 - share) + airlight[None, None, :] * np.float32(_SPRAY_ALBEDO) * share
-
+        # Over the road and what is on it: the spray hangs in the air
+        # above the water it was lifted from, and is lit as the rain's own
+        # veil is. Then the lamps: a lamp is many times full scale, and
+        # spray that hides a car leaves its lamps showing; and what the
+        # spray and the rain take out of the beam they scatter round it,
+        # as a glow that is the larger the more of them there is. One
+        # compiled pass where there is one, with the arithmetic below.
+        lamps = None
         if lamp_light is not None and lamp_glow is not None:
-            # A lamp is many times full scale, and spray that hides a car
-            # leaves its lamps showing; and what the spray and the rain
-            # take out of the beam they scatter round it, as a glow that is
-            # the larger the more of them there is.
-            wet_air: np.ndarray | float = _GLOW_IN_RAIN
+            lamps = (lamp_light, lamp_glow)
+        spray_light = airlight * np.float32(_SPRAY_ALBEDO)
+        if (spray is not None or lamps is not None) and not _native.spray_and_lamps(
+            out, spray, lamps, veil_transmission, spray_light, _GLOW_IN_RAIN
+        ):
             if spray is not None:
-                through = through * (1.0 - spray[..., None])
-                wet_air = _GLOW_IN_RAIN + (1.0 - _GLOW_IN_RAIN) * spray[..., None]
-            out = out + (lamp_light - np.minimum(lamp_light, 1.0)) * through + lamp_glow * wet_air
+                share = spray[..., None]
+                out = out * (1.0 - share) + spray_light[None, None, :] * share
+            if lamps is not None:
+                wet_air: np.ndarray | float = _GLOW_IN_RAIN
+                if spray is not None:
+                    through = through * (1.0 - spray[..., None])
+                    wet_air = _GLOW_IN_RAIN + (1.0 - _GLOW_IN_RAIN) * spray[..., None]
+                out = out + (lamps[0] - np.minimum(lamps[0], 1.0)) * through
+                out = out + lamps[1] * wet_air
 
         # The streaks, last: the drops near the lens, in front of the road,
         # the traffic, its lamps and its spray.
@@ -1639,12 +1653,16 @@ def vehicle_lights(linear_rgb: np.ndarray, labels: np.ndarray) -> np.ndarray:
     where the lamps are off, since a dull red lens is not bright.
     """
     low, high = _VEHICLE_LIGHT_LEVEL
-    bright = np.clip((linear_rgb.max(axis=2) - low) / (high - low), 0.0, 1.0)
+    # Channel against channel: a maximum along an axis of three is several
+    # times slower, and this is asked of every wet road.
+    red, green, blue = linear_rgb[..., 0], linear_rgb[..., 1], linear_rgb[..., 2]
+    other = np.maximum(green, blue)
+    bright = np.clip((np.maximum(red, other) - low) / (high - low), 0.0, 1.0)
     bright = bright * (labels == int(SceneClass.VEHICLE))
     if float(linear_rgb.mean()) > _DAYLIGHT_LEVEL:
         # By day a small bright thing on a car is the sun on its glass far
         # more often than a headlamp. A red one is a tail lamp.
-        bright = bright * (linear_rgb[..., 0] > _TAIL_RED * linear_rgb[..., 1:].max(axis=2))
+        bright = bright * (red > _TAIL_RED * other)
     count, parts, stats, _centroids = cv2.connectedComponentsWithStats(
         (bright > 0.0).astype(np.uint8), connectivity=8
     )

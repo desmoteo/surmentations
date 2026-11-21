@@ -63,7 +63,9 @@ from typing import NamedTuple
 import cv2
 import numpy as np
 
+from surmentations import _native
 from surmentations.perception.vehicles import HEAVY_KINDS, VehicleView
+from surmentations.utils.filters import wide_blur
 from surmentations.utils.night_light import (
     BeamSource,
     beam_origins,
@@ -663,6 +665,21 @@ def wheel_tracks(
     over, as they do to the eye.
     """
     shape = frame.across.shape
+    # How much each lane is driven in.
+    use = rng.uniform(_LEAST_LANE_USE, 1.0, size=64).astype(np.float32)
+    done = _native.wheel_tracks(
+        frame.piece,
+        frame.across,
+        frame.width_px,
+        frame.weight,
+        ragged,
+        worn,
+        lanes.edges,
+        use,
+        [band, _TRACK_WANDER, 0.5 * _WHEELS_APART, wear_floor, (1.0 - wear_floor) * 2.0],
+    )
+    if done is not None:
+        return done
     turns = np.zeros(shape, dtype=np.float32)
     lane = np.ones(shape, dtype=np.float32)
     which = np.zeros(shape, dtype=np.int64)
@@ -693,8 +710,6 @@ def wheel_tracks(
     track = edge * edge * (3.0 - 2.0 * edge)
     # Never more of a lane than the tracks are of it, however soft.
     track = track * np.clip(1.6 * half / reach, 0.0, 1.0)
-    # How much each lane is driven in.
-    use = rng.uniform(_LEAST_LANE_USE, 1.0, size=64).astype(np.float32)
     track = track * use[which % 64]
     if worn is not None:
         track = track * np.clip(wear_floor + (1.0 - wear_floor) * 2.0 * worn, 0.0, 1.0)
@@ -1346,6 +1361,7 @@ def spaced_speeds(
     traffic: list[RoadVehicle],
     ground: GroundView,
     shape: tuple[int, int],
+    lies: list[tuple[np.ndarray, np.ndarray, float] | None] | None = None,
 ) -> list[RoadVehicle]:
     """A road's traffic with no vehicle going faster than the gap ahead of it allows.
 
@@ -1363,8 +1379,13 @@ def spaced_speeds(
     (:func:`spray_amount`), which for a queue is none. A row of parked
     cars is a queue to it. One parked car alone is not known from one that
     is moving.
+
+    ``lies`` is :func:`wake_lies` of the same traffic, for a caller that
+    has it already: where a vehicle stands does not change with its speed,
+    and the same list serves :func:`vehicle_spray` afterwards.
     """
-    lies = wake_lies(frame, traffic, ground, shape)
+    if lies is None:
+        lies = wake_lies(frame, traffic, ground, shape)
     most = [float("inf")] * len(traffic)
     for index, lie in enumerate(lies):
         if lie is None:
@@ -1392,6 +1413,162 @@ def spaced_speeds(
     ]
 
 
+# The sigma, in pixels, the evening of where the outlines stand is blurred
+# at: it is soft by nature, and its blur is taken on a smaller copy.
+_EVENED_AT = 4.0
+# A puff of spray as the picture holds it, one row of a table: where its
+# middle is, the unit vector of its long way, its two radii, how dense it
+# is, the row of the road it hangs over, how far off its vehicle is, how
+# many of its radii out it is drawn, and a line it is cut off behind (a
+# point, the direction past it that is kept, how far the cut is feathered;
+# no cut with the last at 0).
+_PUFF_COLUMNS = 15
+# The three heights a wake's puff is drawn at, as shares of its rise, and
+# how much of it is at each.
+_PUFF_LIFTS = ((0.0, 1.0), (0.45, 0.6), (0.9, 0.3))
+
+
+def _add_puff(
+    spray: np.ndarray,
+    puff: Sequence[float],
+    stands: np.ndarray,
+    hidden: np.ndarray,
+    depth_m: np.ndarray | None,
+    feather: float,
+) -> None:
+    """Add one soft puff into ``spray``: a Gaussian with its own two axes and radii.
+
+    ``puff`` is a row of the table (:data:`_PUFF_COLUMNS`). The row of the
+    road it hangs over decides what vehicles hide it (``stands`` is the
+    row each outline stands on, ``hidden`` the outlines, feathered), and
+    how far off its vehicle is decides what else does: where the road
+    under a puff is itself hidden, the depth there is that of what hides
+    it. This is the definition; ``sm_spray_puffs`` in
+    ``native/sm_kernels.c`` draws a whole table of them, to within a few
+    millionths of a puff's own density.
+    """
+    x, y, long_x, long_y, long_radius, short_radius, strength, ground_row, reach_m = puff[:9]
+    radii_out, gate_x, gate_y, kept_x, kept_y, feathered = puff[9:]
+    height, width = spray.shape
+    reach = int(radii_out * max(long_radius, short_radius)) + 1
+    x0, x1 = max(0, int(x) - reach), min(width, int(x) + reach + 1)
+    y0, y1 = max(0, int(y) - reach), min(height, int(y) + reach + 1)
+    if x0 >= x1 or y0 >= y1:
+        return
+    columns = np.arange(x0, x1, dtype=np.float32)[None, :]
+    rows = np.arange(y0, y1, dtype=np.float32)[:, None]
+    dx, dy = columns - np.float32(x), rows - np.float32(y)
+    first = (dx * long_x + dy * long_y) / max(long_radius, 1.0)
+    second = (dy * long_x - dx * long_y) / max(short_radius, 1.0)
+    blob = np.exp(-0.5 * (first**2 + second**2))
+    if feathered > 0.0:
+        past = (rows - gate_y) * kept_y + (columns - gate_x) * kept_x
+        start = np.clip(past / max(feathered, 1.0), 0.0, 1.0)
+        blob = blob * start * start * (3.0 - 2.0 * start)
+    # Over a few rows and a share of the distance, not at a line: a cloud
+    # cut at a line has an edge no cloud has.
+    in_front = np.clip((stands[y0:y1, x0:x1] - ground_row) / feather, 0.0, 1.0)
+    blob = blob * (1.0 - hidden[y0:y1, x0:x1] * in_front)
+    if depth_m is not None and reach_m > 0.0:
+        clear = np.clip(
+            (depth_m[y0:y1, x0:x1] / reach_m - _HIDES_WHOLLY) / (_STANDS_NEARER - _HIDES_WHOLLY),
+            0.0,
+            1.0,
+        )
+        # A vehicle is never the scenery that hides a wake: that is the
+        # outlines' doing, above. Inside its outline, from its edge.
+        inside = np.clip(2.0 * hidden[y0:y1, x0:x1] - 1.0, 0.0, 1.0)
+        blob = blob * np.maximum(clear, inside)
+    spray[y0:y1, x0:x1] += np.float32(strength) * blob
+
+
+def _add_puffs(
+    spray: np.ndarray,
+    puffs: np.ndarray,
+    stands: np.ndarray,
+    hidden: np.ndarray,
+    depth_m: np.ndarray | None,
+    feather: float,
+) -> None:
+    """Add a table of puffs into ``spray``, in the table's order.
+
+    One call into the compiled kernel where there is one, which is what a
+    busy road's thousand puffs want; otherwise :func:`_add_puff` for each.
+    """
+    if not len(puffs):
+        return
+    depth = None if depth_m is None else np.ascontiguousarray(depth_m, dtype=np.float32)
+    if _native.spray_puffs(
+        spray, puffs, stands, hidden, depth, feather, _HIDES_WHOLLY, _STANDS_NEARER
+    ):
+        return
+    for puff in puffs.tolist():
+        _add_puff(spray, puff, stands, hidden, depth, feather)
+
+
+def _puffs_seen(
+    centres: np.ndarray,
+    axes: np.ndarray,
+    radii: np.ndarray,
+    strengths: np.ndarray,
+    ground_rows: np.ndarray,
+    focal_px: float,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    """Puffs that hang in space, as the camera sees them: a table of puffs in the picture.
+
+    ``centres`` is ``(n, 3)``, where each hangs in the camera's frame;
+    ``axes`` ``(n, 3, 3)``, its three own directions (along the wake,
+    across it, up) and ``radii`` ``(n, 3)`` how far it reaches along each,
+    in the scene's units. A Gaussian in space is a Gaussian in the picture,
+    whose shape is the first laid through the lens: the lens's map of each
+    axis, the two-by-two spread they make in the picture, and that
+    spread's own axes by the closed form. Its depth along the line of
+    sight through its middle is taken against its reach across the wake,
+    so that seen square across it is what it was drawn as before.
+
+    One too near the lens, or thinned past seeing, is left out.
+    """
+    height, width = shape
+    deep = centres[:, 2]
+    ahead = deep >= _NEAREST_PUFF_M
+    centres, axes, radii = centres[ahead], axes[ahead], radii[ahead]
+    strengths, ground_rows, deep = strengths[ahead], ground_rows[ahead], deep[ahead]
+    over_x, over_y = centres[:, 0] / deep, centres[:, 1] / deep
+    far = np.sqrt((centres**2).sum(axis=1))
+    magnified = focal_px / deep
+    # Each axis as the lens maps it, by the puff's reach along it.
+    mapped_x = magnified[:, None] * (axes[:, :, 0] - over_x[:, None] * axes[:, :, 2]) * radii
+    mapped_y = magnified[:, None] * (axes[:, :, 1] - over_y[:, None] * axes[:, :, 2]) * radii
+    across, down = (mapped_x**2).sum(axis=1), (mapped_y**2).sum(axis=1)
+    both = (mapped_x * mapped_y).sum(axis=1)
+    along_sight = np.einsum("nk,nak->na", centres, axes) / far[:, None]
+    crossed = ((along_sight / radii) ** 2).sum(axis=1)
+    seen = np.clip(1.0 / np.sqrt(np.maximum(crossed, 1e-9)) / radii[:, 1], *_SEEN_THROUGH)
+    strengths = strengths * seen
+    dense = strengths >= _THINNEST_PUFF
+    # The spread's own axes in the picture: a symmetric two-by-two.
+    middle = 0.5 * (across + down)
+    apart = np.sqrt(0.25 * (across - down) ** 2 + both * both)
+    long_x, long_y = both, middle + apart - across
+    length = np.hypot(long_x, long_y)
+    round_one = length < 1e-9
+    safe = np.where(round_one, 1.0, length)
+    long_x = np.where(round_one, (across >= down).astype(np.float64), long_x / safe)
+    long_y = np.where(round_one, (across < down).astype(np.float64), long_y / safe)
+    table = np.zeros((len(deep), _PUFF_COLUMNS), dtype=np.float64)
+    table[:, 0] = focal_px * over_x + 0.5 * width
+    table[:, 1] = focal_px * over_y + 0.5 * height
+    table[:, 2], table[:, 3] = long_x, long_y
+    table[:, 4] = np.sqrt(np.maximum(middle + apart, 1e-6))
+    table[:, 5] = np.sqrt(np.maximum(middle - apart, 1e-6))
+    table[:, 6], table[:, 7], table[:, 8] = strengths, ground_rows, deep
+    # Out to where it has thinned past seeing, and no further.
+    thinned = np.log(np.maximum(strengths, _THINNEST_PUFF) / (0.25 * _THINNEST_PUFF))
+    table[:, 9] = np.minimum(3.0, np.sqrt(2.0 * thinned))
+    return table[dense]
+
+
 def vehicle_spray(
     frame: RoadFrame,
     vehicles: np.ndarray,
@@ -1400,6 +1577,7 @@ def vehicle_spray(
     traffic: list[RoadVehicle] | None = None,
     depth_m: np.ndarray | None = None,
     ground: GroundView | None = None,
+    lies: list[tuple[np.ndarray, np.ndarray, float] | None] | None = None,
 ) -> np.ndarray:
     """How much spray hangs in front of each pixel, ``(H, W)`` float32, 0 and up.
 
@@ -1421,7 +1599,8 @@ def vehicle_spray(
     that is near it, and is as long as so many of the outline's own
     lengths. That is right for a road seen from high above and wrong for
     one seen from a mast, where a wake came out sideways and several times
-    too long.
+    too long. ``lies`` is :func:`wake_lies` of the same traffic, for a
+    caller that has it already.
 
     **Which end is the tail, and how fast it is going,** come with
     ``traffic`` (:func:`road_vehicles`, which is called with ``linear_rgb``
@@ -1477,149 +1656,47 @@ def vehicle_spray(
     # the other begins, and a wake hidden by one and not by its neighbour
     # showed that edge as a step in the cloud.
     among = (stands >= 0.0).astype(np.float32)
-    shared = cv2.GaussianBlur(stands * among, (0, 0), sigmaX=2.0 * feather)
-    weight = cv2.GaussianBlur(among, (0, 0), sigmaX=2.0 * feather)
+    # Both are soft by nature, and are blurred on a smaller copy.
+    shared = wide_blur(stands * among, 2.0 * feather, work_sigma=_EVENED_AT)
+    weight = wide_blur(among, 2.0 * feather, work_sigma=_EVENED_AT)
     stands = np.where(among > 0.0, shared / np.maximum(weight, 1e-6), -1.0).astype(np.float32)
     roads = int(frame.piece.max())
     share = np.bincount(frame.piece.ravel(), minlength=roads + 1) / frame.piece.size
 
-    def puff(
-        at: tuple[float, float],
-        axes: tuple[np.ndarray, np.ndarray],
-        radii: tuple[float, float],
-        strength: float,
-        ground: float,
-        gate: tuple[float, float, np.ndarray, float] | None = None,
-        reach_m: float = 0.0,
-        radii_out: float = 3.0,
-    ) -> None:
-        """Add one soft puff: a Gaussian with its own two axes and radii.
-
-        ``ground`` is the row of the road it hangs over, which decides what
-        vehicles hide it, and ``reach_m`` how far off its vehicle is, which
-        decides what else does: where the road under a puff is itself
-        hidden, the depth there is that of what hides it. ``gate`` cuts it
-        off behind a line, softly: a point, the direction past it that is
-        kept, and how far the cut is feathered. ``radii_out`` is how
-        many of its radii out it is drawn.
-        """
-        reach = int(radii_out * max(radii)) + 1
-        x0, x1 = max(0, int(at[0]) - reach), min(width, int(at[0]) + reach + 1)
-        y0, y1 = max(0, int(at[1]) - reach), min(height, int(at[1]) + reach + 1)
-        if x0 >= x1 or y0 >= y1:
-            return
-        dx = np.arange(x0, x1, dtype=np.float32)[None, :] - np.float32(at[0])
-        dy = np.arange(y0, y1, dtype=np.float32)[:, None] - np.float32(at[1])
-        first = (dx * axes[0][0] + dy * axes[0][1]) / max(radii[0], 1.0)
-        second = (dx * axes[1][0] + dy * axes[1][1]) / max(radii[1], 1.0)
-        blob = np.exp(-0.5 * (first**2 + second**2))
-        if gate is not None:
-            gate_x, gate_y, kept, feathered = gate
-            past = (np.arange(y0, y1, dtype=np.float32)[:, None] - gate_y) * kept[1] + (
-                np.arange(x0, x1, dtype=np.float32)[None, :] - gate_x
-            ) * kept[0]
-            start = np.clip(past / max(feathered, 1.0), 0.0, 1.0)
-            blob = blob * start * start * (3.0 - 2.0 * start)
-        # Over a few rows and a share of the distance, not at a line: a
-        # cloud cut at a line has an edge no cloud has.
-        in_front = np.clip((stands[y0:y1, x0:x1] - ground) / feather, 0.0, 1.0)
-        blob = blob * (1.0 - hidden[y0:y1, x0:x1] * in_front)
-        if depth_m is not None and reach_m > 0.0:
-            clear = np.clip(
-                (depth_m[y0:y1, x0:x1] / reach_m - _HIDES_WHOLLY)
-                / (_STANDS_NEARER - _HIDES_WHOLLY),
-                0.0,
-                1.0,
-            )
-            # A vehicle is never the scenery that hides a wake: that is
-            # the outlines' doing, above. Inside its outline, from its edge.
-            inside = np.clip(2.0 * hidden[y0:y1, x0:x1] - 1.0, 0.0, 1.0)
-            blob = blob * np.maximum(clear, inside)
-        spray[y0:y1, x0:x1] += np.float32(strength) * blob
-
     # A lorry is known by being wider than the rest.
     typical = float(np.median([vehicle.girth for vehicle in traffic]))
-    lies = None if ground is None else wake_lies(frame, traffic, ground, (height, width))
+    if ground is not None:
+        if lies is None:
+            lies = wake_lies(frame, traffic, ground, (height, width))
+        puffs = _wakes_on_ground(frame, traffic, lies, ground, rng, mask, share, typical)
+        _add_puffs(spray, puffs, stands, hidden, depth_m, feather)
+        # Laid on the ground the puffs of a wake pile up along a line of
+        # sight, and a sum cut off at the most is a slab with an edge: it
+        # nears the most and never reaches it.
+        most = np.float32(_MOST_SPRAY)
+        return np.asarray(most * (1.0 - np.exp(-spray / most)), dtype=np.float32)
 
-    def cloud(
-        centre: np.ndarray,
-        axes: tuple[np.ndarray, np.ndarray, np.ndarray],
-        radii: tuple[float, float, float],
+    drawn: list[tuple[float, ...]] = []
+
+    def puff(
+        at: tuple[float, float],
+        way: np.ndarray,
+        radii: tuple[float, float],
         strength: float,
-        ground_row: float,
-        gate: tuple[float, float, np.ndarray, float] | None,
+        stands_at: float,
+        gate: tuple[float, float, float] | None,
+        reach_m: float,
     ) -> None:
-        """Add one puff that hangs in space, as the camera sees it.
-
-        ``centre`` is where it hangs, in the camera's frame; ``axes`` its
-        three own directions (along the wake, across it, up) and ``radii``
-        how far it reaches along each, in the scene's units. A Gaussian in
-        space is a Gaussian in the picture, whose shape is the first laid
-        through the lens; and its depth along the line of sight through
-        its middle is taken against its reach across the wake, so that
-        seen square across it is what it was drawn as before.
-
-        A busy road is a thousand of these a frame, so it is written out
-        in plain numbers: the lens's map of each axis, the two-by-two
-        spread they make in the picture, and that spread's own axes by
-        the closed form, where arrays and a general solver were most of a
-        wake's time.
-        """
-        deep = float(centre[2])
-        if ground is None or deep < _NEAREST_PUFF_M:
-            return
-        focal = ground.focal_px
-        over_x, over_y = float(centre[0]) / deep, float(centre[1]) / deep
-        far = float(np.sqrt(float(centre[0]) ** 2 + float(centre[1]) ** 2 + deep**2))
-        magnified = focal / deep
-        across = down = both = crossed = 0.0
-        for axis, radius in zip(axes, radii, strict=True):
-            a_x, a_y, a_z = float(axis[0]), float(axis[1]), float(axis[2])
-            # The axis as the lens maps it, by the puff's reach along it.
-            b_x = magnified * (a_x - over_x * a_z) * radius
-            b_y = magnified * (a_y - over_y * a_z) * radius
-            across += b_x * b_x
-            down += b_y * b_y
-            both += b_x * b_y
-            along_sight = (float(centre[0]) * a_x + float(centre[1]) * a_y + deep * a_z) / far
-            crossed += (along_sight / radius) ** 2
-        seen = min(max(1.0 / (max(crossed, 1e-9) ** 0.5) / radii[1], _SEEN_THROUGH[0]),
-                   _SEEN_THROUGH[1])  # fmt: skip
-        strength = strength * seen
-        if strength < _THINNEST_PUFF:
-            return
-        # The spread's own axes in the picture: a symmetric two-by-two.
-        middle = 0.5 * (across + down)
-        apart = (0.25 * (across - down) ** 2 + both * both) ** 0.5
-        long_way = (both, middle + apart - across)
-        length = (long_way[0] ** 2 + long_way[1] ** 2) ** 0.5
-        if length < 1e-9:
-            long_way = (1.0, 0.0) if across >= down else (0.0, 1.0)
-        else:
-            long_way = (long_way[0] / length, long_way[1] / length)
-        at = (focal * over_x + 0.5 * width, focal * over_y + 0.5 * height)
-        puff(
-            at,
-            (long_way, (-long_way[1], long_way[0])),  # type: ignore[arg-type]
-            (max(middle + apart, 1e-6) ** 0.5, max(middle - apart, 1e-6) ** 0.5),
-            strength,
-            ground_row,
-            gate,
-            deep,
-            # Out to where it has thinned past seeing, and no further.
-            min(3.0, (2.0 * float(np.log(strength / (0.25 * _THINNEST_PUFF)))) ** 0.5),
+        """Note one puff in the picture, along ``way``, cut off behind ``gate`` if there is one."""
+        cut = (0.0, 0.0, 0.0, 0.0, 0.0)
+        if gate is not None:
+            cut = (gate[0], gate[1], float(way[0]), float(way[1]), max(gate[2], 1.0))
+        drawn.append(
+            (at[0], at[1], float(way[0]), float(way[1]), *radii, strength, stands_at, reach_m, 3.0)
+            + cut
         )
 
-    def in_picture(point: np.ndarray) -> tuple[float, float] | None:
-        """The column and row a point in space is seen at; ``None`` too near the lens."""
-        if ground is None or float(point[2]) < _NEAREST_PUFF_M:
-            return None
-        return (
-            ground.focal_px * float(point[0] / point[2]) + 0.5 * width,
-            ground.focal_px * float(point[1] / point[2]) + 0.5 * height,
-        )
-
-    for number, vehicle in enumerate(traffic):
+    for vehicle in traffic:
         # Not on a scrap of road, whose direction is a guess: a slip road
         # cut by the frame's edge, the far carriageway behind a barrier.
         if share[vehicle.road] < _LEAST_ROAD_FOR_SPRAY:
@@ -1633,78 +1710,6 @@ def vehicle_spray(
         foot = float(rows.max())
         far = 0.0 if depth_m is None else float(depth_m[row, column])
         lie = _vehicle_lie(frame, vehicle)
-        if lies is not None and ground is not None:
-            placed = lies[number]
-            # One lying across its road trails nothing, unless its own
-            # lamps say which way it points: the road's direction in the
-            # picture is one model's for the whole frame, and a vehicle on
-            # a slip road lies across that and along its own.
-            if placed is None or (lie is None and _lamp_pair(vehicle) is None):
-                continue
-            # On the ground, in the vehicle's own metres.
-            rear, pointing, metre = placed
-            across_it = np.cross(ground.up, pointing)
-            across_it = across_it / max(float(np.linalg.norm(across_it)), 1e-6)
-            bulk = float(np.clip(vehicle.girth / max(typical, 1e-6), 0.7, 2.0)) ** 2
-            half = 0.5 * _CAR_WIDTH_M * metre
-            high_m = _CAR_HEIGHT_M * metre * min(bulk, 1.6)
-            long_m = _CAR_LENGTH_M * metre
-            wake_m = (
-                float(np.clip(vehicle.speed_kmh / 3.6 * _WAKE_SECONDS / _CAR_LENGTH_M, 0.3, 6.0))
-                * long_m
-            )
-            # Trailing towards the camera, the wake is this side of its
-            # own vehicle; trailing away, it is behind it and hidden by it.
-            nearer = float(pointing @ rear) > 0.0
-            solid = (pointing, across_it, ground.up)
-            for step in range(_WAKE_PUFFS):
-                run = (step + 0.5) / _WAKE_PUFFS
-                sway = float(rng.normal(0.0, 0.25)) * half
-                gust = float(rng.uniform(0.55, 1.45))
-                low = rear - wake_m * run * pointing + sway * across_it
-                seen_at = in_picture(low)
-                if seen_at is None:
-                    continue
-                x, y = seen_at
-                if not (0 <= int(y) < height and 0 <= int(x) < width):
-                    continue
-                if frame.piece[int(y), int(x)] != vehicle.road and mask[int(y), int(x)] == 0:
-                    # Off its road: the wake ends where the road does.
-                    break
-                wide_m = (0.9 + 0.9 * run) * half
-                lengthways = max(0.9 * wake_m / _WAKE_PUFFS, 0.3 * metre)
-                rise = min(1.0, 0.35 + 1.3 * run) * high_m
-                # It gathers over its first metres: nothing of it is ahead
-                # of the tail, where the vehicle is.
-                gathered = min(1.0, (step + 0.5) / 2.0)
-                thin = (
-                    _PUFF_ON_GROUND * gathered * np.exp(-_WAKE_DECAY * run) * gust * amount * bulk
-                )
-                row_of_it = max(y, foot + 1.0) if nearer else y
-                for lift, share_up in ((0.0, 1.0), (0.45, 0.6), (0.9, 0.3)):
-                    cloud(
-                        low + lift * rise * ground.up,
-                        solid,
-                        (lengthways, wide_m, max(0.25 * metre, 0.45 * rise)),
-                        thin * share_up,
-                        row_of_it,
-                        None,
-                    )
-            if nearer:
-                # The tufts at the rear wheels: low, short and dense.
-                for wheel in (-0.7, 0.7):
-                    cloud(
-                        rear
-                        + wheel * half * across_it
-                        - 0.12 * long_m * pointing
-                        + 0.25 * metre * ground.up,
-                        solid,
-                        (0.2 * long_m, 0.42 * half, 0.3 * metre),
-                        _TUFT * min(1.0, amount**0.5),
-                        foot + 1.0,
-                        None,
-                    )
-            continue
         if lie is None:
             continue
         centre, offsets, heading = lie
@@ -1722,7 +1727,7 @@ def vehicle_spray(
         reach_along = float((offsets @ way).max())
         tail_x = float(centre[0] + way[0] * reach_along * (1.0 if towards else 0.6))
         tail_y = float(centre[1] + way[1] * reach_along * (1.0 if towards else 0.6))
-        gate = (tail_x, tail_y, way, 0.35 * long_px)
+        gate = (tail_x, tail_y, 0.35 * long_px)
         wide_here = max(float(frame.width_px[row, column]), 1.0)
         # As tall as its vehicle, which an outline of several run together
         # is not: no taller than a lorry is against its width.
@@ -1759,13 +1764,13 @@ def vehicle_spray(
             rise = min(1.0, 0.35 + 1.3 * run) * high * scale * min(size, 1.6)
             sway = float(rng.normal(0.0, 0.25)) * half_wide * scale
             gust = float(rng.uniform(0.55, 1.45))
-            thin = np.exp(-_WAKE_DECAY * run) * gust * amount * size
+            thin = float(np.exp(-_WAKE_DECAY * run)) * gust * amount * size
             # Trailing towards the camera it is this side of its own
             # vehicle, whatever the outline's lowest row says.
             stands_at = max(y, foot + 1.0) if towards else y
-            for lift, share_up in ((0.0, 1.0), (0.45, 0.6), (0.9, 0.3)):
-                at = (x + side[0] * sway, y + side[1] * sway - lift * rise)
-                puff(at, (way, side), (lengthways, across), thin * share_up, stands_at, gate, far)
+            for lift, share_up in _PUFF_LIFTS:
+                at = (float(x + side[0] * sway), float(y + side[1] * sway - lift * rise))
+                puff(at, way, (lengthways, across), thin * share_up, stands_at, gate, far)
 
         # The tufts. Coarse drops are flung off the back of each tyre, and
         # the air stops them within a metre or two and below half a metre:
@@ -1774,18 +1779,145 @@ def vehicle_spray(
         if towards:
             for wheel in (-0.7, 0.7):
                 at = (
-                    tail_x + side[0] * wheel * half_wide + way[0] * 0.12 * long_px,
-                    tail_y + side[1] * wheel * half_wide + way[1] * 0.12 * long_px - 0.08 * tall,
+                    float(tail_x + side[0] * wheel * half_wide + way[0] * 0.12 * long_px),
+                    float(
+                        tail_y
+                        + side[1] * wheel * half_wide
+                        + way[1] * 0.12 * long_px
+                        - 0.08 * tall
+                    ),
                 )
                 radii = (0.2 * long_px, 0.42 * half_wide)
-                puff(at, (way, side), radii, _TUFT * min(1.0, amount**0.5), foot + 1.0, None, far)
-    if ground is not None:
-        # Laid on the ground the puffs of a wake pile up along a line of
-        # sight, and a sum cut off at the most is a slab with an edge: it
-        # nears the most and never reaches it.
-        most = np.float32(_MOST_SPRAY)
-        return np.asarray(most * (1.0 - np.exp(-spray / most)), dtype=np.float32)
+                puff(at, way, radii, _TUFT * min(1.0, amount**0.5), foot + 1.0, None, far)
+    table = np.array(drawn, dtype=np.float64).reshape(-1, _PUFF_COLUMNS)
+    _add_puffs(spray, table, stands, hidden, depth_m, feather)
     return np.minimum(spray, np.float32(_MOST_SPRAY))
+
+
+def _wakes_on_ground(
+    frame: RoadFrame,
+    traffic: list[RoadVehicle],
+    lies: list[tuple[np.ndarray, np.ndarray, float] | None],
+    ground: GroundView,
+    rng: np.random.Generator,
+    mask: np.ndarray,
+    share: np.ndarray,
+    typical: float,
+) -> np.ndarray:
+    """Every vehicle's wake laid on the ground, as a table of puffs in the picture.
+
+    Each wake is so many puffs along the line behind its vehicle, in the
+    vehicle's own metres, each at three heights, and two tufts at the rear
+    wheels of a vehicle whose wake trails towards the camera. A wake's
+    puffs are worked out together, and all the frame's are laid through
+    the lens together (:func:`_puffs_seen`): a busy road is a thousand of
+    them.
+    """
+    height, width = mask.shape
+    focal, up = ground.focal_px, ground.up
+    steps = np.arange(_WAKE_PUFFS)
+    runs = (steps + 0.5) / _WAKE_PUFFS
+    # It gathers over its first metres: nothing of it is ahead of the
+    # tail, where the vehicle is.
+    gathered = np.minimum(1.0, (steps + 0.5) / 2.0)
+    lifts = np.array([lift for lift, _share in _PUFF_LIFTS])
+    shares_up = np.array([share_up for _lift, share_up in _PUFF_LIFTS])
+    hung: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+    for vehicle, placed in zip(traffic, lies, strict=True):
+        # Not on a scrap of road, whose direction is a guess: a slip road
+        # cut by the frame's edge, the far carriageway behind a barrier.
+        if share[vehicle.road] < _LEAST_ROAD_FOR_SPRAY:
+            continue
+        amount = spray_amount(vehicle.speed_kmh)
+        if amount < _LEAST_AMOUNT:
+            continue
+        # One lying across its road trails nothing, unless its own lamps
+        # say which way it points: the road's direction in the picture is
+        # one model's for the whole frame, and a vehicle on a slip road
+        # lies across that and along its own.
+        if placed is None or (
+            _lamp_pair(vehicle) is None and _vehicle_lie(frame, vehicle) is None
+        ):
+            continue
+        foot = float(vehicle.rows.max())
+        # On the ground, in the vehicle's own metres.
+        rear, pointing, metre = placed
+        across_it = np.cross(up, pointing)
+        across_it = across_it / max(float(np.linalg.norm(across_it)), 1e-6)
+        bulk = float(np.clip(vehicle.girth / max(typical, 1e-6), 0.7, 2.0)) ** 2
+        half = 0.5 * _CAR_WIDTH_M * metre
+        high_m = _CAR_HEIGHT_M * metre * min(bulk, 1.6)
+        long_m = _CAR_LENGTH_M * metre
+        wake_m = (
+            float(np.clip(vehicle.speed_kmh / 3.6 * _WAKE_SECONDS / _CAR_LENGTH_M, 0.3, 6.0))
+            * long_m
+        )
+        # Trailing towards the camera, the wake is this side of its own
+        # vehicle; trailing away, it is behind it and hidden by it.
+        nearer = float(pointing @ rear) > 0.0
+        solid = np.stack([pointing, across_it, up])
+        # Turbulent, so no two puffs of it are alike: each one's sway to
+        # the side and its gust.
+        rough = np.array(
+            [(rng.normal(0.0, 0.25), rng.uniform(0.55, 1.45)) for _ in range(_WAKE_PUFFS)]
+        )
+        low = rear - np.outer(wake_m * runs, pointing) + np.outer(rough[:, 0] * half, across_it)
+        ahead = low[:, 2] >= _NEAREST_PUFF_M
+        deep = np.where(ahead, low[:, 2], 1.0)
+        x = focal * (low[:, 0] / deep) + 0.5 * width
+        y = focal * (low[:, 1] / deep) + 0.5 * height
+        column, row = np.trunc(x), np.trunc(y)
+        inside = ahead & (row >= 0) & (row < height) & (column >= 0) & (column < width)
+        at_row = np.where(inside, row, 0).astype(np.intp)
+        at_column = np.where(inside, column, 0).astype(np.intp)
+        # Off its road: the wake ends where the road does.
+        off = inside & (frame.piece[at_row, at_column] != vehicle.road)
+        off &= mask[at_row, at_column] == 0
+        kept = inside & (np.cumsum(off) == 0)
+        if kept.any():
+            rise = (np.minimum(1.0, 0.35 + 1.3 * runs) * high_m)[kept]
+            thin = _PUFF_ON_GROUND * gathered * np.exp(-_WAKE_DECAY * runs) * rough[:, 1]
+            thin = (thin * amount * bulk)[kept]
+            stands_at = (np.maximum(y, foot + 1.0) if nearer else y)[kept]
+            count = int(kept.sum())
+            centres = low[kept][:, None, :] + (rise[:, None] * lifts[None, :])[..., None] * up
+            radii = np.empty((count, len(lifts), 3))
+            radii[..., 0] = max(0.9 * wake_m / _WAKE_PUFFS, 0.3 * metre)
+            radii[..., 1] = ((0.9 + 0.9 * runs) * half)[kept][:, None]
+            radii[..., 2] = np.maximum(0.25 * metre, 0.45 * rise)[:, None]
+            hung.append(
+                (
+                    centres.reshape(-1, 3),
+                    np.broadcast_to(solid, (count * len(lifts), 3, 3)),
+                    radii.reshape(-1, 3),
+                    (thin[:, None] * shares_up[None, :]).ravel(),
+                    np.repeat(stands_at, len(lifts)),
+                )
+            )
+        if nearer:
+            # The tufts at the rear wheels: low, short and dense.
+            wheels = np.array([-0.7, 0.7])
+            centres = (
+                rear
+                + np.outer(wheels * half, across_it)
+                - 0.12 * long_m * pointing
+                + 0.25 * metre * up
+            )
+            hung.append(
+                (
+                    centres,
+                    np.broadcast_to(solid, (2, 3, 3)),
+                    np.broadcast_to([0.2 * long_m, 0.42 * half, 0.3 * metre], (2, 3)),
+                    np.full(2, _TUFT * min(1.0, amount**0.5)),
+                    np.full(2, foot + 1.0),
+                )
+            )
+    if not hung:
+        return np.zeros((0, _PUFF_COLUMNS), dtype=np.float64)
+    centres, axes, radii, strengths, rows = (
+        np.concatenate(column) for column in zip(*hung, strict=True)
+    )
+    return _puffs_seen(centres, axes, radii, strengths, rows, focal, (height, width))
 
 
 def _placed_lamps(
@@ -2090,7 +2222,11 @@ _LINE_LENGTH = 0.012
 
 
 def painted_lines(
-    linear_rgb: np.ndarray, frame: RoadFrame, road: np.ndarray, on_road: np.ndarray | None
+    linear_rgb: np.ndarray,
+    frame: RoadFrame,
+    road: np.ndarray,
+    on_road: np.ndarray | None,
+    bright: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Which pixels of a road are paint that runs along it, ``(H, W)`` bool.
 
@@ -2102,38 +2238,26 @@ def painted_lines(
 
     ``road`` is the mask of the carriageway itself and ``on_road`` of what
     stands on it; paint is looked for on the first and not near the second,
-    whose pale roofs are thin and bright as well.
+    whose pale roofs are thin and bright as well. ``bright`` is
+    :func:`_thin_things` of the picture, for a caller that has it already.
     """
     height, width = road.shape
     where = (road > 0.5) & (frame.weight > 0.5)
     if on_road is not None:
         near = cv2.dilate((on_road > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8))
         where &= near == 0
-    parts, count = _thin_bright(linear_rgb, where)
-    thin = parts > 0
-    stats = np.zeros((count, 5), dtype=np.int64)
-    stats[:, cv2.CC_STAT_AREA] = np.bincount(parts.ravel(), minlength=count)
+    parts, count = _thin_bright(linear_rgb, where, bright)
     keep = np.zeros(count, dtype=bool)
-    rows, columns = np.nonzero(thin)
-    part = parts[rows, columns]
-    order = np.argsort(part, kind="stable")
-    rows, columns, part = rows[order], columns[order], part[order]
-    starts = np.searchsorted(part, np.arange(1, count + 1))
-    for index in range(1, count):
-        if stats[index, cv2.CC_STAT_AREA] < _LINE_FEWEST_PIXELS:
-            continue
-        ys = rows[starts[index - 1] : starts[index]].astype(np.float64)
-        xs = columns[starts[index - 1] : starts[index]].astype(np.float64)
-        spread = np.cov(np.stack([xs, ys]))
-        values, vectors = np.linalg.eigh(spread)
-        long_enough = 4.0 * float(np.sqrt(values[1])) >= _LINE_LENGTH * float(
-            np.hypot(height, width)
-        )
-        if not long_enough or values[1] < _LINE_ELONGATION**2 * max(values[0], 0.08):
-            continue
-        way = frame.along[int(ys.mean()), int(xs.mean())]
-        if abs(float(vectors[0, 1] * way[0] + vectors[1, 1] * way[1])) >= _LINE_ALONG:
-            keep[index] = True
+    columns, rows, begins, ends = _pixels_by_part(parts, count)
+    long = np.flatnonzero(ends - begins >= max(_LINE_FEWEST_PIXELS, 2))
+    if long.size:
+        middle_x, middle_y, spread = _spreads(columns, rows, begins[long], ends[long])
+        small, large, axis_x, axis_y = _long_axes(*spread)
+        long_enough = 4.0 * np.sqrt(large) >= _LINE_LENGTH * float(np.hypot(height, width))
+        thin_enough = large >= _LINE_ELONGATION**2 * np.maximum(small, 0.08)
+        way = frame.along[middle_y.astype(np.intp), middle_x.astype(np.intp)]
+        lies_along = np.abs(axis_x * way[:, 0] + axis_y * way[:, 1]) >= _LINE_ALONG
+        keep[long + 1] = long_enough & thin_enough & lies_along
     lines: np.ndarray = keep[parts]
     return lines
 
@@ -2292,15 +2416,27 @@ class RoadModel(NamedTuple):
         )
 
 
-def _thin_bright(linear_rgb: np.ndarray, where: np.ndarray) -> tuple[np.ndarray, int]:
-    """Thin things brighter than the road round them: a label for each, and how many labels."""
-    height, width = where.shape
+def _thin_things(linear_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A picture's lightness, and that with everything thin taken off it.
+
+    What :func:`_thin_bright` looks for paint in. It is the picture's and
+    not the road's: a road is read more than once from one frame, and
+    this is most of what each reading costs.
+    """
+    height, width = linear_rgb.shape[:2]
     luma = np.sqrt(
         np.clip(linear_rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32), 0.0, 1.0)
     ).astype(np.float32)
     reach = max(3, round(_LINE_WIDTH * float(np.hypot(height, width))) | 1)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach))
-    without = cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
+    return luma, cv2.morphologyEx(luma, cv2.MORPH_OPEN, kernel)
+
+
+def _thin_bright(
+    linear_rgb: np.ndarray, where: np.ndarray, bright: tuple[np.ndarray, np.ndarray] | None = None
+) -> tuple[np.ndarray, int]:
+    """Thin things brighter than the road round them: a label for each, and how many labels."""
+    luma, without = _thin_things(linear_rgb) if bright is None else bright
     if int(where.sum()) < 64:
         return np.zeros(where.shape, dtype=np.int32), 1
     typical = float(np.median(luma[where]))
@@ -2315,6 +2451,93 @@ def _thin_bright(linear_rgb: np.ndarray, where: np.ndarray) -> tuple[np.ndarray,
         return np.zeros(where.shape, dtype=np.int32), 1
     count, parts = cv2.connectedComponents(thin.astype(np.uint8), connectivity=8)
     return parts, count
+
+
+def _pixels_by_part(
+    parts: np.ndarray, count: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The pixels of a labelled picture, sorted by label: columns, rows, and each label's stretch.
+
+    ``parts`` is a labelling with ``count`` labels, 0 being none. The last
+    two arrays are where label ``i + 1``'s pixels begin and end in the
+    first two. One pass and one sort for the whole picture, where asking
+    for each label's pixels in turn is a pass over the picture for each.
+    """
+    rows, columns = np.nonzero(parts)
+    part = parts[rows, columns]
+    order = np.argsort(part, kind="stable")
+    bounds = np.searchsorted(part[order], np.arange(1, count + 1))
+    return columns[order], rows[order], bounds[:-1], bounds[1:]
+
+
+def _gathered(begins: np.ndarray, ends: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Stretches of an array laid end to end: which elements, where each begins, whose each is.
+
+    Stretch ``i`` is the elements ``begins[i]`` to ``ends[i]`` and is not
+    empty. The first array picks all of them out in turn, the second is
+    where each stretch begins among those (what ``reduceat`` wants), and
+    the third the stretch each one belongs to.
+    """
+    lengths = ends - begins
+    cuts = np.concatenate([[0], np.cumsum(lengths)[:-1]])
+    which = np.repeat(np.arange(len(begins)), lengths)
+    taken = np.arange(int(lengths.sum())) + np.repeat(begins - cuts, lengths)
+    return taken, cuts, which
+
+
+def _spreads(
+    columns: np.ndarray, rows: np.ndarray, begins: np.ndarray, ends: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """The middle of each stretch of pixels, and its spread about it.
+
+    Stretch ``i`` is ``columns[begins[i]:ends[i]]`` and the same of
+    ``rows``, of two pixels or more. Its spread is the covariance of its
+    columns and rows, as ``np.cov`` has it: the variance across, the
+    variance down, and the two together.
+    """
+    count = (ends - begins).astype(np.float64)
+    taken, cuts, which = _gathered(begins, ends)
+    xs, ys = columns[taken].astype(np.float64), rows[taken].astype(np.float64)
+    middle_x = np.add.reduceat(xs, cuts) / count
+    middle_y = np.add.reduceat(ys, cuts) / count
+    xs -= middle_x[which]
+    ys -= middle_y[which]
+    freedom = count - 1.0
+    return (
+        middle_x,
+        middle_y,
+        (
+            np.add.reduceat(xs * xs, cuts) / freedom,
+            np.add.reduceat(ys * ys, cuts) / freedom,
+            np.add.reduceat(xs * ys, cuts) / freedom,
+        ),
+    )
+
+
+def _long_axes(
+    across: np.ndarray, down: np.ndarray, both: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The long way of each two-by-two spread: its small and large axes, and the large one's way.
+
+    The spread's own values and the unit vector of the larger, pointing
+    down the frame, by the closed form for a symmetric two-by-two: a
+    road's cues are hundreds of these a frame, and a general solver called
+    for each was a third of reading them.
+    """
+    middle = 0.5 * (across + down)
+    apart = np.sqrt(0.25 * (across - down) ** 2 + both * both)
+    large, small = middle + apart, middle - apart
+    # Either column of the spread less the small value is along the large
+    # one's vector; the longer of the two is the better found.
+    wide = across >= down
+    axis_x = np.where(wide, large - down, both)
+    axis_y = np.where(wide, both, large - across)
+    length = np.hypot(axis_x, axis_y)
+    round_one = length < 1e-12
+    axis_x = np.where(round_one, 1.0, axis_x / np.where(round_one, 1.0, length))
+    axis_y = np.where(round_one, 0.0, axis_y / np.where(round_one, 1.0, length))
+    turned = np.where(axis_y < 0.0, -1.0, 1.0)
+    return small, large, axis_x * turned, axis_y * turned
 
 
 def paint_on(linear_rgb: np.ndarray, road: np.ndarray) -> np.ndarray:
@@ -2332,7 +2555,11 @@ def paint_on(linear_rgb: np.ndarray, road: np.ndarray) -> np.ndarray:
 
 
 def road_cues(
-    linear_rgb: np.ndarray, road: np.ndarray, on_road: np.ndarray, vehicles: np.ndarray | None
+    linear_rgb: np.ndarray,
+    road: np.ndarray,
+    on_road: np.ndarray,
+    vehicles: np.ndarray | None,
+    bright: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Everything in a picture that says which way its road runs, ``(N, 5)``.
 
@@ -2349,33 +2576,43 @@ def road_cues(
       worth, which from most cameras is roughly the way it is driving.
 
     None of them is trusted. They are handed to a robust fit
-    (:func:`fit_road_model`), which keeps the ones that agree.
+    (:func:`fit_road_model`), which keeps the ones that agree. ``bright``
+    is :func:`_thin_things` of the picture, for a caller that has it
+    already.
     """
     height, width = road.shape
-    cues: list[tuple[float, float, float, float, float]] = []
+    cues: list[np.ndarray] = []
 
-    def add(columns: np.ndarray, rows: np.ndarray, weight: float, least: float) -> None:
-        """One cue from a set of pixels: their middle, their long axis, if long enough."""
-        if len(rows) < 3:
-            return
-        values, vectors = np.linalg.eigh(np.cov(np.stack([columns, rows]).astype(np.float64)))
-        if values[1] < least * least * max(values[0], 0.08):
-            return
-        axis = vectors[:, 1] * (1.0 if vectors[1, 1] >= 0.0 else -1.0)
-        cues.append((float(columns.mean()), float(rows.mean()), axis[0], axis[1], weight))
+    def add(
+        middle_x: np.ndarray,
+        middle_y: np.ndarray,
+        spread: tuple[np.ndarray, np.ndarray, np.ndarray],
+        weight: np.ndarray,
+        least: float,
+    ) -> None:
+        """A cue from each set of pixels that is long enough: its middle and its long axis."""
+        small, large, axis_x, axis_y = _long_axes(*spread)
+        long = large >= least * least * np.maximum(small, 0.08)
+        found = np.stack([middle_x, middle_y, axis_x, axis_y, weight], axis=1)
+        cues.append(found[long])
 
     carriageway = (road > 0.5) & (
         cv2.dilate((on_road > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) == 0
     )
-    parts, count = _thin_bright(linear_rgb, carriageway)
-    rows, columns = np.nonzero(parts)
-    order = np.argsort(parts[rows, columns], kind="stable")
-    rows, columns = rows[order], columns[order]
-    starts = np.searchsorted(parts[rows, columns], np.arange(1, count + 1))
-    for index in range(1, count):
-        ys, xs = rows[starts[index - 1] : starts[index]], columns[starts[index - 1] : starts[index]]
-        if len(ys) >= _LINE_FEWEST_PIXELS:
-            add(xs, ys, _CUE_PAINT * float(np.ptp(ys) + np.ptp(xs)), _LINE_ELONGATION)
+    parts, count = _thin_bright(linear_rgb, carriageway, bright)
+    columns, rows, begins, ends = _pixels_by_part(parts, count)
+    long = ends - begins >= max(_LINE_FEWEST_PIXELS, 3)
+    if long.any():
+        begins, ends = begins[long], ends[long]
+        # A pixel of weight for a pixel of length: how far it runs each way.
+        taken, cuts, _which = _gathered(begins, ends)
+        runs = [
+            np.maximum.reduceat(axis[taken], cuts) - np.minimum.reduceat(axis[taken], cuts)
+            for axis in (rows, columns)
+        ]
+        middle_x, middle_y, spread = _spreads(columns, rows, begins, ends)
+        weight = _CUE_PAINT * (runs[0] + runs[1]).astype(np.float64)
+        add(middle_x, middle_y, spread, weight, _LINE_ELONGATION)
 
     # The outline, in stretches a fortieth of the diagonal long.
     whole = ((road > 0.5) | (on_road > 0.5)).astype(np.uint8)
@@ -2385,22 +2622,37 @@ def road_cues(
         points = contour.reshape(-1, 2)
         if len(points) < 4 * stretch:
             continue
-        for start in range(0, len(points) - stretch, stretch):
-            edge_xs = points[start : start + stretch, 0]
-            edge_ys = points[start : start + stretch, 1]
-            on_border = (
-                (edge_xs <= 1) | (edge_ys <= 1) | (edge_xs >= width - 2) | (edge_ys >= height - 2)
-            )
-            if not on_border.any():
-                add(edge_xs, edge_ys, _CUE_EDGE * float(stretch), 2.5)
+        pieces = len(range(0, len(points) - stretch, stretch))
+        edge = points[: pieces * stretch].reshape(pieces, stretch, 2)
+        edge_xs, edge_ys = edge[..., 0], edge[..., 1]
+        on_border = (
+            (edge_xs <= 1) | (edge_ys <= 1) | (edge_xs >= width - 2) | (edge_ys >= height - 2)
+        ).any(axis=1)
+        if on_border.all():
+            continue
+        xs = edge_xs[~on_border].astype(np.float64)
+        ys = edge_ys[~on_border].astype(np.float64)
+        middle_x, middle_y = xs.mean(axis=1), ys.mean(axis=1)
+        xs -= middle_x[:, None]
+        ys -= middle_y[:, None]
+        spread = (
+            (xs * xs).sum(axis=1) / (stretch - 1.0),
+            (ys * ys).sum(axis=1) / (stretch - 1.0),
+            (xs * ys).sum(axis=1) / (stretch - 1.0),
+        )
+        add(middle_x, middle_y, spread, np.full(len(xs), _CUE_EDGE * float(stretch)), 2.5)
 
     if vehicles is not None:
         count, parts = cv2.connectedComponents((vehicles > 0.5).astype(np.uint8), connectivity=8)
-        for index in range(1, count):
-            ys, xs = np.nonzero(parts == index)
-            if len(ys) >= _FEWEST_VEHICLE_PIXELS:
-                add(xs, ys, _CUE_VEHICLE * float(np.sqrt(len(ys))), 1.3)
-    return np.array(cues, dtype=np.float64).reshape(-1, 5)
+        columns, rows, begins, ends = _pixels_by_part(parts, count)
+        large = ends - begins >= max(_FEWEST_VEHICLE_PIXELS, 3)
+        if large.any():
+            begins, ends = begins[large], ends[large]
+            middle_x, middle_y, spread = _spreads(columns, rows, begins, ends)
+            add(middle_x, middle_y, spread, _CUE_VEHICLE * np.sqrt(ends - begins), 1.3)
+    if not cues:
+        return np.zeros((0, 5), dtype=np.float64)
+    return np.concatenate(cues).astype(np.float64).reshape(-1, 5)
 
 
 def fit_road_model(
@@ -2452,26 +2704,43 @@ def fit_road_model(
             slope = (u - found[0]) / t - 2.0 * found[1] / (t * t)  # noqa: B023
             return np.asarray((dx - dy * slope) / np.sqrt(1.0 + slope * slope))  # noqa: B023
 
+        def shares(centres: np.ndarray, bends: np.ndarray) -> np.ndarray:
+            """The share of the cues, by weight, that lies along each of many roads at once."""
+            slope = (u - centres[:, None]) / t - 2.0 * bends[:, None] / (t * t)  # noqa: B023
+            away = (dx - dy * slope) / np.sqrt(1.0 + slope * slope)  # noqa: B023
+            along = (np.abs(away) < tolerance) * weight  # noqa: B023
+            return np.asarray(along.sum(axis=1) / weight.sum())  # noqa: B023
+
         # Two cues make a road. Many pairs are tried, and the road kept is
         # the one most of the others lie along: a slip road, a kerb's end
-        # and a crossing are each a few cues, and never most of them.
+        # and a crossing are each a few cues, and never most of them. All
+        # the pairs are scored together, a row of a matrix each: taken one
+        # at a time they were most of what reading a road cost.
         chosen = rng.choice(len(u), size=(_PAIRS_TRIED, 2), p=weight / weight.sum())
-        agreed, start = 0.0, None
-        straight, start_straight = 0.0, None
-        for first, second in chosen:
-            # One cue makes a straight road, which is tried first.
-            if abs(float(design[first, 0])) > 1e-9:
-                found = np.array([target[first] / design[first, 0] / scale[0], 0.0])
-                share = float(weight[np.abs(off(found)) < tolerance].sum() / weight.sum())
-                if share > straight:
-                    straight, start_straight = share, found
-            pair = design[[first, second]]
-            if first == second or abs(float(np.linalg.det(pair))) < 1e-9:
-                continue
-            found = np.linalg.solve(pair, target[[first, second]]) / scale
-            share = float(weight[np.abs(off(found)) < tolerance].sum() / weight.sum())
-            if share > agreed:
-                agreed, start = share, found
+        first, second = chosen[:, 0], chosen[:, 1]
+        start = start_straight = None
+        agreed = straight = 0.0
+        # One cue makes a straight road, which is tried first.
+        level = np.flatnonzero(np.abs(design[first, 0]) > 1e-9)
+        if level.size:
+            centres = target[first[level]] / design[first[level], 0] / scale[0]
+            share = shares(centres, np.zeros(len(centres)))
+            if float(share.max()) > 0.0:
+                straight = float(share.max())
+                start_straight = np.array([centres[int(share.argmax())], 0.0])
+        ours, theirs = design[first], design[second]
+        crossed = ours[:, 0] * theirs[:, 1] - ours[:, 1] * theirs[:, 0]
+        apart = np.flatnonzero((first != second) & (np.abs(crossed) >= 1e-9))
+        if apart.size:
+            ours, theirs, crossed = ours[apart], theirs[apart], crossed[apart]
+            one, other = target[first[apart]], target[second[apart]]
+            centres = (one * theirs[:, 1] - ours[:, 1] * other) / crossed / scale[0]
+            bends = (ours[:, 0] * other - one * theirs[:, 0]) / crossed / scale[1]
+            share = shares(centres, bends)
+            if float(share.max()) > 0.0:
+                agreed = float(share.max())
+                best_pair = int(share.argmax())
+                start = np.array([centres[best_pair], bends[best_pair]])
         # A bend has to earn itself: with one more number to choose, some
         # curve always passes through a few more cues than a straight road.
         if start is None or (start_straight is not None and agreed < straight + _BEND_EARNS):
@@ -2502,23 +2771,31 @@ def model_frame(model: RoadModel, road: np.ndarray, on_road: np.ndarray) -> Road
     road of its own, and no lane of one crosses to the other.
     """
     height, width = road.shape
-    rows, columns = np.mgrid[0:height, 0:width]
-    below = rows - model.horizon
-    seen = below > _BELOW_HORIZON * height
-    offset = np.where(seen, model.offset(columns, rows), 0.0)
-    whole = ((road > 0.5) | (on_road > 0.5)) & seen
+    # A pixel has a place on the road when its row is far enough below the
+    # horizon, and all that follows is worked out on those rows alone: a
+    # row's distance below the horizon is the row's, so it is a column of
+    # numbers, and a pixel's place across the road is that against a row of
+    # them.
+    row_below = np.arange(height, dtype=np.float64) - model.horizon
+    top = int(np.searchsorted(row_below, _BELOW_HORIZON * height, side="right"))
+    below = row_below[top:, None]
+    columns = np.arange(width, dtype=np.float64)[None, :]
+    whole = (road[top:] > 0.5) | (on_road[top:] > 0.5)
     if int(whole.sum()) < _LEAST_SHARE * height * width:
         return None
+    offset = (columns - model.centre - model.bend / below) / below
     low, high = np.percentile(offset[whole], [0.5, 99.5])
     if not high - low > 1e-9:
         return None
     bins = 240
-    at = np.clip(((offset - low) / (high - low) * bins).astype(np.int64), -1, bins)
-    inside = seen & (at >= 0) & (at < bins)
+    # One past each end for what lies outside the road's stretch.
+    at = np.clip(((offset - low) / (high - low) * bins).astype(np.int64), -1, bins) + 1
     # A row is a row: each counts the same for every position it reaches.
-    per_row = 1.0 / np.maximum(below, 1.0)
-    of_road = np.bincount(at[inside & whole], weights=per_row[inside & whole], minlength=bins)
-    of_frame = np.bincount(at[inside], weights=per_row[inside], minlength=bins)
+    per_row = np.broadcast_to(1.0 / np.maximum(below, 1.0), at.shape)
+    flat = at.ravel()
+    of_road = np.bincount(flat, weights=(per_row * whole).ravel(), minlength=bins + 2)[1:-1]
+    of_frame = np.bincount(flat, weights=per_row.ravel(), minlength=bins + 2)[1:-1]
+    pixels = np.bincount(flat, weights=whole.ravel(), minlength=bins + 2)[1:-1]
     solid = cv2.GaussianBlur(
         (of_road / np.maximum(of_frame, 1e-9)).astype(np.float32).reshape(1, -1), (0, 0), 1.2
     ).ravel()
@@ -2528,26 +2805,50 @@ def model_frame(model: RoadModel, road: np.ndarray, on_road: np.ndarray) -> Road
     ends = np.flatnonzero(np.diff(padded) == -1)
     found = []
     for start, end in zip(starts, ends, strict=True):
-        body = inside & whole & (at >= start) & (at < end)
-        if end - start >= 4 and int(body.sum()) >= _LEAST_SHARE * height * width:
-            found.append((int(body.sum()), body, start, end))
+        area = int(pixels[start:end].sum())
+        if end - start >= 4 and area >= _LEAST_SHARE * height * width:
+            found.append((area, start, end))
     if not found:
         return None
     found.sort(key=lambda entry: -entry[0])
-    across = np.zeros((height, width), dtype=np.float32)
-    span = np.ones((height, width), dtype=np.float32)
-    piece = np.zeros((height, width), dtype=np.int32)
-    heights_wide = np.zeros(min(len(found), _MOST_ROADS) + 1)
-    for index, (_area, body, start, end) in enumerate(found[:_MOST_ROADS], start=1):
+    found = found[:_MOST_ROADS]
+    # Each position's carriageway, and each carriageway's first position
+    # and its width, 0 being none: looked up for every pixel at once.
+    of_position = np.zeros(bins + 2, dtype=np.int32)
+    firsts, widths = np.zeros(len(found) + 1), np.ones(len(found) + 1)
+    heights_wide = np.zeros(len(found) + 1)
+    for index, (_area, start, end) in enumerate(found, start=1):
         first = low + (high - low) * start / bins
         last = low + (high - low) * end / bins
-        heights_wide[index] = last - first
-        across[body] = np.clip((offset[body] - first) / (last - first), 0.0, 1.0)
-        span[body] = ((last - first) * below[body]).astype(np.float32)
-        piece[body] = index
-    slope = model.slope(columns, rows)
-    length = np.sqrt(1.0 + slope * slope)
-    along = np.stack([slope / length, 1.0 / length], axis=2).astype(np.float32)
+        heights_wide[index] = widths[index] = last - first
+        firsts[index] = first
+        of_position[start + 1 : end + 1] = index
+    placed = _native.road_places(
+        (height, width), top, offset, at, whole, below, of_position, firsts, widths
+    )
+    if placed is not None:
+        piece, across, span = placed
+    else:
+        piece = np.zeros((height, width), dtype=np.int32)
+        piece[top:] = of_position[at] * whole
+        on_one = piece[top:] > 0
+        wide = widths[piece[top:]]
+        across = np.zeros((height, width), dtype=np.float32)
+        across[top:] = np.where(
+            on_one, np.clip((offset - firsts[piece[top:]]) / wide, 0.0, 1.0), 0.0
+        )
+        span = np.ones((height, width), dtype=np.float32)
+        span[top:] = np.where(on_one, (wide * below).astype(np.float32), 1.0)
+    # Which way the road runs at every pixel of the frame, above the
+    # horizon too, where it is no way at all.
+    along = _native.road_along(height, width, model.centre, model.horizon, model.bend)
+    if along is None:
+        under = np.maximum(row_below, 1e-6)[:, None]
+        slope = (columns - model.centre) / under - 2.0 * model.bend / (under * under)
+        length = np.sqrt(1.0 + slope * slope)
+        along = np.empty((height, width, 2), dtype=np.float32)
+        along[..., 0] = slope / length
+        along[..., 1] = 1.0 / length
     return RoadFrame(
         weight=(piece > 0).astype(np.float32),
         across=across,
@@ -2594,13 +2895,16 @@ def read_road(
     whole = (road > 0.5) | (on_road > 0.5)
     held = np.flatnonzero(whole.sum(axis=1) >= max(3.0, 0.01 * width))
     frame = None
+    # The picture's lightness and what is thin in it, once: the cues and
+    # every reading of the paint look in the same place.
+    bright = _thin_things(linear_rgb)
     if held.size:
-        cues = road_cues(linear_rgb, road, on_road, vehicles)
+        cues = road_cues(linear_rgb, road, on_road, vehicles, bright)
         model = fit_road_model(cues, height, float(held[0]), horizon_row)
         if model is not None:
             frame = model_frame(model, road, on_road)
     if frame is not None:
-        paint = painted_lines(linear_rgb, frame, road, on_road)
+        paint = painted_lines(linear_rgb, frame, road, on_road, bright)
         # The road's width is in camera heights only when the model's
         # horizon is the camera's: found by the fit alone, it is whatever
         # made the cues agree, and the widths that follow from it are not
@@ -2612,7 +2916,7 @@ def read_road(
         return None
     # Read off the mask alone, a road is only as good as the mask, and its
     # paint is counted only where the paint itself put the road right.
-    paint = painted_lines(linear_rgb, frame, road, on_road)
+    paint = painted_lines(linear_rgb, frame, road, on_road, bright)
     trusted = np.zeros(road.shape, dtype=bool)
     if paint.any():
         truer = straighten(frame, paint)
@@ -2621,7 +2925,7 @@ def read_road(
             if moved[frame.piece == index].any():
                 trusted |= frame.piece == index
         frame = truer
-        paint = painted_lines(linear_rgb, frame, road, on_road) & trusted
+        paint = painted_lines(linear_rgb, frame, road, on_road, bright) & trusted
     # And nothing is guessed: a road nothing vouches for, neither a model
     # nor its paint nor a vehicle on it, is as likely a junction seen from
     # above, and tracks ruled across a junction are worse than none.

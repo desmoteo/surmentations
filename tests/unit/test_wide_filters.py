@@ -9,7 +9,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from surmentations.utils.filters import wide_blur, wide_dilate
+from surmentations import mode
+from surmentations.utils.filters import blur_of_lights, wide_blur, wide_dilate
 
 
 def test_a_wide_blur_is_the_blur_it_stands_in_for() -> None:
@@ -41,3 +42,47 @@ def test_a_wide_dilation_differs_only_where_the_reach_ends() -> None:
     assert band.mean() < 0.25
     small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
     assert np.array_equal(wide_dilate(mask, 11), cv2.dilate(mask, small))
+
+
+def _lamps(count: int, channels: int, seed: int = 3) -> np.ndarray:
+    """A dark field with a few lamps in its lower half, some at the frame's edge."""
+    rng = np.random.default_rng(seed)
+    shape = (240, 320) if channels == 1 else (240, 320, channels)
+    field = np.zeros(shape, dtype=np.float32)
+    for _ in range(count):
+        row, column = int(rng.integers(120, 236)), int(rng.integers(0, 314))
+        field[row : row + 4, column : column + 6] = rng.uniform(0.5, 6.0, size=channels)
+    return field
+
+
+def test_a_blur_of_lights_is_the_blur_of_the_whole_frame_to_the_bit() -> None:
+    """Taken only on the box the lamps are in, with the filter's reach
+    round it: in exact mode the very values of the blur of the frame."""
+    with mode.exact():
+        for channels in (1, 3):
+            for count in (1, 2, 12):
+                field = _lamps(count, channels)
+                for sigma in (0.7, 3.3, 10.9):
+                    whole = cv2.GaussianBlur(field, (0, 0), sigmaX=sigma)
+                    assert np.array_equal(blur_of_lights(field, sigma), whole)
+        nothing = np.zeros((40, 60, 3), dtype=np.float32)
+        assert not blur_of_lights(nothing, 5.0).any()
+        everywhere = np.random.default_rng(1).uniform(size=(40, 60)).astype(np.float32)
+        assert np.array_equal(
+            blur_of_lights(everywhere, 2.0), cv2.GaussianBlur(everywhere, (0, 0), sigmaX=2.0)
+        )
+
+
+def test_a_blur_of_lights_in_fast_mode_is_within_a_hundredth_or_two_of_the_halo() -> None:
+    """A wide halo is blurred on a smaller copy in fast mode; a narrow one
+    is not, and is still the blur to the bit."""
+    was = mode.fast()
+    mode.set_fast(True)
+    try:
+        field = _lamps(12, 3)
+        wide = cv2.GaussianBlur(field, (0, 0), sigmaX=10.9)
+        assert np.abs(blur_of_lights(field, 10.9) - wide).max() < 0.015 * wide.max()
+        near = cv2.GaussianBlur(field, (0, 0), sigmaX=3.3)
+        assert np.array_equal(blur_of_lights(field, 3.3), near)
+    finally:
+        mode.set_fast(was)

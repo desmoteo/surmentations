@@ -50,6 +50,8 @@ from typing import NamedTuple
 import cv2
 import numpy as np
 
+from surmentations import _native
+
 # The longer side of the grid the light is worked out on. Light on a
 # surface changes slowly, and at a quarter of a megapixel it is the same
 # picture as at eight.
@@ -111,9 +113,14 @@ _EVEN_REACH = 0.04
 # scattered more than once, which comes from every side.
 _BEAM_FROM_BEHIND = 0.4
 _SCATTERS_FORWARD = 0.5
-# The points along a line of sight the lit air is summed at, between its
-# two ends as angles seen from the lamp: Gauss-Legendre nodes and weights.
-_ALONG_SIGHT = np.polynomial.legendre.leggauss(8)
+# The lit air along a line of sight is summed at nine points, evenly spaced
+# as angles seen from the lamp, by Simpson's rule: each point's weight, to
+# be divided by three. Nine are within 0.4% of a fine sum on average and
+# within 1% at ninety-nine lines in a hundred.
+_SIMPSON = (1.0, 4.0, 2.0, 4.0, 2.0, 4.0, 2.0, 4.0, 1.0)
+# An angle from its sine, as far as the sine of a sixteenth of a turn: the
+# arcsine's series, x (1 + x^2 (1/6 + x^2 (3/40 + x^2 15/336))).
+_ARCSINE = (1.0 / 6.0, 3.0 / 40.0, 15.0 / 336.0)
 _HEAD_SIZE = 0.01
 _HEAD_PEAK = 30.0
 _HEAD_GLOW = (3.5, 0.012)
@@ -236,6 +243,12 @@ def street_light(points: np.ndarray, up: np.ndarray, lamps: np.ndarray) -> np.nd
     x, y, z = points[..., 0], points[..., 1], points[..., 2]
     # How high each point stands along the plane's own upright, once.
     raised = x * up[0] + y * up[1] + z * up[2]
+    heads = np.ascontiguousarray(lamps, dtype=np.float32).reshape(-1, 4)
+    upright = np.asarray(up, dtype=np.float32).reshape(3)
+    if raised.dtype == np.float32 and _native.street_light(
+        light, np.ascontiguousarray(points), raised, heads, upright, _LAMP_SPILL
+    ):
+        return light
     for lamp_x, lamp_y, lamp_z, tall in lamps.reshape(-1, 4).tolist():
         dx, dy, dz = lamp_x - x, lamp_y - y, lamp_z - z
         far = np.sqrt(dx * dx + dy * dy + dz * dz)
@@ -245,6 +258,72 @@ def street_light(points: np.ndarray, up: np.ndarray, lamps: np.ndarray) -> np.nd
         reach = (np.float32(tall) / far) ** 2
         light += reach * (_LAMP_SPILL + (1.0 - _LAMP_SPILL) * below**_LAMP_SPREAD)
     return light
+
+
+def _halfway(
+    one: tuple[np.ndarray, np.ndarray], other: tuple[np.ndarray, np.ndarray]
+) -> tuple[np.ndarray, np.ndarray]:
+    """The direction halfway between two, each a cosine and a sine: their sum, made a unit."""
+    cosine, sine = one[0] + other[0], one[1] + other[1]
+    unit = np.float32(1.0) / np.sqrt(np.maximum(cosine * cosine + sine * sine, np.float32(1e-12)))
+    return cosine * unit, sine * unit
+
+
+def _air_of_lamp(
+    air: np.ndarray,
+    reach: np.ndarray,
+    ray: tuple[np.ndarray, np.ndarray, np.ndarray],
+    far: np.ndarray,
+    rising: np.ndarray,
+    lamp: np.ndarray,
+    up: np.ndarray,
+) -> None:
+    """Add one lamp's light on the air into ``air``, and that times how far off into ``reach``.
+
+    The definition of ``sm_street_air`` in ``native/sm_kernels.c``, which
+    does the same float32 arithmetic in the same order.
+    """
+    one = np.float32(1.0)
+    x, y, z, tall = (np.float32(value) for value in lamp)
+    apart = x * x + y * y + z * z
+    lamp_up = x * up[0] + y * up[1] + z * up[2]
+    along = ray[0] * x + ray[1] * y + ray[2] * z
+    passes = np.sqrt(np.maximum(apart - along * along, np.float32(_NEAREST_PASS_M**2)))
+    nearness = one / passes
+    # The nearest approach, wherever on the line it falls: how the way to
+    # the lamp from it lies against up.
+    over_lamp = (lamp_up - along * rising) * nearness
+    # The line's two ends as tangents of angles seen from the lamp, and
+    # those as directions; the seven between them by halving, three times.
+    first, last = -along * nearness, (far - along) * nearness
+    unit_first = one / np.sqrt(one + first * first)
+    unit_last = one / np.sqrt(one + last * last)
+    at: list[tuple[np.ndarray, np.ndarray]] = [(unit_first, first * unit_first)] * 9
+    at[8] = (unit_last, last * unit_last)
+    at[4] = _halfway(at[0], at[8])
+    at[2], at[6] = _halfway(at[0], at[4]), _halfway(at[4], at[8])
+    for odd in (1, 3, 5, 7):
+        at[odd] = _halfway(at[odd - 1], at[odd + 1])
+    # The angle between two neighbours, from its sine.
+    sine = at[0][0] * at[1][1] - at[0][1] * at[1][0]
+    square = sine * sine
+    sixth, fortieth, last_term = (np.float32(term) for term in _ARCSINE)
+    step = sine * (one + square * (sixth + square * (fortieth + square * last_term)))
+
+    gain = np.float32(_SCATTERS_FORWARD)
+    spill = np.float32(_LAMP_SPILL)
+    least, twice, most = one + gain * gain, np.float32(2.0) * gain, one - gain * gain
+    summed = np.zeros(far.shape, dtype=np.float32)
+    for weight, (cosine, sine_here) in zip(_SIMPSON, at, strict=True):
+        below = np.clip(cosine * over_lamp - sine_here * rising, 0.0, 1.0)
+        # Light on its way to the lens is scattered through no angle at
+        # all, and its cosine is 1: before the nearest approach.
+        turned = least + twice * sine_here
+        forward = most / (turned * np.sqrt(turned))
+        summed += np.float32(weight) * (forward * (spill + (one - spill) * (below * below)))
+    lit = (tall * tall) * (step * np.float32(1.0 / 3.0) * summed * nearness)
+    air += lit
+    reach += lit * np.clip(along, 0.0, far)
 
 
 def street_air(
@@ -278,43 +357,36 @@ def street_air(
       either was drawn as. The weight is 1 for scattering that is the
       same all round.
 
-    The sum over ``phi`` is taken at a few points (Gauss-Legendre).
+    The sum over ``phi`` is Simpson's rule on nine points evenly spaced in
+    angle. No angle is ever taken: a point at ``s`` along a line that
+    passes the lamp at ``h`` is seen from the lamp in the direction
+    ``(h, s)``, the direction halfway between two is their sum, and the
+    angle between two neighbours comes from its sine. So the whole sum is
+    multiplications and square roots, which is what lets a compiler work
+    it eight pixels at a time (``sm_street_air``); it took an arctangent,
+    a sine and a cosine a point, at eight points, and five times as long.
 
     The second map is how far along the line of sight that lit air is, in
     metres, taking each lamp's at its nearest approach: what is in the air
     dims the light on its way to the lens, and a lamp's cone two hundred
     metres off in falling snow is not there to be seen.
     """
-    far = np.sqrt((points**2).sum(axis=2))
-    np.maximum(far, 1e-3, out=far)
-    ray = points / far[..., None]
-    air = np.zeros(points.shape[:2], dtype=np.float32)
-    reach = np.zeros(points.shape[:2], dtype=np.float32)
-    for x, y, z, tall in lamps.reshape(-1, 4).tolist():
-        lamp = np.array([x, y, z], dtype=np.float32)
-        along = ray @ lamp
-        passes = np.sqrt(np.maximum(float(lamp @ lamp) - along**2, _NEAREST_PASS_M**2))
-        first, last = np.arctan(-along / passes), np.arctan((far - along) / passes)
-        # The nearest approach itself, wherever on the line it falls, and
-        # how the line and the way to the lamp from it lie against up.
-        over_lamp = (float(lamp @ up) - along * (ray @ up)) / passes
-        rising = ray @ up
-        summed = np.zeros(points.shape[:2], dtype=np.float32)
-        gain = _SCATTERS_FORWARD
-        for node, weight in zip(*_ALONG_SIGHT, strict=True):
-            phi = 0.5 * (last + first) + 0.5 * (last - first) * node
-            sine, cosine = np.sin(phi), np.cos(phi)
-            below = np.clip(cosine * over_lamp - sine * rising, 0.0, 1.0)
-            # Light on its way to the lens is scattered through no angle
-            # at all, and its cosine is 1: before the nearest approach.
-            forward = (1.0 - gain**2) / (1.0 + gain**2 + 2.0 * gain * sine) ** 1.5
-            summed += weight * forward * (_LAMP_SPILL + (1.0 - _LAMP_SPILL) * below**2)
-        through = 0.5 * (last - first) * summed / passes
-        off = np.clip(along, 0.0, far)
-        lit = (np.float32(tall**2) * through).astype(np.float32)
-        air += lit
-        reach += lit * off
-    return air, reach / np.maximum(air, 1e-9)
+    x, y, z = (np.ascontiguousarray(points[..., axis], dtype=np.float32) for axis in range(3))
+    far = np.sqrt(x * x + y * y + z * z)
+    np.maximum(far, np.float32(1e-3), out=far)
+    ray = (x / far, y / far, z / far)
+    upright = np.asarray(up, dtype=np.float32).reshape(3)
+    rising = ray[0] * upright[0] + ray[1] * upright[1] + ray[2] * upright[2]
+    air = np.zeros(far.shape, dtype=np.float32)
+    reach = np.zeros(far.shape, dtype=np.float32)
+    heads = np.ascontiguousarray(lamps, dtype=np.float32).reshape(-1, 4)
+    if not _native.street_air(
+        air, reach, ray, far, rising, heads, upright,
+        _NEAREST_PASS_M**2, _LAMP_SPILL, _SCATTERS_FORWARD,
+    ):
+        for lamp in heads:
+            _air_of_lamp(air, reach, ray, far, rising, lamp, upright)
+    return air, reach / np.maximum(air, np.float32(1e-9))
 
 
 class BeamSource(NamedTuple):
@@ -571,19 +643,53 @@ def headlamp_light(
     above = x * up[0] + y * up[1] + z * up[2]
     # Nothing well above any vehicle's beam, whatever the vehicle's scale.
     low = (above < 1.5 * _VEHICLE_SCALES[1] * _BEAM_HIGH_M).astype(np.float32)
+    # Each lit vehicle's pair of beams as six numbers: where its front is
+    # along the ground's two axes, which way it points along them, its
+    # scale, and what the lens gets of its pool.
+    beams = []
     for source in vehicles:
         thrown = beam_origins(source, middle, up, focal_px, shape)
         if thrown is None:
             continue
         front, heading, scale = thrown
         front = front - middle
-        ahead = (float(heading @ first), float(heading @ second))
-        du = along_first - np.float32(front @ first)
-        dv = along_second - np.float32(front @ second)
+        # Seen from ahead of the vehicle the road throws the beam's light
+        # at the lens; seen from behind it, away from it.
+        to_it = front - float(front @ up) * up + middle - float(middle @ up) * up
+        coming = 0.5 * (1.0 - float(heading @ to_it) / max(float(np.linalg.norm(to_it)), 1e-6))
+        beams.append(
+            (
+                float(front @ first),
+                float(front @ second),
+                float(heading @ first),
+                float(heading @ second),
+                float(scale),
+                _BEAM_FROM_BEHIND + (1.0 - _BEAM_FROM_BEHIND) * coming,
+            )
+        )
+    table = np.array(beams, dtype=np.float32).reshape(-1, 6)
+    planes = [
+        np.ascontiguousarray(plane, dtype=np.float32)
+        for plane in (along_first, along_second, above)
+    ]
+    if _native.headlamp_beams(
+        light,
+        planes[0],
+        planes[1],
+        planes[2],
+        low,
+        table,
+        [*_BEAM_WIDTH_M, _HEADLAMPS_APART_M / 2, _EACH_LAMP, _BEAM_HALF_M, _BEAM_REACH_M]
+        + [_BEAM_HIGH_M],
+    ):
+        return light
+    for front_first, front_second, ahead_first, ahead_second, scale, facing in table:
+        du = along_first - front_first
+        dv = along_second - front_second
         # In the vehicle's own metres: a beam is as long against its car
         # in the picture as it is on the road.
-        along = (du * np.float32(ahead[0]) + dv * np.float32(ahead[1])) / np.float32(scale)
-        aside = (du * np.float32(ahead[1]) - dv * np.float32(ahead[0])) / np.float32(scale)
+        along = (du * ahead_first + dv * ahead_second) / scale
+        aside = (du * ahead_second - dv * ahead_first) / scale
         forward = np.maximum(along, 0.0)
         wide = _BEAM_WIDTH_M[0] + _BEAM_WIDTH_M[1] * forward
         # Two lamps, one either side of the middle: two pools on the road
@@ -592,14 +698,10 @@ def headlamp_light(
         beam += np.exp(-(((aside + _HEADLAMPS_APART_M / 2) / wide) ** 2))
         beam *= _EACH_LAMP / (1.0 + (forward / _BEAM_HALF_M) ** 2)
         beam *= np.clip(along, 0.0, 1.0) * np.clip((_BEAM_REACH_M - along) / 15.0, 0.0, 1.0)
-        # Seen from ahead of the vehicle the road throws the beam's light
-        # at the lens; seen from behind it, away from it.
-        to_it = front - float(front @ up) * up + middle - float(middle @ up) * up
-        coming = 0.5 * (1.0 - float(heading @ to_it) / max(float(np.linalg.norm(to_it)), 1e-6))
-        beam *= _BEAM_FROM_BEHIND + (1.0 - _BEAM_FROM_BEHIND) * coming
-        light += (beam * low * np.clip(1.5 - above / (scale * _BEAM_HIGH_M), 0.0, 1.0)).astype(
-            np.float32
-        )
+        beam *= facing
+        light += (
+            beam * low * np.clip(1.5 - above / (scale * np.float32(_BEAM_HIGH_M)), 0.0, 1.0)
+        ).astype(np.float32)
     return light
 
 

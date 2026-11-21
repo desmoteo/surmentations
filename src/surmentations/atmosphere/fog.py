@@ -60,6 +60,7 @@ from surmentations.diagnostics import record_draw
 from surmentations.perception.labels import SceneClass
 from surmentations.utils.channels import channel_mean
 from surmentations.utils.color import veil_radiance_linear
+from surmentations.utils.filters import blur_of_lights
 from surmentations.utils.photometry import from_linear_unit, linear_to_srgb, to_linear_unit
 from surmentations.utils.road import vehicle_lamps, vehicles_as_seen
 from surmentations.utils.sky import (
@@ -385,9 +386,12 @@ class RandomFog(CameraTransform):
             # where the fog is too thick for either.
             through = channel_mean(transmission)[..., None]
             scattered = lamp_light * (through * (1.0 - through))
-            wide = cv2.GaussianBlur(scattered, (0, 0), sigmaX=max(halo_sigma, 1.0))
-            near = cv2.GaussianBlur(scattered, (0, 0), sigmaX=max(0.3 * halo_sigma, 0.7))
-            halo = np.asarray(wide, dtype=np.float32) + np.asarray(near, dtype=np.float32)
+            # Only where the lamps are, and the wide one on a smaller copy:
+            # blurred over the whole frame, these two were half of a fog
+            # with lamps in it.
+            wide = blur_of_lights(scattered, max(halo_sigma, 1.0))
+            near = blur_of_lights(scattered, max(0.3 * halo_sigma, 0.7))
+            halo = wide + near
             out = out + lamp_light * through + np.float32(_HALO_SHARE) * halo
         return from_linear_unit(out, scale, is_integer, img.dtype)
 

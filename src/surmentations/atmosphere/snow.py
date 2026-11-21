@@ -1004,33 +1004,17 @@ class RandomSnow(CameraTransform):
             # sigma of 4, as lens grime is (`wide_blur`), 24 ms to 3.
             around = np.maximum(wide_blur(luma, sigma, work_sigma=_LOCAL_MEAN_WORK_SIGMA), 1e-4)
             relief = wide_blur(np.abs(luma / around - 1.0), 2.0 * sigma)
-            # `np.ptp` gives an np.float64, which would widen this field and
-            # every one made from it down to the settled snow itself.
-            relief_span = mode.scalar(np.ptp(_CANOPY_RELIEF))
-            rough = np.clip((relief - _CANOPY_RELIEF[0]) / relief_span, 0.0, 1.0)
             # Green says vegetation by day. Under sodium lamps nothing is
             # green, and what is left to tell a tree by is that its "level
             # ground" comes and goes from one patch to the next, where a
             # road's is steady.
             steady = wide_blur(as_read, 2.0 * sigma)
-            # Comes and goes: a wall or the sky never reads as level at
-            # all, and counting those drew snow along every skyline.
-            unsteady = np.clip((0.85 - steady) / 0.25, 0.0, 1.0) * np.clip(
-                (steady - 0.15) / 0.2, 0.0, 1.0
-            )
-            canopy = rough * np.maximum(vegetation_weight(linear_scene), unsteady)
-            if named:
-                # A tree is a canopy and a lawn is ground, by name, where
-                # texture and colour could only guess: by night, in leaf
-                # that is not green, on grass that is rough.
-                canopy = np.maximum(canopy * (1.0 - named["lawn"]), named["canopy"])
-            ground = level * (1.0 - canopy)
+            green = vegetation_weight(linear_scene)
+            noise = None
             if accumulation_patchiness > 0.0:
                 # Wind scours snow off exposed ground and it melts first
                 # where the surface is warm: broad areas where it lies thin.
                 noise = ground_noise(depth_pm, focal, camera_pitch, _BARE_PATCH_SCALE_M, rng)
-                patches = np.clip((noise - 0.5) * _BARE_PATCH_CONTRAST + 0.5, 0.0, 1.0)
-                ground = ground * (1.0 - accumulation_patchiness * (1.0 - patches))
             # A thin covering seen from a camera's distance is an even
             # greying of the ground: the snow lies in the grain of the
             # surface, far finer than a pixel. It is not quite even, though.
@@ -1043,17 +1027,61 @@ class RandomSnow(CameraTransform):
                 depth_pm, focal, camera_pitch, _DUSTING_SCALE_M, rng, octaves=4, uniform=True
             )
             thin = 1.0 - accumulation_strength
-            uneven = 1.0 + _DUSTING_GRAIN * thin * (2.0 * grain - 1.0)
-            settled = ground * accumulation_strength * uneven
-            # On a canopy the snow lies on the clumps that stand proud,
-            # which are the ones the light reaches.
-            proud = np.clip((luma / around - 0.95) / 0.35, 0.0, 1.0)
-            settled = settled + accumulation_strength * _CANOPY_COVER * canopy * proud
-            # Nothing settles on the sky. Both steps above that look a few
-            # pixels around — growing level ground to an object's edge, and
-            # finding where "level" comes and goes — reach past a roofline
-            # into the sky beside it, and drew a pale line round the skyline.
-            settled = settled * (1.0 - sky)
+            done = None
+            if mode.fast():
+                # Everything from here to the snow that lies is a formula a
+                # pixel: one pass where the compiled kernels are there, and
+                # the twenty below where they are not.
+                done = _native.snow_settled(
+                    level,
+                    relief,
+                    steady,
+                    green,
+                    grain,
+                    luma,
+                    around,
+                    sky,
+                    [_CANOPY_RELIEF[0], float(np.ptp(_CANOPY_RELIEF)), accumulation_patchiness]
+                    + [_BARE_PATCH_CONTRAST, accumulation_strength, _DUSTING_GRAIN * thin]
+                    + [accumulation_strength * _CANOPY_COVER],
+                    named.get("lawn"),
+                    named.get("canopy"),
+                    noise,
+                )
+            if done is not None:
+                settled = done
+            else:
+                # `np.ptp` gives an np.float64, which would widen this field
+                # and every one made from it down to the settled snow itself.
+                relief_span = mode.scalar(np.ptp(_CANOPY_RELIEF))
+                rough = np.clip((relief - _CANOPY_RELIEF[0]) / relief_span, 0.0, 1.0)
+                # Comes and goes: a wall or the sky never reads as level at
+                # all, and counting those drew snow along every skyline.
+                unsteady = np.clip((0.85 - steady) / 0.25, 0.0, 1.0) * np.clip(
+                    (steady - 0.15) / 0.2, 0.0, 1.0
+                )
+                canopy = rough * np.maximum(green, unsteady)
+                if named:
+                    # A tree is a canopy and a lawn is ground, by name, where
+                    # texture and colour could only guess: by night, in leaf
+                    # that is not green, on grass that is rough.
+                    canopy = np.maximum(canopy * (1.0 - named["lawn"]), named["canopy"])
+                ground = level * (1.0 - canopy)
+                if noise is not None:
+                    patches = np.clip((noise - 0.5) * _BARE_PATCH_CONTRAST + 0.5, 0.0, 1.0)
+                    ground = ground * (1.0 - accumulation_patchiness * (1.0 - patches))
+                uneven = 1.0 + _DUSTING_GRAIN * thin * (2.0 * grain - 1.0)
+                settled = ground * accumulation_strength * uneven
+                # On a canopy the snow lies on the clumps that stand proud,
+                # which are the ones the light reaches.
+                proud = np.clip((luma / around - 0.95) / 0.35, 0.0, 1.0)
+                settled = settled + accumulation_strength * _CANOPY_COVER * canopy * proud
+                # Nothing settles on the sky. Both steps above that look a
+                # few pixels around — growing level ground to an object's
+                # edge, and finding where "level" comes and goes — reach
+                # past a roofline into the sky beside it, and drew a pale
+                # line round the skyline.
+                settled = settled * (1.0 - sky)
 
         if self.veil_beta_range is not None:
             veil_bounds = self.veil_beta_range
@@ -1261,7 +1289,11 @@ class RandomSnow(CameraTransform):
             # patch at full white whatever the frame — so at night settled
             # snow came out as a daylit floor under a black sky.
             illumination = (
-                wide_blur(luminance(out), max(2.0, 0.02 * max(height, width)))
+                wide_blur(
+                    luminance(out),
+                    max(2.0, 0.02 * max(height, width)),
+                    work_sigma=_LOCAL_MEAN_WORK_SIGMA,
+                )
                 / TYPICAL_SCENE_ALBEDO
             )
             # A surface darker than typical understates the light on it:

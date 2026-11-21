@@ -2,13 +2,14 @@
  *
  * The Python tests hold the kernels to the numpy code on the machine they
  * run on. This holds one machine to another: built for any tier on any
- * architecture, the program must print the same fifteen lines. It needs only a
+ * architecture, the program must print the same twenty-four lines. It needs only a
  * C compiler, so it runs where the Python stack is slow or missing, an
  * arm64 container under QEMU for one. run.sh builds it for every tier of
  * the machine it is on.
  */
 /**/
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -315,5 +316,263 @@ int main(void) {
     SM_TABLE.splat_discs(total, H, W, disc[0], disc[1], disc[2], disc[3], taken, DISCS);
     printf("%-9s discs    %016llx\n", SM_TABLE.name,
            (unsigned long long)fnv(total, W * H * sizeof(double)));
+
+    /* What reads the scene. Planes in [0, 1) to draw every input from: a
+     * scene is W by H, its lines of sight fan out from the lens, and its
+     * depth is some metres and up. */
+    enum { P = W * H, LAMPS = 9, PUFFS = 400 };
+    float *plane[12];
+    for (int k = 0; k < 12; k++) {
+        plane[k] = malloc(P * sizeof(float));
+        for (int i = 0; i < P; i++) {
+            plane[k][i] = uniform();
+        }
+    }
+    float *field[5];
+    for (int k = 0; k < 5; k++) {
+        field[k] = malloc(N * sizeof(float));
+        for (int i = 0; i < N; i++) {
+            field[k][i] = uniform();
+        }
+    }
+    float *deep = malloc(P * sizeof(float));
+    float *ray[5];
+    for (int k = 0; k < 5; k++) {
+        ray[k] = malloc(P * sizeof(float));
+    }
+    const float upright[3] = {0.0f, -0.9396926f, -0.3420201f};
+    for (int v = 0; v < H; v++) {
+        for (int u = 0; u < W; u++) {
+            const int i = v * W + u;
+            const float x = ((float)u - W / 2) / 280.0f, y = ((float)v - H / 2) / 280.0f;
+            const float length = sqrtf(x * x + y * y + 1.0f);
+            deep[i] = 4.0f + 90.0f * plane[0][i] * (float)(H - v) / H;
+            ray[0][i] = x / length, ray[1][i] = y / length, ray[2][i] = 1.0f / length;
+            ray[3][i] = deep[i] * length;
+            ray[4][i] = ray[0][i] * upright[0] + ray[1][i] * upright[1] + ray[2][i] * upright[2];
+        }
+    }
+
+    /* The street lamps' light on the air. */
+    float heads[LAMPS * 4];
+    for (int k = 0; k < LAMPS; k++) {
+        heads[4 * k] = 40.0f * uniform() - 20.0f;
+        heads[4 * k + 1] = -5.0f - 4.0f * uniform();
+        heads[4 * k + 2] = 10.0f + 80.0f * uniform();
+        heads[4 * k + 3] = 8.0f + 3.0f * uniform();
+    }
+    float *air = calloc(P, sizeof(float)), *air_far = calloc(P, sizeof(float));
+    SM_TABLE.street_air(
+        air, air_far, ray[0], ray[1], ray[2], ray[3], ray[4], P, heads, LAMPS, upright, 0.36f,
+        0.03f, 0.5f);
+    printf("%-9s air      %016llx\n", SM_TABLE.name,
+           (unsigned long long)(fnv(air, P * sizeof(float))
+                                ^ (fnv(air_far, P * sizeof(float)) << 1)));
+
+    /* Puffs of spray: round and long, some cut off behind a line, some
+     * over the frame's edge, with and without a depth to hide behind. */
+    double *puffs = malloc(PUFFS * 15 * sizeof(double));
+    for (int k = 0; k < PUFFS; k++) {
+        double *puff = puffs + 15 * k;
+        const double east = 2.0 * uniform() - 1.0, south = 0.1 + uniform();
+        const double long_way = sqrt(east * east + south * south);
+        puff[0] = uniform() * (W + 40) - 20, puff[1] = uniform() * (H + 40) - 20;
+        puff[2] = east / long_way, puff[3] = south / long_way;
+        puff[4] = 0.5 + 30.0 * uniform(), puff[5] = 0.5 + 12.0 * uniform();
+        puff[6] = 0.01 + uniform(), puff[7] = uniform() * H;
+        puff[8] = k % 3 ? 6.0 + 60.0 * uniform() : 0.0, puff[9] = 1.0 + 2.0 * uniform();
+        puff[10] = puff[0] - 6.0, puff[11] = puff[1] + 4.0;
+        puff[12] = puff[2], puff[13] = puff[3], puff[14] = k % 4 ? 0.0 : 1.0 + 9.0 * uniform();
+    }
+    for (int i = 0; i < P; i++) {
+        plane[1][i] = plane[1][i] * H;
+    }
+    float *spray = calloc(P, sizeof(float));
+    SM_TABLE.spray_puffs(spray, plane[1], plane[2], deep, H, W, puffs, PUFFS, 2.4f, 0.5f, 0.7f);
+    uint64_t sprayed = fnv(spray, P * sizeof(float));
+    SM_TABLE.spray_puffs(spray, plane[1], plane[2], NULL, H, W, puffs, PUFFS, 2.4f, 0.5f, 0.7f);
+    printf("%-9s spray    %016llx\n", SM_TABLE.name,
+           (unsigned long long)(sprayed ^ (fnv(spray, P * sizeof(float)) << 1)));
+
+    /* Surface normals, differenced two pixels apart. */
+    float *across = malloc(W * sizeof(float)), *down = malloc(H * sizeof(float));
+    for (int u = 0; u < W; u++) {
+        across[u] = ((float)u - W / 2.0f) / 280.0f;
+    }
+    for (int v = 0; v < H; v++) {
+        down[v] = ((float)v - H / 2.0f) / 280.0f;
+    }
+    float *normal[4];
+    for (int k = 0; k < 4; k++) {
+        normal[k] = malloc(P * sizeof(float));
+    }
+    SM_TABLE.normals(normal[0], normal[1], normal[2], normal[3], deep, across, down, H, W, 2);
+    printf("%-9s normals  %016llx\n", SM_TABLE.name,
+           (unsigned long long)(fnv(normal[0], P * sizeof(float))
+                                ^ (fnv(normal[1], P * sizeof(float)) << 1)
+                                ^ (fnv(normal[2], P * sizeof(float)) << 2)
+                                ^ (fnv(normal[3], P * sizeof(float)) << 3)));
+
+    /* The two nights: the infrared one with every lamp and return there
+     * is, then with none; the colour one evened and lit, then bare. */
+    const float response[3] = {0.5f, 0.3f, 0.2f};
+    const float ir_how[8] = {1.7f, 0.3f, 0.02f, 0.01f, 1.4f, 1.04f, 1.0f, 0.98f};
+    const float colour_how[14] = {
+        0.02f, 0.025f, 0.04f, 1.0f, 0.75f, 0.45f, 1.0f, 0.95f, 0.85f, 0.21f, 0.65f,
+        0.2126f, 0.7152f, 0.0722f};
+    const float expose_how[5] = {2.3f, 0.3f, 0.03f, 0.01f, 1.4f};
+    float *lifted = malloc(P * sizeof(float)), *signal = malloc(P * sizeof(float));
+    float *seen = malloc(P * sizeof(float)), *night = malloc(N * sizeof(float));
+    float *lit = malloc(N * sizeof(float));
+    SM_TABLE.nir_reflectance(seen, field[0], plane[3], P, response, 0.6f, 0.5f, 0.31f);
+    uint64_t dark = fnv(seen, P * sizeof(float));
+    SM_TABLE.night_ir_light(
+        signal, lifted, seen, plane[4], plane[5], plane[6], plane[7], plane[8], P, 0.02f, 0.3f,
+        0.88f);
+    SM_TABLE.night_ir_expose(
+        night, signal, plane[9], lifted, plane[4], plane[10], field[1], field[2], plane[11],
+        plane[3], plane[0], P, ir_how);
+    dark ^= fnv(night, N * sizeof(float)) << 1;
+    SM_TABLE.nir_reflectance(seen, field[0], NULL, P, response, 0.6f, 0.5f, 0.31f);
+    SM_TABLE.night_ir_light(
+        signal, lifted, seen, plane[4], NULL, NULL, NULL, NULL, P, 0.02f, 0.0f, 0.88f);
+    SM_TABLE.night_ir_expose(
+        night, signal, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, plane[0], P, ir_how);
+    dark ^= fnv(night, N * sizeof(float)) << 2;
+    SM_TABLE.night_colour_light(
+        lit, seen, field[0], plane[4], plane[5], plane[6], plane[7], plane[8], P, colour_how);
+    SM_TABLE.night_colour_expose(
+        night, lit, field[1], field[2], plane[11], plane[3], field[3], P, colour_how + 3,
+        expose_how);
+    dark ^= (fnv(night, N * sizeof(float)) << 3) ^ fnv(seen, P * sizeof(float));
+    SM_TABLE.night_colour_light(lit, seen, field[0], NULL, NULL, NULL, NULL, NULL, P, colour_how);
+    SM_TABLE.night_colour_expose(
+        night, lit, NULL, NULL, NULL, NULL, field[3], P, colour_how + 3, expose_how);
+    dark ^= fnv(night, N * sizeof(float)) << 4;
+    printf("%-9s night    %016llx\n", SM_TABLE.name, (unsigned long long)dark);
+
+    /* Fog at night: with the lamps' cones under an illuminator, then as a veil. */
+    const float cone_how[10] = {0.6f, 1.0f, 0.05f, 0.04f, 0.03f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    const float veil_how[10] = {0.6f, 0.0f, 0.0f, 0.0f, 0.0f, 2.2f, 0.75f, 0.01f, 0.012f, 0.014f};
+    float *radiance = malloc(N * sizeof(float)), *removed = malloc(N * sizeof(float));
+    SM_TABLE.fog_lost(radiance, removed, seen, field[0], plane[5], plane[6], P, 5.0f);
+    uint64_t fogged = fnv(radiance, N * sizeof(float)) ^ (fnv(removed, N * sizeof(float)) << 1)
+        ^ (fnv(seen, P * sizeof(float)) << 2);
+    SM_TABLE.fog_veil(night, radiance, field[4], plane[6], field[1], NULL, plane[7], P, cone_how);
+    fogged ^= fnv(night, N * sizeof(float)) << 3;
+    SM_TABLE.fog_veil(night, radiance, field[4], plane[6], NULL, field[2], NULL, P, veil_how);
+    fogged ^= fnv(night, N * sizeof(float)) << 4;
+    printf("%-9s fog      %016llx\n", SM_TABLE.name, (unsigned long long)fogged);
+
+    /* Lying snow, with patches and labels and without, and the ground's
+     * noise laid through each pixel's depth. */
+    const float snow_how[7] = {0.18f, 0.18f, 0.5f, 2.5f, 0.7f, 0.06f, 0.49f};
+    const float tile_how[8] = {
+        280.0f, 0.9396926f, 0.3420201f, 6.4f, 510.0f, 1.0f / 510.0f, 37.25f, 81.5f};
+    for (int i = 0; i < P; i++) {
+        plane[10][i] = 0.05f + plane[10][i];
+    }
+    SM_TABLE.snow_settled(
+        seen, plane[3], plane[4], plane[5], plane[6], plane[7], plane[8], plane[9],
+        plane[11], plane[0], plane[10], plane[2], P, snow_how);
+    uint64_t lying = fnv(seen, P * sizeof(float));
+    SM_TABLE.snow_settled(
+        seen, plane[3], plane[4], plane[5], plane[6], NULL, NULL, NULL, plane[11], plane[0],
+        plane[10], plane[2], P, snow_how);
+    lying ^= fnv(seen, P * sizeof(float)) << 1;
+    SM_TABLE.ground_tile(signal, lifted, deep, H, W, tile_how);
+    lying ^= (fnv(signal, P * sizeof(float)) << 2) ^ (fnv(lifted, P * sizeof(float)) << 3);
+    printf("%-9s snow     %016llx\n", SM_TABLE.name, (unsigned long long)lying);
+
+    /* Lamps on surfaces: the street's pools on every point of the scene,
+     * and the dipped beams of vehicles coming on and driving away. */
+    float *spot = malloc(N * sizeof(float));
+    for (int i = 0; i < P; i++) {
+        spot[3 * i] = ray[0][i] * ray[3][i], spot[3 * i + 1] = ray[1][i] * ray[3][i];
+        spot[3 * i + 2] = ray[2][i] * ray[3][i];
+        signal[i] = spot[3 * i] * upright[0] + spot[3 * i + 1] * upright[1]
+            + spot[3 * i + 2] * upright[2];
+        lifted[i] = 30.0f * plane[4][i] - 15.0f, seen[i] = 4.0f + 60.0f * plane[5][i];
+        deep[i] = 3.0f * plane[6][i], plane[7][i] = plane[7][i] > 0.2f ? 1.0f : 0.0f;
+    }
+    memset(air, 0, P * sizeof(float));
+    SM_TABLE.street_light(air, spot, signal, P, heads, LAMPS, upright, 0.03f);
+    uint64_t lamp_pools = fnv(air, P * sizeof(float));
+    enum { BEAMS = 7 };
+    float beams[BEAMS * 6];
+    for (int k = 0; k < BEAMS; k++) {
+        /* A heading with no sine or cosine in it: those are the C
+         * library's, and differ by a bit from one library to the next. */
+        const float east = 2.0f * uniform() - 1.0f, south = 0.1f + uniform();
+        const float long_way = sqrtf(east * east + south * south);
+        beams[6 * k] = 24.0f * uniform() - 12.0f, beams[6 * k + 1] = 8.0f + 50.0f * uniform();
+        beams[6 * k + 2] = east / long_way, beams[6 * k + 3] = south / long_way;
+        beams[6 * k + 4] = 0.6f + uniform(), beams[6 * k + 5] = 0.4f + 0.6f * uniform();
+    }
+    const float dipped[7] = {0.35f, 0.12f, 0.65f, 0.6f, 14.0f, 75.0f, 1.2f};
+    memset(air, 0, P * sizeof(float));
+    SM_TABLE.headlamp_beams(air, lifted, seen, deep, plane[7], P, beams, BEAMS, dipped);
+    printf("%-9s lamps    %016llx\n", SM_TABLE.name,
+           (unsigned long long)(lamp_pools ^ (fnv(air, P * sizeof(float)) << 1)));
+
+    /* Wheel tracks down the lanes of two roads, even and then ragged and
+     * worn; and the rain's spray and lamps laid over a frame. */
+    int32_t *on_road = malloc(P * sizeof(int32_t));
+    for (int i = 0; i < P; i++) {
+        on_road[i] = (int32_t)(3.0f * plane[8][i]);
+        plane[9][i] = 1.1f * plane[9][i] - 0.05f, plane[10][i] = 2.0f + 80.0f * plane[11][i];
+    }
+    const double lines[8] = {0.02, 0.27, 0.5, 0.74, 0.97, 0.1, 0.52, 0.9};
+    const int32_t first_line[4] = {0, 0, 5, 8};
+    float lane_use[64];
+    for (int k = 0; k < 64; k++) {
+        lane_use[k] = 0.35f + 0.65f * uniform();
+    }
+    const float track_how[5] = {0.09f, 0.1f, 0.22f, 0.3f, 1.4f};
+    SM_TABLE.wheel_tracks(
+        air, on_road, plane[9], plane[10], plane[7], NULL, NULL, P, lines, first_line, 2, lane_use,
+        track_how);
+    uint64_t tracks = fnv(air, P * sizeof(float));
+    SM_TABLE.wheel_tracks(
+        air, on_road, plane[9], plane[10], plane[7], plane[3], plane[4], P, lines, first_line, 2,
+        lane_use, track_how);
+    tracks ^= fnv(air, P * sizeof(float)) << 1;
+    const float spray_lit[3] = {0.45f, 0.5f, 0.54f};
+    for (int i = 0; i < N; i++) {
+        field[1][i] = field[1][i] > 0.97f ? 6.0f * field[1][i] : 0.0f;
+    }
+    memcpy(night, field[0], N * sizeof(float));
+    SM_TABLE.lamps_lit(night, field[1], plane[6], P);
+    SM_TABLE.spray_and_lamps(night, plane[5], field[1], field[2], plane[6], P, spray_lit, 0.35f);
+    tracks ^= fnv(night, N * sizeof(float)) << 2;
+    memcpy(night, field[0], N * sizeof(float));
+    SM_TABLE.spray_and_lamps(night, NULL, field[1], field[2], plane[6], P, spray_lit, 0.35f);
+    SM_TABLE.spray_and_lamps(night, plane[5], NULL, NULL, plane[6], P, spray_lit, 0.35f);
+    tracks ^= fnv(night, N * sizeof(float)) << 3;
+    printf("%-9s tracks   %016llx\n", SM_TABLE.name, (unsigned long long)tracks);
+
+    /* A road's frame: the way it runs at every pixel, on a bend, and each
+     * pixel's carriageway, its place across it and its width there. */
+    float *runs = malloc(2 * P * sizeof(float));
+    SM_TABLE.road_along(runs, H, W, 151.5, -20.25, 700.0);
+    uint64_t framed = fnv(runs, 2 * P * sizeof(float));
+    double *place = malloc(P * sizeof(double)), *under = malloc(H * sizeof(double));
+    int64_t *counted = malloc(P * sizeof(int64_t));
+    uint8_t *is_road = malloc(P);
+    for (int v = 0; v < H; v++) {
+        under[v] = 20.25 + v;
+    }
+    for (int i = 0; i < P; i++) {
+        place[i] = 4.0 * (double)plane[0][i] - 2.0;
+        counted[i] = (int64_t)(10.0f * plane[2][i]);
+        is_road[i] = plane[3][i] > 0.3f;
+    }
+    const int32_t carriageway[10] = {0, 1, 1, 1, 0, 0, 2, 2, 2, 0};
+    const double begins[3] = {0.0, -1.6, 0.4}, spans[3] = {1.0, 1.2, 1.2};
+    SM_TABLE.road_places(
+        on_road, air, air_far, place, counted, is_road, under, H, W, carriageway, begins, spans);
+    framed ^= (fnv(on_road, P * sizeof(int32_t)) << 1) ^ (fnv(air, P * sizeof(float)) << 2)
+        ^ (fnv(air_far, P * sizeof(float)) << 3);
+    printf("%-9s road     %016llx\n", SM_TABLE.name, (unsigned long long)framed);
     return 0;
 }

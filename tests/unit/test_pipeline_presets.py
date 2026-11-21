@@ -228,6 +228,48 @@ def test_pipelines_are_in_physical_order() -> None:
     )
 
 
+def test_the_camera_s_two_settings_are_the_caller_s() -> None:
+    """Wide dynamic range and the noise reducer are settings of a camera,
+    and the two costliest stages of its chain: how often each shows is an
+    argument, the noise reducer's a quarter as often by day as at night."""
+    from surmentations.presets.pipelines import _stream
+
+    def odds(**given: float) -> dict[str, dict[str, float]]:
+        found: dict[str, dict[str, float]] = {}
+        for light, lit, infrared in (("day", False, False), ("night", True, False)):
+            tail = _stream(
+                lit_by_mains=lit, infrared=infrared, dirt=0.2, occluders=0.1, codec=0.0,
+                faults=0.0, severity=2, **given,
+            )  # fmt: skip
+            found[light] = {type(t).__name__: t.p for t in tail}
+        return found
+
+    usual = odds()
+    assert usual["day"]["WdrToneMapping"] == usual["night"]["WdrToneMapping"] == 0.30
+    assert usual["night"]["TemporalDenoiseArtifacts"] == pytest.approx(0.8)
+    assert usual["day"]["TemporalDenoiseArtifacts"] == pytest.approx(0.2)
+    off = odds(wdr=0.0, denoise=0.0)
+    for light in ("day", "night"):
+        assert off[light]["WdrToneMapping"] == 0.0
+        assert off[light]["TemporalDenoiseArtifacts"] == 0.0
+    # And they reach the chain from both pipelines.
+    for pipeline in (
+        surveillance(SharedDepthProvider(_GroundPlane()), codec=0.0, wdr=0.05, denoise=0.4),
+        surveillance_lite(codec=0.0, wdr=0.05, denoise=0.4),
+    ):
+        seen: dict[str, set[float]] = {}
+
+        def walk(node: object, seen: dict[str, set[float]] = seen) -> None:
+            for child in getattr(node, "transforms", []):
+                seen.setdefault(type(child).__name__, set()).add(round(float(child.p), 6))
+                walk(child)
+
+        walk(pipeline)
+        assert seen["WdrToneMapping"] == {0.05}
+        assert seen["TemporalDenoiseArtifacts"] <= {0.4, 0.1}
+        assert 0.4 in seen["TemporalDenoiseArtifacts"]
+
+
 def test_effects_per_frame_is_not_all_or_nothing() -> None:
     """Effects must fire roughly independently, not in lockstep.
 

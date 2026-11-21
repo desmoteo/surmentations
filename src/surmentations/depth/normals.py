@@ -61,7 +61,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from surmentations import mode
+from surmentations import _native, mode
 
 # Assumed horizontal field of view when none is supplied. A typical
 # surveillance/dashcam lens sits near here, and the normal direction is only
@@ -176,6 +176,9 @@ def _normals_and_jump(
     v = (np.arange(height, dtype=np.float32).reshape(height, 1) - np.float32(cy)) / np.float32(
         focal
     )
+    done = _native.normals(depth, u.reshape(width), v.reshape(height), _DIFFERENCE_STEP_PX)
+    if done is not None:
+        return (done[0], done[1], done[2]), done[3]
     point: _Planes = (u * depth, v * depth, depth)
 
     ux, uy, uz = _one_sided_tangent(point, axis=1, step=_DIFFERENCE_STEP_PX)

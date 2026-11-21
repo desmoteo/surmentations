@@ -50,6 +50,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator
 
+from surmentations import _native, mode
 from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
 from surmentations.camera.night_lighting import (
     SceneLighting,
@@ -322,57 +323,99 @@ class NightColorMode(CameraTransform):
         lamps themselves, and noise in each channel.
         """
         linear, scale, is_integer = to_linear_unit(img)
-        surface = linear
-        if lighting.road is not None or lighting.in_beam is not None:
-            # The day's light and shade come off the road, and a road in
-            # the day's deep shade is not left black under a beam: both
-            # were the sun's doing and not the road's.
-            level = luminance(linear)
-            evened = level if lighting.road is None else even_road(level, lighting.road)
-            if lighting.in_beam is not None and road_level is not None:
-                floor = np.float32(_BEAM_ROAD * road_level) * lighting.in_beam
-                # A surface that photographed as black has no colour to
-                # keep: what the beam shows of it is grey.
-                surface = np.maximum(surface, floor[..., None])
-                evened = np.maximum(evened, floor)
-            surface = surface * (evened / np.maximum(luminance(surface), 1e-4))[..., None]
+        glow = np.float32(sky_glow) * sky_colour.reshape(3)
+        floor_scale = 0.0
+        if lighting.in_beam is not None and road_level is not None:
+            floor_scale = _BEAM_ROAD * road_level
+        lit = None
+        if mode.fast():
+            # One pass for the surfaces and the light on them, where the
+            # compiled kernels are there; the same arithmetic below.
+            evened = None
+            if lighting.road is not None:
+                evened = even_road(luminance(linear), lighting.road)
+            elif lighting.in_beam is not None:
+                evened = luminance(linear)
+            lit = _native.night_colour_light(
+                linear,
+                evened,
+                lighting.in_beam if floor_scale > 0.0 else None,
+                lighting.street,
+                lighting.beams,
+                night_sky,
+                [*glow, *street_colour, *head_colour, floor_scale, 1.0 - _NIGHT_SKY_LEVEL]
+                + [0.2126, 0.7152, 0.0722],
+            )
+        if lit is not None:
+            signal, brightness = lit
+        else:
+            surface = linear
+            if lighting.road is not None or lighting.in_beam is not None:
+                # The day's light and shade come off the road, and a road in
+                # the day's deep shade is not left black under a beam: both
+                # were the sun's doing and not the road's.
+                level = luminance(linear)
+                evened = level if lighting.road is None else even_road(level, lighting.road)
+                if lighting.in_beam is not None and road_level is not None:
+                    floor = np.float32(_BEAM_ROAD * road_level) * lighting.in_beam
+                    # A surface that photographed as black has no colour to
+                    # keep: what the beam shows of it is grey.
+                    surface = np.maximum(surface, floor[..., None])
+                    evened = np.maximum(evened, floor)
+                surface = surface * (evened / np.maximum(luminance(surface), 1e-4))[..., None]
 
-        arriving = np.float32(sky_glow) * sky_colour.reshape(1, 1, 3)
-        if lighting.street is not None:
-            arriving = arriving + lighting.street[..., None] * street_colour
-        if lighting.beams is not None:
-            arriving = arriving + lighting.beams[..., None] * head_colour
-        signal = surface * arriving
-        if night_sky is not None:
-            signal = signal * (1.0 - np.float32(1.0 - _NIGHT_SKY_LEVEL) * night_sky)[..., None]
+            arriving = glow.reshape(1, 1, 3)
+            if lighting.street is not None:
+                arriving = arriving + lighting.street[..., None] * street_colour
+            if lighting.beams is not None:
+                arriving = arriving + lighting.beams[..., None] * head_colour
+            signal = surface * arriving
+            if night_sky is not None:
+                dark = 1.0 - np.float32(1.0 - _NIGHT_SKY_LEVEL) * night_sky
+                signal = signal * dark[..., None]
+            brightness = luminance(signal)
 
         # Auto-exposure, on the frame's brightness: for the 80th percentile,
         # and once lamps light the scene, no further than keeps the lit
         # road below white.
-        brightness = luminance(signal)
         reference = percentile(brightness, 80.0)
+        exposure = 1.0
         if reference > 1e-7:
             exposure = target_level / reference
             if lighting.lit:
                 brightest = percentile(brightness, _HIGHLIGHT_PERCENTILE)
                 exposure = min(exposure, _HIGHLIGHT_LEVEL / max(brightest, 1e-7))
-            signal = signal * np.float32(exposure)
             if exposed is not None:
                 exposed[0] = float(exposure)
-
-        # The lamps themselves, at their own level: the traffic's in their
-        # own colours, the street's in the street lighting's.
-        if lighting.vehicle_light is not None and lighting.vehicle_glow is not None:
-            signal = signal + lighting.vehicle_light
-            signal = signal + np.float32(_LAMP_BLOOM) * lighting.vehicle_glow
-        if lighting.head_light is not None and lighting.head_glow is not None:
-            burning = lighting.head_light + np.float32(_LAMP_BLOOM) * lighting.head_glow
-            signal = signal + burning[..., None] * street_colour
 
         # Shot noise and read noise, each channel its own: the grain of a
         # night frame is coloured.
         rng = np.random.default_rng(noise_seed)
         noise = rng.standard_normal(signal.shape, dtype=np.float32)
-        grain = (np.sqrt(np.maximum(signal, 0.0)) * _SHOT + read_noise) * gain
-        out = np.clip(signal + noise * grain.astype(np.float32), 0.0, 1.0).astype(np.float32)
+        vehicle_lamps = head_lamps = None
+        if lighting.vehicle_light is not None and lighting.vehicle_glow is not None:
+            vehicle_lamps = (lighting.vehicle_light, lighting.vehicle_glow)
+        if lighting.head_light is not None and lighting.head_glow is not None:
+            head_lamps = (lighting.head_light, lighting.head_glow)
+        out = _native.night_colour_expose(
+            signal,
+            noise,
+            street_colour,
+            [exposure, _LAMP_BLOOM, _SHOT, read_noise, gain],
+            vehicle_lamps,
+            head_lamps,
+        )
+        if out is None:
+            if reference > 1e-7:
+                signal = signal * np.float32(exposure)
+            # The lamps themselves, at their own level: the traffic's in
+            # their own colours, the street's in the street lighting's.
+            if vehicle_lamps is not None:
+                signal = signal + vehicle_lamps[0]
+                signal = signal + np.float32(_LAMP_BLOOM) * vehicle_lamps[1]
+            if head_lamps is not None:
+                burning = head_lamps[0] + np.float32(_LAMP_BLOOM) * head_lamps[1]
+                signal = signal + burning[..., None] * street_colour
+            grain = (np.sqrt(np.maximum(signal, 0.0)) * _SHOT + read_noise) * gain
+            out = np.clip(signal + noise * grain.astype(np.float32), 0.0, 1.0).astype(np.float32)
         return from_linear_unit(out, scale, is_integer, img.dtype)

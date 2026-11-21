@@ -43,6 +43,32 @@ static inline float clamp01(float v) {
     return v < 1.0f ? v : 1.0f;
 }
 
+/** The most a Gaussian's exponent is taken to be: past it, it is 1e-7 of
+ * its peak and is drawn as that.
+ */
+#define SM_DEEPEST 16.0f
+
+/** exp(-q) for q of 0 and up, without a call: what a loop of Gaussians
+ * needs to be vectorised, the build having no vector `exp`. exp(-q) is
+ * exp(-q / 32) raised to the 32nd power, by five squarings, and exp(-t)
+ * for t in [0, 1/2] is its series to the seventh power, good to 1e-7:
+ * with the squarings' own rounding, a few millionths of the value. Past
+ * `SM_DEEPEST` it is what it is there, 1e-7.
+ */
+static inline float exp_of_minus(float q) {
+    const float c2 = 1.0f / 2.0f, c3 = (float)(1.0 / 6.0), c4 = (float)(1.0 / 24.0);
+    const float c5 = (float)(1.0 / 120.0), c6 = (float)(1.0 / 720.0);
+    const float c7 = (float)(1.0 / 5040.0);
+    q = q < SM_DEEPEST ? q : SM_DEEPEST;
+    const float t = q * (1.0f / 32.0f);
+    float e = 1.0f - t * (1.0f - t * (c2 - t * (c3 - t * (c4 - t * (c5 - t * (c6 - t * c7))))));
+    e *= e;
+    e *= e;
+    e *= e;
+    e *= e;
+    return e * e;
+}
+
 /* ------------------------------------------------------------ colour */
 
 /** Values a colour kernel converts at a time: their indices fit on the stack. */
@@ -1878,6 +1904,1268 @@ static void SM_FN(splat_discs)(
     }
 }
 
+/* ------------------------------------------------- lamps on surfaces */
+
+/** A block of night_light.street_light: one lamp's light on each of `n`
+ * points, added into `light`. It falls off with the square of the
+ * distance from the lamp's head and with how far the point is from
+ * straight under it; a point above the lamp gets its spill.
+ */
+static SM_NOINLINE void street_light_block(
+    float *restrict light, const float *restrict points, const float *restrict raised,
+    ptrdiff_t n, float x, float y, float z, float tall, float lamp_up, float spill) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float dx = x - points[3 * i], dy = y - points[3 * i + 1];
+        const float dz = z - points[3 * i + 2];
+        const float away = sqrtf(dx * dx + dy * dy + dz * dz);
+        const float far = away > 0.5f ? away : 0.5f;
+        const float below = clamp01((lamp_up - raised[i]) / far);
+        const float reach = (tall / far) * (tall / far);
+        /* The cosine to the power of one and a half: itself by its root. */
+        light[i] += reach * (spill + (1.0f - spill) * (below * sqrtf(below)));
+    }
+}
+
+/** night_light.street_light: every lamp's light on every point. `points`
+ * is (pixels, 3) and `raised` how high each stands along `up`; `lamps`
+ * is (count, 4), a head's place and its height. numpy's float arithmetic
+ * in its order, but for the power of one and a half, which is a root and
+ * a product here: to the last bit of a float or one off it.
+ */
+static void SM_FN(street_light)(
+    float *light, const float *points, const float *raised, ptrdiff_t pixels,
+    const float *lamps, ptrdiff_t count, const float *up, float spill) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        for (ptrdiff_t k = 0; k < count; k++) {
+            const float x = lamps[4 * k], y = lamps[4 * k + 1], z = lamps[4 * k + 2];
+            street_light_block(
+                light + done, points + 3 * done, raised + done, n, x, y, z, lamps[4 * k + 3],
+                x * up[0] + y * up[1] + z * up[2], spill);
+        }
+    }
+}
+
+/** A vehicle's pair of dipped beams, as night_light.headlamp_light lays it
+ * on the ground: a row of its table.
+ */
+typedef struct {
+    /** Where its front is along the ground's two axes, and which way it points along them. */
+    float front_first, front_second, ahead_first, ahead_second;
+    /** A metre of it in the scene's units, and what the lens gets of its pool. */
+    float scale, facing;
+} sm_beam;
+
+/** What every dipped beam has in common. */
+typedef struct {
+    /** A lamp's half width at the vehicle and how fast it grows; half the lamps' spacing. */
+    float width, widening, half_apart;
+    /** What each lamp puts on the road, where it has halved, how far it reaches, how high. */
+    float each, halves_m, reach_m, high_m;
+} sm_dipped;
+
+/** A block of night_light.headlamp_light: one vehicle's two beams on each
+ * of `n` points, each point by its two distances along the ground and
+ * its height above it. Two pools just ahead of the vehicle that run into
+ * one, fading with distance, cut off behind it, at the beam's reach and
+ * above the horizontal.
+ */
+static SM_NOINLINE void beam_block(
+    float *restrict light, const float *restrict along_first,
+    const float *restrict along_second, const float *restrict above,
+    const float *restrict low, ptrdiff_t n, const sm_beam *beam, const sm_dipped *dipped) {
+    const sm_beam of = *beam;
+    const sm_dipped lamp = *dipped;
+    const float high = of.scale * lamp.high_m;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float du = along_first[i] - of.front_first;
+        const float dv = along_second[i] - of.front_second;
+        const float along = (du * of.ahead_first + dv * of.ahead_second) / of.scale;
+        const float aside = (du * of.ahead_second - dv * of.ahead_first) / of.scale;
+        const float forward = along > 0.0f ? along : 0.0f;
+        const float wide = lamp.width + lamp.widening * forward;
+        const float one = (aside - lamp.half_apart) / wide;
+        const float other = (aside + lamp.half_apart) / wide;
+        float pool = exp_of_minus(one * one) + exp_of_minus(other * other);
+        const float fades = forward / lamp.halves_m;
+        pool *= lamp.each / (1.0f + fades * fades);
+        pool *= clamp01(along) * clamp01((lamp.reach_m - along) / 15.0f);
+        pool *= of.facing;
+        light[i] += pool * low[i] * clamp01(1.5f - above[i] / high);
+    }
+}
+
+/** night_light.headlamp_light's sum: every lit vehicle's beams on every
+ * point. `along_first`, `along_second` and `above` are each point's place
+ * along the ground's two axes and over it; `low` is nought well above any
+ * beam. `beams` is (count, 6) floats, a row an `sm_beam`, and `how` seven,
+ * an `sm_dipped`. numpy's float arithmetic in its order but for its
+ * exponential, which is a polynomial here: a few millionths of a pool.
+ */
+static void SM_FN(headlamp_beams)(
+    float *light, const float *along_first, const float *along_second, const float *above,
+    const float *low, ptrdiff_t pixels, const float *beams, ptrdiff_t count, const float *how) {
+    const sm_dipped dipped = {how[0], how[1], how[2], how[3], how[4], how[5], how[6]};
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        for (ptrdiff_t k = 0; k < count; k++) {
+            const float *row = beams + 6 * k;
+            const sm_beam beam = {row[0], row[1], row[2], row[3], row[4], row[5]};
+            beam_block(
+                light + done, along_first + done, along_second + done, above + done,
+                low + done, n, &beam, &dipped);
+        }
+    }
+}
+
+/* -------------------------------------------------------------- night */
+
+/** A block of nothing, for a plane a caller has not got: a street with no
+ * lamps, a frame with no sky. Added or multiplied in, it changes no float,
+ * and the loops need no second form without it.
+ */
+static const float sm_nothing[3 * SM_BLOCK];
+
+/** `plane` from `at` on, or nothing where there is no plane. */
+static inline const float *block_of(const float *plane, ptrdiff_t at) {
+    return plane ? plane + at : sm_nothing;
+}
+
+/** A block of night_ir.near_infrared_reflectance: a broad red-weighted
+ * response, lifted where the colour or the labels say leaf.
+ */
+static SM_NOINLINE void nir_block(
+    float *restrict out, const float *restrict linear, const float *restrict vegetation,
+    ptrdiff_t n, const float *restrict response, float gain, float labelled, float usual) {
+    const float w0 = response[0], w1 = response[1], w2 = response[2];
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float r = linear[3 * i], g = linear[3 * i + 1], b = linear[3 * i + 2];
+        const float broadband = r * w0 + g * w1 + b * w2;
+        const float most = r > b ? r : b, all = g + r + b;
+        const float green = clamp01((g - most) / (all > 1e-4f ? all : 1e-4f));
+        const float lit = clamp01(broadband / usual);
+        const float named = labelled * vegetation[i] * lit;
+        const float lifted = broadband + gain * (green > named ? green : named);
+        const float held = lifted > 0.0f ? lifted : 0.0f;
+        out[i] = held < 4.0f ? held : 4.0f;
+    }
+}
+
+/** night_ir.near_infrared_reflectance in one pass. `usual` is the mean of
+ * the broadband response over the frame, which the caller has.
+ */
+static void SM_FN(nir_reflectance)(
+    float *out, const float *linear, const float *vegetation, ptrdiff_t pixels,
+    const float *response, float gain, float labelled, float usual) {
+    usual = usual > 1e-4f ? usual : 1e-4f;
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        nir_block(
+            out + done, linear + 3 * done, block_of(vegetation, done), n, response, gain,
+            labelled, usual);
+    }
+}
+
+/** A block of the infrared night's light: what each surface sends back of
+ * the illuminator, the ambient light, the street lamps and the beams.
+ */
+static SM_NOINLINE void ir_light_block(
+    float *restrict signal, float *restrict lifted, const float *restrict reflectance,
+    const float *restrict exposure, const float *restrict in_beam,
+    const float *restrict street, const float *restrict beams, const float *restrict sky,
+    ptrdiff_t n, float ambient, float floor_scale, float sky_scale) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float floor = floor_scale * in_beam[i];
+        const float surface = reflectance[i] > floor ? reflectance[i] : floor;
+        const float arriving = exposure[i] + ambient + street[i] + beams[i];
+        lifted[i] = surface;
+        signal[i] = surface * arriving * (1.0f - sky_scale * sky[i]);
+    }
+}
+
+/** NightIrMode.apply before its exposure: `signal` is the reflectance,
+ * held up to a floor where a beam falls, times the light that arrives,
+ * less the night sky; `lifted` is that reflectance. Any of `in_beam`,
+ * `street`, `beams` and `sky` may be NULL.
+ */
+static void SM_FN(night_ir_light)(
+    float *signal, float *lifted, const float *reflectance, const float *exposure,
+    const float *in_beam, const float *street, const float *beams, const float *sky,
+    ptrdiff_t pixels, float ambient, float floor_scale, float sky_scale) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        ir_light_block(
+            signal + done, lifted + done, reflectance + done, exposure + done,
+            block_of(in_beam, done), block_of(street, done), block_of(beams, done),
+            block_of(sky, done), n, ambient, floor_scale, sky_scale);
+    }
+}
+
+/** What an infrared night's exposure, lamps and grain share. */
+typedef struct {
+    /** The exposure's gain, the lamps' bloom, and the grain: shot, read, gain. */
+    float level, bloom, shot, read_noise, gain;
+    /** The residual tint of the three channels. */
+    float tint[3];
+} sm_ir_exposure;
+
+/** A block of the infrared night after its exposure: the scene at the
+ * camera's level, the paint's and the sheeting's return, the lamps, the
+ * grain, and the grey tinted into three channels.
+ */
+static SM_NOINLINE void ir_expose_block(
+    float *restrict out, const float *restrict signal, const float *restrict returned,
+    const float *restrict glare, const float *restrict vehicle_light,
+    const float *restrict vehicle_glow, const float *restrict head_light,
+    const float *restrict head_glow, const float *restrict noise, ptrdiff_t n,
+    const sm_ir_exposure *how) {
+    const sm_ir_exposure of = *how;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        float s = signal[i] * of.level + returned[i] + glare[i];
+        const float *restrict light = vehicle_light + 3 * i;
+        const float *restrict glow = vehicle_glow + 3 * i;
+        const float lamp = light[0] > light[1] ? light[0] : light[1];
+        const float halo = glow[0] > glow[1] ? glow[0] : glow[1];
+        s = s + (lamp > light[2] ? lamp : light[2]) + of.bloom * (halo > glow[2] ? halo : glow[2]);
+        s = s + head_light[i] + of.bloom * head_glow[i];
+        const float root = sqrtf(s > 0.0f ? s : 0.0f);
+        const float grey = clamp01(s + noise[i] * (root * of.shot + of.read_noise) * of.gain);
+        out[3 * i] = clamp01(grey * of.tint[0]);
+        out[3 * i + 1] = clamp01(grey * of.tint[1]);
+        out[3 * i + 2] = clamp01(grey * of.tint[2]);
+    }
+}
+
+/** The retroreflected light of a block: the paint's glass beads send the
+ * illuminator's light back down its own beam.
+ */
+static SM_NOINLINE void ir_returned_block(
+    float *restrict returned, const float *restrict retro, const float *restrict lifted,
+    const float *restrict exposure, ptrdiff_t n, float level) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        returned[i] = level * retro[i] * lifted[i] * exposure[i];
+    }
+}
+
+/** NightIrMode.apply from its exposure on: `out` is (pixels, 3). `retro`
+ * with `lifted` and `exposure`, `glare`, the two (pixels, 3) fields of the
+ * traffic's lamps and the two planes of the street's may each be NULL.
+ * `how` is the level, the bloom, the grain's shot, read and gain, and the
+ * tint's three.
+ */
+static void SM_FN(night_ir_expose)(
+    float *out, const float *signal, const float *retro, const float *lifted,
+    const float *exposure, const float *glare, const float *vehicle_light,
+    const float *vehicle_glow, const float *head_light, const float *head_glow,
+    const float *noise, ptrdiff_t pixels, const float *how) {
+    const sm_ir_exposure of = {how[0], how[1], how[2], how[3], how[4], {how[5], how[6], how[7]}};
+    float returned[SM_BLOCK];
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        if (retro) {
+            ir_returned_block(returned, retro + done, lifted + done, exposure + done, n, of.level);
+        }
+        ir_expose_block(
+            out + 3 * done, signal + done, retro ? returned : sm_nothing, block_of(glare, done),
+            block_of(vehicle_light, 3 * done), block_of(vehicle_glow, 3 * done),
+            block_of(head_light, done), block_of(head_glow, done), noise + done, n, &of);
+    }
+}
+
+/** What a colour night's light has in common over a frame. */
+typedef struct {
+    /** The sky's glow, the street lamps' colour and the headlamps', a channel each. */
+    float glow[3], street[3], head[3];
+    /** The beam's floor, how dark the night sky is, and the luminance's weights. */
+    float floor_scale, sky_scale, luma[3];
+} sm_colour_light;
+
+/** A block of the colour night's light, with the day's light and shade
+ * taken off the surfaces first: each is held up to the beam's floor and
+ * scaled to the lightness `evened` gives it.
+ */
+static SM_NOINLINE void colour_light_block(
+    float *restrict signal, float *restrict brightness, const float *restrict linear,
+    const float *restrict evened, const float *restrict in_beam,
+    const float *restrict street, const float *restrict beams, const float *restrict sky,
+    ptrdiff_t n, const sm_colour_light *how, int even) {
+    const sm_colour_light of = *how;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        float r = linear[3 * i], g = linear[3 * i + 1], b = linear[3 * i + 2];
+        const float floor = of.floor_scale * in_beam[i];
+        const float fr = r > floor ? r : floor, fg = g > floor ? g : floor;
+        const float fb = b > floor ? b : floor;
+        const float level = evened[i] > floor ? evened[i] : floor;
+        const float own = fr * of.luma[0] + fg * of.luma[1] + fb * of.luma[2];
+        const float scale = level / (own > 1e-4f ? own : 1e-4f);
+        r = even ? fr * scale : r;
+        g = even ? fg * scale : g;
+        b = even ? fb * scale : b;
+        const float dark = 1.0f - of.sky_scale * sky[i];
+        r = r * (of.glow[0] + street[i] * of.street[0] + beams[i] * of.head[0]) * dark;
+        g = g * (of.glow[1] + street[i] * of.street[1] + beams[i] * of.head[1]) * dark;
+        b = b * (of.glow[2] + street[i] * of.street[2] + beams[i] * of.head[2]) * dark;
+        signal[3 * i] = r, signal[3 * i + 1] = g, signal[3 * i + 2] = b;
+        brightness[i] = r * of.luma[0] + g * of.luma[1] + b * of.luma[2];
+    }
+}
+
+/** NightColorMode.apply before its exposure: `signal`, (pixels, 3), is
+ * each surface's colour times the light that reaches it, and `brightness`
+ * its luminance. With `evened`, a surface is first held up to the beam's
+ * floor and scaled to that lightness. `in_beam`, `street`, `beams` and
+ * `sky` may be NULL. `how` is the sky's glow, the street's colour and the
+ * headlamps', three each, then the floor's scale, the sky's, and the
+ * luminance's three weights.
+ */
+static void SM_FN(night_colour_light)(
+    float *signal, float *brightness, const float *linear, const float *evened,
+    const float *in_beam, const float *street, const float *beams, const float *sky,
+    ptrdiff_t pixels, const float *how) {
+    const sm_colour_light of = {
+        {how[0], how[1], how[2]}, {how[3], how[4], how[5]}, {how[6], how[7], how[8]},
+        how[9], how[10], {how[11], how[12], how[13]},
+    };
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        colour_light_block(
+            signal + 3 * done, brightness + done, linear + 3 * done, block_of(evened, done),
+            block_of(in_beam, done), block_of(street, done), block_of(beams, done),
+            block_of(sky, done), n, &of, evened != NULL);
+    }
+}
+
+/** A block of the colour night after its exposure: the scene at the
+ * camera's level, the lamps in their colours, and each channel's grain.
+ */
+static SM_NOINLINE void colour_expose_block(
+    float *restrict out, const float *restrict signal, const float *restrict vehicle_light,
+    const float *restrict vehicle_glow, const float *restrict head_light,
+    const float *restrict head_glow, const float *restrict noise, ptrdiff_t n,
+    const float *restrict street, float level, float bloom, float shot, float read_noise,
+    float gain) {
+    const float s0 = street[0], s1 = street[1], s2 = street[2];
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float burning = head_light[i] + bloom * head_glow[i];
+        const float tint[3] = {s0, s1, s2};
+        for (int c = 0; c < 3; c++) {
+            const ptrdiff_t at = 3 * i + c;
+            float s = signal[at] * level + vehicle_light[at];
+            s = s + bloom * vehicle_glow[at];
+            s = s + burning * tint[c];
+            const float grain = (sqrtf(s > 0.0f ? s : 0.0f) * shot + read_noise) * gain;
+            out[at] = clamp01(s + noise[at] * grain);
+        }
+    }
+}
+
+/** NightColorMode.apply from its exposure on: `out`, `signal` and `noise`
+ * are (pixels, 3). The traffic's lamps, (pixels, 3) each, and the
+ * street's, a plane each, may be NULL. `how` is the level, the bloom and
+ * the grain's shot, read and gain.
+ */
+static void SM_FN(night_colour_expose)(
+    float *out, const float *signal, const float *vehicle_light, const float *vehicle_glow,
+    const float *head_light, const float *head_glow, const float *noise, ptrdiff_t pixels,
+    const float *street, const float *how) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        colour_expose_block(
+            out + 3 * done, signal + 3 * done, block_of(vehicle_light, 3 * done),
+            block_of(vehicle_glow, 3 * done), block_of(head_light, done),
+            block_of(head_glow, done), noise + 3 * done, n, street, how[0], how[1], how[2],
+            how[3], how[4]);
+    }
+}
+
+/** A block of the night fog before its halo: each lamp counted at what
+ * it plausibly was, and what the fog takes of it.
+ */
+static SM_NOINLINE void fog_lost_block(
+    float *restrict radiance, float *restrict removed, float *restrict weight,
+    const float *restrict linear, const float *restrict clipped,
+    const float *restrict one_way, ptrdiff_t n, float over) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float lamp = clipped[i], lost = 1.0f - one_way[i];
+        const float lift = 1.0f + over * lamp;
+        const float r = linear[3 * i] * lift, g = linear[3 * i + 1] * lift;
+        const float b = linear[3 * i + 2] * lift;
+        const float gone_r = r * lamp * lost, gone_g = g * lamp * lost, gone_b = b * lamp * lost;
+        radiance[3 * i] = r, radiance[3 * i + 1] = g, radiance[3 * i + 2] = b;
+        removed[3 * i] = gone_r, removed[3 * i + 1] = gone_g, removed[3 * i + 2] = gone_b;
+        weight[i] = gone_r + gone_g + gone_b;
+    }
+}
+
+/** NightFog.apply before its halo: `radiance`, (pixels, 3), is `linear`
+ * with its lamps (`clipped`, a plane) lifted by `over`; `removed` what the
+ * fog (`one_way`, its transmission) takes of them, and `weight` that
+ * summed over the channels.
+ */
+static void SM_FN(fog_lost)(
+    float *radiance, float *removed, float *weight, const float *linear,
+    const float *clipped, const float *one_way, ptrdiff_t pixels, float over) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        fog_lost_block(
+            radiance + 3 * done, removed + 3 * done, weight + done, linear + 3 * done,
+            clipped + done, one_way + done, n, over);
+    }
+}
+
+/** What a night fog's veil has in common over a frame. */
+typedef struct {
+    /** How much of the halo comes forward, and whether the light crosses the fog twice. */
+    float forward;
+    int twice;
+    /** The fog's glow by the scene's level, with lamps whose places are known. */
+    float level[3];
+    /** The veil's share, the lit volume's part of it, and the diffuse part a channel. */
+    float share, lit_part, diffuse[3];
+} sm_fog_light;
+
+/** A block of the night fog after its halo: the scene through the fog,
+ * the halo, the lamps' cones or the veil, and the illuminator's wall.
+ */
+static SM_NOINLINE void fog_veil_block(
+    float *restrict out, const float *restrict radiance, const float *restrict halo,
+    const float *restrict one_way, const float *restrict cones, const float *restrict lit,
+    const float *restrict wall, ptrdiff_t n, const sm_fog_light *how) {
+    const sm_fog_light of = *how;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float through = of.twice ? one_way[i] * one_way[i] : one_way[i];
+        const float lost = 1.0f - one_way[i];
+        for (int c = 0; c < 3; c++) {
+            const ptrdiff_t at = 3 * i + c;
+            float v = radiance[at] * through + of.forward * halo[at];
+            v = v + cones[at] + of.level[c] * lost;
+            v = v + of.share * (of.lit_part * lit[at] + of.diffuse[c]) * lost;
+            out[at] = v + wall[i];
+        }
+    }
+}
+
+/** NightFog.apply after its halo, into `out`, (pixels, 3): `radiance`
+ * through the fog (`one_way`, crossed twice with `how`'s second value not
+ * zero), the `halo`, and whichever of the lamps' `cones`, the `lit`
+ * volume and the illuminator's `wall` (a plane) there is; each of the
+ * three may be NULL. `how` is ten floats: the halo's share, whether
+ * twice, the cones' level a channel, the veil's share, its lit part and
+ * its diffuse part a channel.
+ */
+static void SM_FN(fog_veil)(
+    float *out, const float *radiance, const float *halo, const float *one_way,
+    const float *cones, const float *lit, const float *wall, ptrdiff_t pixels,
+    const float *how) {
+    const sm_fog_light of = {
+        how[0], how[1] != 0.0f, {how[2], how[3], how[4]}, how[5], how[6],
+        {how[7], how[8], how[9]},
+    };
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        fog_veil_block(
+            out + 3 * done, radiance + 3 * done, halo + 3 * done, one_way + done,
+            block_of(cones, 3 * done), block_of(lit, 3 * done), block_of(wall, done), n, &of);
+    }
+}
+
+/* --------------------------------------------------------------- snow */
+
+/** What a frame of lying snow has in common. */
+typedef struct {
+    /** Where texture begins to say canopy and over what span it comes to say so wholly. */
+    float relief_from, relief_span;
+    /** How much the snow lies in patches, their contrast, and whether there are any. */
+    float patchiness, contrast;
+    /** How much there is, the unevenness of a thin covering, and a canopy's share. */
+    float strength, grain, canopy_cover;
+} sm_snow_cover;
+
+/** A block of snow.RandomSnow's lying snow, once every field it is read
+ * from is there: where the ground is a canopy, how the snow lies in
+ * patches and in the surface's grain, what a canopy's proud clumps hold,
+ * and nothing on the sky.
+ */
+static SM_NOINLINE void snow_settled_block(
+    float *restrict settled, const float *restrict level, const float *restrict relief,
+    const float *restrict steady, const float *restrict green, const float *restrict lawn,
+    const float *restrict named, const float *restrict patch, const float *restrict grain,
+    const float *restrict luma, const float *restrict around, const float *restrict sky,
+    ptrdiff_t n, const sm_snow_cover *how) {
+    const sm_snow_cover of = *how;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float rough = clamp01((relief[i] - of.relief_from) / of.relief_span);
+        const float unsteady =
+            clamp01((0.85f - steady[i]) / 0.25f) * clamp01((steady[i] - 0.15f) / 0.2f);
+        const float grown = rough * (green[i] > unsteady ? green[i] : unsteady);
+        const float kept = grown * (1.0f - lawn[i]);
+        const float canopy = kept > named[i] ? kept : named[i];
+        const float patches = clamp01((patch[i] - 0.5f) * of.contrast + 0.5f);
+        const float ground =
+            level[i] * (1.0f - canopy) * (1.0f - of.patchiness * (1.0f - patches));
+        const float uneven = 1.0f + of.grain * (2.0f * grain[i] - 1.0f);
+        const float proud = clamp01((luma[i] / around[i] - 0.95f) / 0.35f);
+        const float lying = ground * of.strength * uneven + of.canopy_cover * canopy * proud;
+        settled[i] = lying * (1.0f - sky[i]);
+    }
+}
+
+/** snow.RandomSnow's lying snow from the fields it is read from, a plane
+ * each: `level` ground, the picture's `relief`, how `steady` the level
+ * reads, how `green` it is, the labelled `lawn` and canopy (`named`), the
+ * `patch` noise, the `grain`, the `luma` and its mean `around`, the `sky`.
+ * `lawn`, `named` and `patch` may be NULL. `how` is seven floats: where
+ * relief begins and its span, the patchiness, the patches' contrast, the
+ * strength, the grain's depth and a canopy's cover, the last two already
+ * times what the caller multiplies them by. The numpy code's arithmetic
+ * in its order.
+ */
+static void SM_FN(snow_settled)(
+    float *settled, const float *level, const float *relief, const float *steady,
+    const float *green, const float *lawn, const float *named, const float *patch,
+    const float *grain, const float *luma, const float *around, const float *sky,
+    ptrdiff_t pixels, const float *how) {
+    /* With no patches, none is taken off: a contrast of nothing and no
+     * patchiness leave the ground as it is, to the bit. */
+    const sm_snow_cover of = {
+        how[0], how[1], patch ? how[2] : 0.0f, how[3], how[4], how[5], how[6]};
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        snow_settled_block(
+            settled + done, level + done, relief + done, steady + done, green + done,
+            block_of(lawn, done), block_of(named, done), block_of(patch, done), grain + done,
+            luma + done, around + done, sky + done, n, &of);
+    }
+}
+
+/** The largest whole number not over `x`, for an `x` that an int holds:
+ * written so that every tier works it eight or four at a time, which the
+ * library's `floorf` is not before SSE4.1.
+ */
+static inline float floor_of(float x) {
+    const float whole = (float)(int32_t)x;
+    return whole - (whole > x ? 1.0f : 0.0f);
+}
+
+/** A coordinate on the ground as one in a noise tile, folded at the tile's edges. */
+static inline float folded(float metres, float per_metre, float span, float per_span) {
+    const float pixels = metres * per_metre;
+    const float within = pixels - span * floor_of(pixels * per_span);
+    const float back = span - within;
+    return within < back ? within : back;
+}
+
+/** A row of ground.ground_noise's places in its tile: where each pixel
+ * of the row stands on the ground, across and along, from its depth.
+ */
+static SM_NOINLINE void ground_tile_row(
+    float *restrict tile_x, float *restrict tile_y, const float *restrict depth,
+    const float *restrict column, ptrdiff_t n, float left, float y, const float *restrict how) {
+    const float focal = how[0], cosine = how[1], sine = how[2], per_metre = how[3];
+    const float span = how[4], per_span = how[5], off_x = how[6], off_y = how[7];
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float x = column[i] + left;
+        const float across = x * depth[i] / focal;
+        const float down = y * depth[i] / focal;
+        const float along = depth[i] * cosine - down * sine;
+        tile_x[i] = folded(across + off_x, per_metre, span, per_span);
+        tile_y[i] = folded(along + off_y, per_metre, span, per_span);
+    }
+}
+
+/** ground.ground_noise's two maps into its noise tile, in fast mode: for
+ * each pixel of `depth`, (height, width), its place on the ground across
+ * and along, in tile pixels, folded so that the tile repeats without a
+ * seam. `how` is eight floats: the focal length, the pitch's cosine and
+ * sine, tile pixels a metre, the fold's span and its reciprocal, and the
+ * two offsets. The numpy code's arithmetic to the bit.
+ */
+static void SM_FN(ground_tile)(
+    float *tile_x, float *tile_y, const float *depth, ptrdiff_t height, ptrdiff_t width,
+    const float *how) {
+    float column[SM_BLOCK];
+    for (ptrdiff_t i = 0; i < SM_BLOCK; i++) {
+        column[i] = (float)i;
+    }
+    const float half_wide = (float)((double)width / 2.0);
+    const float half_high = (float)((double)height / 2.0);
+    for (ptrdiff_t v = 0; v < height; v++) {
+        const float y = (float)v - half_high;
+        for (ptrdiff_t u = 0; u < width; u += SM_BLOCK) {
+            const ptrdiff_t n = width - u < SM_BLOCK ? width - u : SM_BLOCK;
+            const ptrdiff_t at = v * width + u;
+            /* The column's number less half the width: a block's first, which
+             * is a whole number or a half and exact, and so is each one's. */
+            ground_tile_row(tile_x + at, tile_y + at, depth + at, column, n,
+                            (float)u - half_wide, y, how);
+        }
+    }
+}
+
+/* ------------------------------------------------------ a road's frame */
+
+/** A row of which way a road runs at each pixel, as a unit vector that
+ * points down the frame. `column` holds the columns' numbers less the
+ * block's first, which is `left`; `under` is the row's distance below the
+ * horizon and `bent` what the road's bend adds to its slope there. In
+ * double, as the numpy code is, and narrowed at the end.
+ */
+static SM_NOINLINE void road_along_row(
+    float *restrict along, const double *restrict column, ptrdiff_t n, double left,
+    double centre, double under, double bent) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const double slope = (column[i] + left - centre) / under - bent;
+        const double length = sqrt(1.0 + slope * slope);
+        along[2 * i] = (float)(slope / length);
+        along[2 * i + 1] = (float)(1.0 / length);
+    }
+}
+
+/** road.model_frame's last field: the way the road runs at every pixel of
+ * a (height, width) frame, into `along`, (height, width, 2). A line along
+ * a road of constant curvature runs, at a pixel, (u - centre) / t - 2
+ * bend / t^2 columns a row, t being the row's distance below the horizon.
+ * The numpy code's double arithmetic to the bit.
+ */
+static void SM_FN(road_along)(
+    float *along, ptrdiff_t height, ptrdiff_t width, double centre, double horizon,
+    double bend) {
+    double column[SM_BLOCK];
+    for (ptrdiff_t i = 0; i < SM_BLOCK; i++) {
+        column[i] = (double)i;
+    }
+    for (ptrdiff_t v = 0; v < height; v++) {
+        const double below = (double)v - horizon;
+        const double under = below > 1e-6 ? below : 1e-6;
+        const double bent = 2.0 * bend / (under * under);
+        for (ptrdiff_t u = 0; u < width; u += SM_BLOCK) {
+            const ptrdiff_t n = width - u < SM_BLOCK ? width - u : SM_BLOCK;
+            road_along_row(
+                along + 2 * (v * width + u), column, n, (double)u, centre, under, bent);
+        }
+    }
+}
+
+/** road.model_frame's other fields, for the rows a road can be on: which
+ * carriageway each pixel is on (`piece`), how far across it (`across`)
+ * and how wide it is there in pixels (`span`), each (rows, width). A
+ * pixel's place across the road is `offset`, and `at` the position that
+ * is counted as; `of_position` says which carriageway a position is on,
+ * 0 being none, and `firsts` and `widths` where each carriageway begins
+ * and how wide it is. `whole` is 1 where the pixel is road at all and
+ * `below` each row's distance below the horizon. A lookup a pixel, so
+ * not a loop a compiler vectorises; the numpy code's arithmetic to the
+ * bit, in double and narrowed at the end.
+ */
+static void SM_FN(road_places)(
+    int32_t *piece, float *across, float *span, const double *offset, const int64_t *at,
+    const uint8_t *whole, const double *below, ptrdiff_t rows, ptrdiff_t width,
+    const int32_t *of_position, const double *firsts, const double *widths) {
+    for (ptrdiff_t v = 0; v < rows; v++) {
+        const double under = below[v];
+        for (ptrdiff_t u = 0; u < width; u++) {
+            const ptrdiff_t i = v * width + u;
+            const int32_t on = of_position[at[i]] * (int32_t)whole[i];
+            const double wide = widths[on];
+            const double place = (offset[i] - firsts[on]) / wide;
+            const double held = place > 0.0 ? (place < 1.0 ? place : 1.0) : 0.0;
+            piece[i] = on;
+            across[i] = on > 0 ? (float)held : 0.0f;
+            span[i] = on > 0 ? (float)(wide * under) : 1.0f;
+        }
+    }
+}
+
+/* --------------------------------------------------------- wheel tracks */
+
+/** Whether any of `n` pixels is on road `road`. */
+static inline int any_on(const int32_t *restrict piece, ptrdiff_t n, int32_t road) {
+    int found = 0;
+    for (ptrdiff_t i = 0; i < n; i++) {
+        found |= piece[i] == road;
+    }
+    return found;
+}
+
+/** For a block of pixels, the lane line at or below each one's place
+ * across its road and the next one up, by trying `line` and the one
+ * `above` it: a pixel past `line` takes them, the rest keep what they
+ * had. Tried for each line in turn from the lowest, this is the search
+ * numpy does, without a branch or a lookup a pixel.
+ */
+static SM_NOINLINE void lane_step(
+    double *restrict lower, double *restrict upper, int32_t *restrict lane,
+    const float *restrict across, ptrdiff_t n, double line, double above, int32_t index) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const int past = line < (double)across[i];
+        lower[i] = past ? line : lower[i];
+        upper[i] = past ? above : upper[i];
+        lane[i] = past ? index : lane[i];
+    }
+}
+
+/** What road `road` gives a block of pixels: where each is in its lane,
+ * in lanes from the lane's middle (`turns`), how wide the lane is, which
+ * lane it is, and whether it is within the road's lanes at all. A pixel
+ * of another road keeps what it had.
+ */
+static SM_NOINLINE void lane_place(
+    float *restrict turns, float *restrict wide, int32_t *restrict which,
+    float *restrict inside, const double *restrict lower, const double *restrict upper,
+    const int32_t *restrict lane, const int32_t *restrict piece, const float *restrict across,
+    ptrdiff_t n, int32_t road, double first, double last) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const int here = piece[i] == road;
+        const double at = (double)across[i];
+        const float lane_wide = (float)(upper[i] - lower[i]);
+        const float place = (float)((at - 0.5 * (lower[i] + upper[i])) / (double)lane_wide);
+        /* Everything a pixel of this road would take is read and worked
+         * out for every pixel, and then taken or not: read inside the
+         * choice, the lane's number was a load only some pixels make,
+         * which is a branch, and the SSE2 tier left the loop scalar. */
+        const float within = (float)((at >= first) & (at <= last));
+        const int32_t numbered = lane[i] + 17 * road;
+        turns[i] = here ? place : turns[i];
+        wide[i] = here ? lane_wide : wide[i];
+        which[i] = here ? numbered : which[i];
+        inside[i] = here ? within : inside[i];
+    }
+}
+
+/** What a frame's wheel tracks have in common. */
+typedef struct {
+    /** Half a track's width in lanes, how far a track wanders, half the wheels' spacing. */
+    float band, wander, half_apart;
+    /** The least of a track that wear leaves, and how fast wear restores it. */
+    float wear_floor, wear_gain;
+    /** Whether the tracks are ragged, and whether they are worn. */
+    int ragged, worn;
+} sm_tracks;
+
+/** A block of the tracks themselves, before each lane's own use: a soft
+ * band either side of the lane's middle, no sharper than a pixel shows.
+ */
+static SM_NOINLINE void track_block(
+    float *restrict track, const float *restrict turns, const float *restrict wide,
+    const float *restrict width_px, const float *restrict ragged, ptrdiff_t n,
+    const sm_tracks *how) {
+    const sm_tracks of = *how;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float wandered = turns[i] + of.wander * (2.0f * ragged[i] - 1.0f);
+        const float turn = of.ragged ? wandered : turns[i];
+        const float half = of.ragged ? of.band * (0.6f + 0.8f * ragged[i]) : of.band;
+        const float from_wheel = fabsf(fabsf(turn) - of.half_apart);
+        const float lane_px = wide[i] * width_px[i];
+        const float pixel = 1.0f / (lane_px > 1.0f ? lane_px : 1.0f);
+        const float soft = 1.6f * half, sharp = 1.5f * pixel;
+        const float reach = soft > sharp ? soft : sharp;
+        const float edge = clamp01(1.0f - from_wheel / reach);
+        track[i] = edge * edge * (3.0f - 2.0f * edge) * clamp01(soft / reach);
+    }
+}
+
+/** A block of tracks by how much has been driven over each stretch, and
+ * only on the road's own lanes.
+ */
+static SM_NOINLINE void track_wear_block(
+    float *restrict out, const float *restrict track, const float *restrict worn,
+    const float *restrict inside, const float *restrict weight, ptrdiff_t n,
+    const sm_tracks *how) {
+    const sm_tracks of = *how;
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float kept = clamp01(of.wear_floor + of.wear_gain * worn[i]);
+        const float driven = of.worn ? track[i] * kept : track[i];
+        out[i] = driven * inside[i] * weight[i];
+    }
+}
+
+/** road.wheel_tracks: the weight of the two wheel tracks down each lane,
+ * for every pixel. `piece` is each pixel's road, `across` its place
+ * across it and `width_px` the road's width there; `edges` holds every
+ * road's lane lines one after another, road r's from `first_edge[r]` to
+ * `first_edge[r + 1]`, for roads 1 to `roads`. `ragged` and `worn` may be
+ * NULL. `use` is how much each of 64 lanes is driven in, and `how` five
+ * floats: the band, the wander, half the wheels' spacing, the wear's
+ * floor and its gain. The numpy code's arithmetic, in double where it is
+ * and float where it is, to the bit.
+ */
+static void SM_FN(wheel_tracks)(
+    float *out, const int32_t *piece, const float *across, const float *width_px,
+    const float *weight, const float *ragged, const float *worn, ptrdiff_t pixels,
+    const double *edges, const int32_t *first_edge, int32_t roads, const float *use,
+    const float *how) {
+    const sm_tracks of = {how[0], how[1], how[2], how[3], how[4], ragged != NULL, worn != NULL};
+    double lower[SM_BLOCK], upper[SM_BLOCK];
+    int32_t lane[SM_BLOCK], which[SM_BLOCK];
+    float turns[SM_BLOCK], wide[SM_BLOCK], inside[SM_BLOCK], track[SM_BLOCK];
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        for (ptrdiff_t i = 0; i < n; i++) {
+            turns[i] = 0.0f, wide[i] = 1.0f, inside[i] = 0.0f, which[i] = 0;
+        }
+        for (int32_t road = 1; road <= roads; road++) {
+            const double *lines = edges + first_edge[road];
+            const int32_t count = first_edge[road + 1] - first_edge[road];
+            if (count < 2 || !any_on(piece + done, n, road)) {
+                continue;
+            }
+            for (ptrdiff_t i = 0; i < n; i++) {
+                lower[i] = lines[0], upper[i] = lines[1], lane[i] = 0;
+            }
+            for (int32_t k = 1; k < count - 1; k++) {
+                lane_step(lower, upper, lane, across + done, n, lines[k], lines[k + 1], k);
+            }
+            lane_place(
+                turns, wide, which, inside, lower, upper, lane, piece + done, across + done, n,
+                road, lines[0], lines[count - 1]);
+        }
+        track_block(track, turns, wide, width_px + done, block_of(ragged, done), n, &of);
+        for (ptrdiff_t i = 0; i < n; i++) {
+            track[i] *= use[which[i] & 63];
+        }
+        track_wear_block(
+            out + done, track, block_of(worn, done), inside, weight + done, n, &of);
+    }
+}
+
+/* ------------------------------------------------- rain, lamps and spray */
+
+/** A block of the traffic's lamps through the rain between them and the
+ * lens, up to full scale: what the wet road then reflects of them.
+ */
+static SM_NOINLINE void lamps_lit_block(
+    float *restrict out, const float *restrict lamp_light, const float *restrict through,
+    ptrdiff_t n) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        for (int c = 0; c < 3; c++) {
+            const float lamp = lamp_light[3 * i + c];
+            out[3 * i + c] += (lamp < 1.0f ? lamp : 1.0f) * through[i];
+        }
+    }
+}
+
+/** RandomRain.apply's lamps before its road: `out`, (pixels, 3), gains
+ * each lamp up to full scale through the veil's transmission `through`.
+ * The numpy code's arithmetic to the bit.
+ */
+static void SM_FN(lamps_lit)(
+    float *out, const float *lamp_light, const float *through, ptrdiff_t pixels) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        lamps_lit_block(out + 3 * done, lamp_light + 3 * done, through + done, n);
+    }
+}
+
+/** A block of the spray over the road and of the lamps through it: the
+ * spray lit as the rain's veil is, then what of each lamp is over full
+ * scale, through the rain and the spray, and its glow in the wet air.
+ */
+static SM_NOINLINE void spray_and_lamps_block(
+    float *restrict out, const float *restrict spray, const float *restrict lamp_light,
+    const float *restrict lamp_glow, const float *restrict through, ptrdiff_t n,
+    const float *restrict lit, float glow_in_rain) {
+    const float l0 = lit[0], l1 = lit[1], l2 = lit[2];
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float share = spray[i];
+        const float clear = through[i] * (1.0f - share);
+        const float wet_air = glow_in_rain + (1.0f - glow_in_rain) * share;
+        const float air[3] = {l0, l1, l2};
+        for (int c = 0; c < 3; c++) {
+            const ptrdiff_t at = 3 * i + c;
+            const float lamp = lamp_light[at];
+            const float veiled = out[at] * (1.0f - share) + air[c] * share;
+            out[at] = veiled + (lamp - (lamp < 1.0f ? lamp : 1.0f)) * clear
+                + lamp_glow[at] * wet_air;
+        }
+    }
+}
+
+/** RandomRain.apply between its road and its streaks, on `out`, (pixels,
+ * 3): the `spray`, a plane, laid over it in the light `lit` (the veil's
+ * radiance times the spray's albedo, a channel each), and then what of
+ * `lamp_light` is over full scale, through `through` and the spray, with
+ * `lamp_glow` by how wet the air is. `spray`, and the two lamp fields
+ * together, may be NULL. The numpy code's arithmetic to the bit.
+ */
+static void SM_FN(spray_and_lamps)(
+    float *out, const float *spray, const float *lamp_light, const float *lamp_glow,
+    const float *through, ptrdiff_t pixels, const float *lit, float glow_in_rain) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        spray_and_lamps_block(
+            out + 3 * done, block_of(spray, done), block_of(lamp_light, 3 * done),
+            block_of(lamp_glow, 3 * done), through + done, n, lit, glow_in_rain);
+    }
+}
+
+/* ------------------------------------------------------------ normals */
+
+/** A surface's unit normal at a pixel, and the relative step in depth it was read across. */
+typedef struct {
+    float x, y, z, jump;
+} sm_normal;
+
+/** normals._normals_and_jump at one pixel. `d` is its depth and (u, v) its
+ * line of sight, so that it stands at (u d, v d, d). Along the row it has
+ * a tangent forwards, from the pixel at `h_a1` to the one at `h_b1`, and
+ * one backwards, from `h_a2` to `h_b2`: each a depth and its own u. Down
+ * the column likewise, each a depth and its own v. Of each pair the one
+ * with the smaller step in depth is the pixel's own surface. Their cross
+ * product, turned to face the lens and made a unit, is the normal. The
+ * numpy code's float arithmetic in its order.
+ */
+static inline sm_normal normal_at(
+    float d, float u, float v,
+    float h_a1, float h_b1, float u_a1, float u_b1,
+    float h_a2, float h_b2, float u_a2, float u_b2,
+    float v_a1, float v_b1, float w_a1, float w_b1,
+    float v_a2, float v_b2, float w_a2, float w_b2) {
+    /* Along the row: the forward difference, the backward one, the choice. */
+    const float fz = h_b1 - h_a1, bz = h_b2 - h_a2;
+    const int forward = fabsf(fz) <= fabsf(bz);
+    const float ux = forward ? u_b1 * h_b1 - u_a1 * h_a1 : u_b2 * h_b2 - u_a2 * h_a2;
+    const float uy = forward ? v * h_b1 - v * h_a1 : v * h_b2 - v * h_a2;
+    const float uz = forward ? fz : bz;
+    /* Down the column. */
+    const float gz = v_b1 - v_a1, cz = v_b2 - v_a2;
+    const int downward = fabsf(gz) <= fabsf(cz);
+    const float vx = downward ? u * v_b1 - u * v_a1 : u * v_b2 - u * v_a2;
+    const float vy = downward ? w_b1 * v_b1 - w_a1 * v_a1 : w_b2 * v_b2 - w_a2 * v_a2;
+    const float vz = downward ? gz : cz;
+    const float nx = uy * vz - uz * vy;
+    const float ny = uz * vx - ux * vz;
+    const float nz = ux * vy - uy * vx;
+    const float length = sqrtf(nx * nx + ny * ny + nz * nz);
+    /* Towards the lens, which is at the origin: n . P < 0. */
+    const float facing = nx * (u * d) + ny * (v * d) + nz * d;
+    float scale = (facing > 0.0f ? -1.0f : 1.0f) / (length > 1e-8f ? length : 1e-8f);
+    scale = length <= 1e-8f ? 0.0f : scale;
+    const float az = fabsf(uz), bv = fabsf(vz);
+    const sm_normal normal = {
+        nx * scale, ny * scale, nz * scale, (az > bv ? az : bv) / (d > 1e-6f ? d : 1e-6f)};
+    return normal;
+}
+
+/** One row of the normals. `mid` is the row's own depth; `a1` to `b1` is
+ * the pair of rows its forward difference is taken across and `a2` to `b2`
+ * its backward one, with `w` those rows' own v. On the frame's top and
+ * bottom rows the two pairs are the same pair. Within `step` of the left
+ * and right edges a pixel has one neighbour along the row and takes it;
+ * the rest of the row is one loop.
+ */
+static SM_NOINLINE void normals_row(
+    float *restrict nx, float *restrict ny, float *restrict nz, float *restrict jump,
+    const float *restrict mid, const float *restrict a1, const float *restrict b1,
+    const float *restrict a2, const float *restrict b2, const float *restrict u, float v,
+    float w_a1, float w_b1, float w_a2, float w_b2, ptrdiff_t width, ptrdiff_t step) {
+    for (ptrdiff_t c = 0; c < step; c++) {
+        const ptrdiff_t e = width - 1 - c;
+        const sm_normal left = normal_at(
+            mid[c], u[c], v, mid[c], mid[c + step], u[c], u[c + step],
+            mid[c], mid[c + step], u[c], u[c + step],
+            a1[c], b1[c], w_a1, w_b1, a2[c], b2[c], w_a2, w_b2);
+        nx[c] = left.x, ny[c] = left.y, nz[c] = left.z, jump[c] = left.jump;
+        const sm_normal right = normal_at(
+            mid[e], u[e], v, mid[e - step], mid[e], u[e - step], u[e],
+            mid[e - step], mid[e], u[e - step], u[e],
+            a1[e], b1[e], w_a1, w_b1, a2[e], b2[e], w_a2, w_b2);
+        nx[e] = right.x, ny[e] = right.y, nz[e] = right.z, jump[e] = right.jump;
+    }
+    const float *restrict before = mid - step;
+    const float *restrict after = mid + step;
+    const float *restrict u_before = u - step;
+    const float *restrict u_after = u + step;
+    SM_VECTORISED for (ptrdiff_t c = step; c < width - step; c++) {
+        const sm_normal here = normal_at(
+            mid[c], u[c], v, mid[c], after[c], u[c], u_after[c],
+            before[c], mid[c], u_before[c], u[c],
+            a1[c], b1[c], w_a1, w_b1, a2[c], b2[c], w_a2, w_b2);
+        nx[c] = here.x, ny[c] = here.y, nz[c] = here.z, jump[c] = here.jump;
+    }
+}
+
+/** normals._normals_and_jump after its blur: each pixel's unit normal as
+ * three planes, and the relative step in depth it was read across.
+ * `depth` is (height, width); `u` and `v` are each column's and each row's
+ * line of sight, (x - cx) / f and (y - cy) / f. Differences are taken
+ * `step` pixels apart, on whichever side of a pixel the depth changes
+ * less, and both sides must exist somewhere: height and width are more
+ * than twice `step`.
+ */
+static void SM_FN(normals)(
+    float *nx, float *ny, float *nz, float *jump, const float *depth, const float *u,
+    const float *v, ptrdiff_t height, ptrdiff_t width, ptrdiff_t step) {
+    for (ptrdiff_t r = 0; r < height; r++) {
+        /* A row within `step` of the top has only the rows below it to
+         * difference with, and one that near the bottom only those above. */
+        const ptrdiff_t fa = r + step < height ? r : r - step;
+        const ptrdiff_t ba = r - step >= 0 ? r - step : r;
+        const ptrdiff_t at = r * width;
+        normals_row(
+            nx + at, ny + at, nz + at, jump + at, depth + at,
+            depth + fa * width, depth + (fa + step) * width,
+            depth + ba * width, depth + (ba + step) * width,
+            u, v[r], v[fa], v[fa + step], v[ba], v[ba + step], width, step);
+    }
+}
+
+/* -------------------------------------------------------------- spray */
+
+/** The columns of a puff's row in the table: see road._PUFF_COLUMNS. */
+enum {
+    PUFF_X, PUFF_Y, PUFF_LONG_X, PUFF_LONG_Y, PUFF_LONG_RADIUS, PUFF_SHORT_RADIUS,
+    PUFF_STRENGTH, PUFF_GROUND_ROW, PUFF_REACH_M, PUFF_RADII_OUT,
+    PUFF_GATE_X, PUFF_GATE_Y, PUFF_KEPT_X, PUFF_KEPT_Y, PUFF_FEATHERED, PUFF_COLUMNS
+};
+
+/** One row of a puff's Gaussian over `n` columns: exp(-(a^2 + b^2) / 2),
+ * with a and b the place along the puff's two axes in units of its radii.
+ * `column` holds the columns' numbers less the window's first, which is
+ * `left` from the puff's middle less that; `dy` is the row's own distance.
+ * Multiplications and a clamp (`exp_of_minus`), and no call.
+ */
+static SM_NOINLINE void puff_row(
+    float *restrict blob, const float *restrict column, ptrdiff_t n, float left, float dy,
+    float long_x, float long_y, float per_long, float per_short) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float dx = column[i] + left;
+        const float a = (dx * long_x + dy * long_y) * per_long;
+        const float b = (dy * long_x - dx * long_y) * per_short;
+        blob[i] = exp_of_minus(0.5f * (a * a + b * b));
+    }
+}
+
+/** A row of a puff cut off behind a line, softly: `past` the line at the
+ * window's first column, growing by `kept_x` a column.
+ */
+static SM_NOINLINE void puff_gate_row(
+    float *restrict blob, const float *restrict column, ptrdiff_t n, float past, float kept_x,
+    float per_feathered) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float start = clamp01((past + column[i] * kept_x) * per_feathered);
+        blob[i] = blob[i] * start * start * (3.0f - 2.0f * start);
+    }
+}
+
+/** A row of a puff added into the spray, less what the vehicles standing
+ * nearer than it hide: over a few rows, and not at a line.
+ */
+static SM_NOINLINE void puff_add_row(
+    float *restrict spray, const float *restrict blob, const float *restrict stands,
+    const float *restrict hidden, ptrdiff_t n, float strength, float ground_row,
+    float per_feather) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float in_front = clamp01((stands[i] - ground_row) * per_feather);
+        spray[i] += strength * (blob[i] * (1.0f - hidden[i] * in_front));
+    }
+}
+
+/** As ``puff_add_row``, less also what the scene hides: what is much
+ * nearer the lens than the puff's vehicle, unless it is a vehicle itself.
+ */
+static SM_NOINLINE void puff_add_row_behind(
+    float *restrict spray, const float *restrict blob, const float *restrict stands,
+    const float *restrict hidden, const float *restrict depth, ptrdiff_t n, float strength,
+    float ground_row, float per_feather, float per_reach, float hides_wholly, float per_span) {
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float in_front = clamp01((stands[i] - ground_row) * per_feather);
+        const float clear = clamp01((depth[i] * per_reach - hides_wholly) * per_span);
+        const float inside = clamp01(2.0f * hidden[i] - 1.0f);
+        const float shown = blob[i] * (1.0f - hidden[i] * in_front);
+        spray[i] += strength * (shown * (clear > inside ? clear : inside));
+    }
+}
+
+/** road._add_puff for every row of `puffs`, (count, 15) doubles, in their
+ * order: each a Gaussian with its own axes and radii, added into `spray`
+ * over the window it reaches, less what hides it. `stands`, `hidden` and
+ * `depth` (which may be NULL) are (height, width) like `spray`.
+ */
+static void SM_FN(spray_puffs)(
+    float *spray, const float *stands, const float *hidden, const float *depth,
+    ptrdiff_t height, ptrdiff_t width, const double *puffs, ptrdiff_t count, float feather,
+    float hides_wholly, float stands_nearer) {
+    float column[SM_BLOCK], blob[SM_BLOCK];
+    for (ptrdiff_t i = 0; i < SM_BLOCK; i++) {
+        column[i] = (float)i;
+    }
+    const float per_feather = 1.0f / feather;
+    const float per_span = 1.0f / (stands_nearer - hides_wholly);
+    for (ptrdiff_t k = 0; k < count; k++) {
+        const double *puff = puffs + k * PUFF_COLUMNS;
+        const double widest = puff[PUFF_LONG_RADIUS] > puff[PUFF_SHORT_RADIUS]
+            ? puff[PUFF_LONG_RADIUS] : puff[PUFF_SHORT_RADIUS];
+        const double out = puff[PUFF_RADII_OUT] * widest;
+        /* Not a number, or wider than any frame: nothing a picture holds. */
+        if (!(out >= 0.0 && out < 1e6 && fabs(puff[PUFF_X]) < 1e7 && fabs(puff[PUFF_Y]) < 1e7)) {
+            continue;
+        }
+        const ptrdiff_t reach = (ptrdiff_t)out + 1;
+        const ptrdiff_t at_x = (ptrdiff_t)puff[PUFF_X], at_y = (ptrdiff_t)puff[PUFF_Y];
+        const ptrdiff_t x0 = at_x - reach < 0 ? 0 : at_x - reach;
+        const ptrdiff_t x1 = at_x + reach + 1 > width ? width : at_x + reach + 1;
+        const ptrdiff_t y0 = at_y - reach < 0 ? 0 : at_y - reach;
+        const ptrdiff_t y1 = at_y + reach + 1 > height ? height : at_y + reach + 1;
+        if (x0 >= x1 || y0 >= y1) {
+            continue;
+        }
+        const float x = (float)puff[PUFF_X], y = (float)puff[PUFF_Y];
+        const float long_x = (float)puff[PUFF_LONG_X], long_y = (float)puff[PUFF_LONG_Y];
+        const double long_radius = puff[PUFF_LONG_RADIUS], short_radius = puff[PUFF_SHORT_RADIUS];
+        const float per_long = 1.0f / (float)(long_radius > 1.0 ? long_radius : 1.0);
+        const float per_short = 1.0f / (float)(short_radius > 1.0 ? short_radius : 1.0);
+        const float strength = (float)puff[PUFF_STRENGTH];
+        const float ground_row = (float)puff[PUFF_GROUND_ROW];
+        const int gated = puff[PUFF_FEATHERED] > 0.0;
+        const float kept_x = (float)puff[PUFF_KEPT_X], kept_y = (float)puff[PUFF_KEPT_Y];
+        const float gate_x = (float)puff[PUFF_GATE_X], gate_y = (float)puff[PUFF_GATE_Y];
+        const float per_feathered =
+            1.0f / (float)(puff[PUFF_FEATHERED] > 1.0 ? puff[PUFF_FEATHERED] : 1.0);
+        const int behind = depth != NULL && puff[PUFF_REACH_M] > 0.0;
+        const float per_reach = behind ? 1.0f / (float)puff[PUFF_REACH_M] : 0.0f;
+        for (ptrdiff_t v = y0; v < y1; v++) {
+            const float dy = (float)v - y;
+            for (ptrdiff_t u = x0; u < x1; u += SM_BLOCK) {
+                const ptrdiff_t n = x1 - u < SM_BLOCK ? x1 - u : SM_BLOCK;
+                const ptrdiff_t here = v * width + u;
+                puff_row(blob, column, n, (float)u - x, dy, long_x, long_y, per_long, per_short);
+                if (gated) {
+                    const float past = ((float)v - gate_y) * kept_y + ((float)u - gate_x) * kept_x;
+                    puff_gate_row(blob, column, n, past, kept_x, per_feathered);
+                }
+                if (behind) {
+                    puff_add_row_behind(
+                        spray + here, blob, stands + here, hidden + here, depth + here, n,
+                        strength, ground_row, per_feather, per_reach, hides_wholly, per_span);
+                } else {
+                    puff_add_row(
+                        spray + here, blob, stands + here, hidden + here, n, strength,
+                        ground_row, per_feather);
+                }
+            }
+        }
+    }
+}
+
+/* ------------------------------------------------------------ lit air */
+
+/** A direction in a plane, as the cosine and the sine of its angle. */
+typedef struct {
+    float c, s;
+} sm_turn;
+
+/** The direction halfway between two: their sum, made a unit. Good while
+ * the two are less than half a turn apart, which the two ends of a line of
+ * sight seen from a lamp always are.
+ */
+static inline sm_turn halfway(sm_turn a, sm_turn b) {
+    const float c = a.c + b.c, s = a.s + b.s;
+    const float square = c * c + s * s;
+    const float unit = 1.0f / sqrtf(square > 1e-12f ? square : 1e-12f);
+    const sm_turn mid = {c * unit, s * unit};
+    return mid;
+}
+
+/** What one lamp, a block of lines of sight and the air have in common. */
+typedef struct {
+    /** The lamp's head, the square of its height and of its distance, and how high it is. */
+    float x, y, z, tall2, apart, lamp_up;
+    /** The square of the nearest a line is taken to pass, and the lamp's spill. */
+    float nearest2, spill;
+    /** The forward scattering's ``1 + g^2``, ``2 g`` and ``1 - g^2``. */
+    float least, twice, most;
+} sm_lamp;
+
+/** The lit air at one point of a line: how far below the lamp it is, and
+ * how much of the light going that way is scattered on to the lens.
+ */
+static inline float lit_at(sm_turn at, float over, float rising, const sm_lamp *lamp) {
+    const float below = clamp01(at.c * over - at.s * rising);
+    const float turned = lamp->least + lamp->twice * at.s;
+    const float forward = lamp->most / (turned * sqrtf(turned));
+    return forward * (lamp->spill + (1.0f - lamp->spill) * (below * below));
+}
+
+/** One lamp's light on the air along each of `n` lines of sight, added
+ * into `air`, and that times how far off into `reach`.
+ *
+ * A line that passes the lamp at `passes` is seen from the lamp, at `s`
+ * along it from the nearest approach, in the direction (passes, s). The
+ * line's two ends are two such directions; seven more between them come by
+ * halving, and Simpson's rule sums the nine. The angle between neighbours
+ * comes from its sine by the arcsine's series. So there is no call in the
+ * loop: multiplications, divisions, square roots and clamps, in the order
+ * night_light._air_of_lamp has them.
+ */
+static SM_NOINLINE void air_of_lamp_block(
+    float *restrict air, float *restrict reach, const float *restrict rx,
+    const float *restrict ry, const float *restrict rz, const float *restrict far,
+    const float *restrict rising, ptrdiff_t n, const sm_lamp *lamp) {
+    const sm_lamp of = *lamp;
+    const float sixth = (float)(1.0 / 6.0), fortieth = (float)(3.0 / 40.0);
+    const float last_term = (float)(15.0 / 336.0), third = (float)(1.0 / 3.0);
+    SM_VECTORISED for (ptrdiff_t i = 0; i < n; i++) {
+        const float along = rx[i] * of.x + ry[i] * of.y + rz[i] * of.z;
+        const float clear = of.apart - along * along;
+        const float nearness = 1.0f / sqrtf(clear > of.nearest2 ? clear : of.nearest2);
+        const float over = (of.lamp_up - along * rising[i]) * nearness;
+        const float first = -along * nearness, last = (far[i] - along) * nearness;
+        const float unit_first = 1.0f / sqrtf(1.0f + first * first);
+        const float unit_last = 1.0f / sqrtf(1.0f + last * last);
+        const sm_turn t0 = {unit_first, first * unit_first};
+        const sm_turn t8 = {unit_last, last * unit_last};
+        const sm_turn t4 = halfway(t0, t8);
+        const sm_turn t2 = halfway(t0, t4), t6 = halfway(t4, t8);
+        const sm_turn t1 = halfway(t0, t2), t3 = halfway(t2, t4);
+        const sm_turn t5 = halfway(t4, t6), t7 = halfway(t6, t8);
+        const float sine = t0.c * t1.s - t0.s * t1.c;
+        const float square = sine * sine;
+        const float step =
+            sine * (1.0f + square * (sixth + square * (fortieth + square * last_term)));
+        float summed = lit_at(t0, over, rising[i], &of);
+        summed += 4.0f * lit_at(t1, over, rising[i], &of);
+        summed += 2.0f * lit_at(t2, over, rising[i], &of);
+        summed += 4.0f * lit_at(t3, over, rising[i], &of);
+        summed += 2.0f * lit_at(t4, over, rising[i], &of);
+        summed += 4.0f * lit_at(t5, over, rising[i], &of);
+        summed += 2.0f * lit_at(t6, over, rising[i], &of);
+        summed += 4.0f * lit_at(t7, over, rising[i], &of);
+        summed += lit_at(t8, over, rising[i], &of);
+        const float lit = of.tall2 * (step * third * summed * nearness);
+        const float nearest = along > 0.0f ? along : 0.0f;
+        air[i] += lit;
+        reach[i] += lit * (nearest < far[i] ? nearest : far[i]);
+    }
+}
+
+/** night_light.street_air's sum: every lamp's light on the air along every
+ * line of sight. `rx`, `ry`, `rz` are the lines' unit directions, `far`
+ * how long each is and `rising` its direction against `up`; `lamps` is
+ * (count, 4), a head's place and its height. A block of lines at a time,
+ * every lamp over it, so that the seven planes of a block stay in the
+ * cache; a pixel's lamps are still summed in their order.
+ */
+static void SM_FN(street_air)(
+    float *air, float *reach, const float *rx, const float *ry, const float *rz,
+    const float *far, const float *rising, ptrdiff_t pixels, const float *lamps,
+    ptrdiff_t count, const float *up, float nearest2, float spill, float forward) {
+    for (ptrdiff_t done = 0; done < pixels; done += SM_BLOCK) {
+        const ptrdiff_t n = pixels - done < SM_BLOCK ? pixels - done : SM_BLOCK;
+        for (ptrdiff_t k = 0; k < count; k++) {
+            const float x = lamps[4 * k], y = lamps[4 * k + 1], z = lamps[4 * k + 2];
+            const float tall = lamps[4 * k + 3];
+            const sm_lamp lamp = {
+                x, y, z, tall * tall, x * x + y * y + z * z,
+                x * up[0] + y * up[1] + z * up[2], nearest2, spill,
+                1.0f + forward * forward, 2.0f * forward, 1.0f - forward * forward,
+            };
+            air_of_lamp_block(
+                air + done, reach + done, rx + done, ry + done, rz + done, far + done,
+                rising + done, n, &lamp);
+        }
+    }
+}
+
 #ifdef SM_NATIVE
 /** The native tier is compiled with -march=native, for whatever the build
  * machine had. Run on a CPU without one of those instruction sets it would
@@ -1944,4 +3232,23 @@ const sm_kernel_table SM_FN(sm_table) = {
     SM_FN(water_lobes),
     SM_FN(droplet_composite),
     SM_FN(splat_discs),
+    SM_FN(street_air),
+    SM_FN(spray_puffs),
+    SM_FN(normals),
+    SM_FN(nir_reflectance),
+    SM_FN(night_ir_light),
+    SM_FN(night_ir_expose),
+    SM_FN(night_colour_light),
+    SM_FN(night_colour_expose),
+    SM_FN(fog_lost),
+    SM_FN(fog_veil),
+    SM_FN(snow_settled),
+    SM_FN(ground_tile),
+    SM_FN(street_light),
+    SM_FN(headlamp_beams),
+    SM_FN(wheel_tracks),
+    SM_FN(lamps_lit),
+    SM_FN(spray_and_lamps),
+    SM_FN(road_along),
+    SM_FN(road_places),
 };

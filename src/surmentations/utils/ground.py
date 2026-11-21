@@ -269,6 +269,15 @@ def ground_noise(
         noise = (ranks / (noise.size - 1)).reshape(noise.shape)
 
     pitch = np.deg2rad(camera_pitch_deg)
+    offset = rng.uniform(0.0, 100.0, size=2)
+    period = 2.0 * (_TILE_PX - 1)
+    if mode.fast():
+        # Both maps in one pass, where the compiled kernels are there: the
+        # arithmetic below, which is a dozen passes over the frame.
+        how = [focal_px, np.cos(pitch), np.sin(pitch), _TILE_PX / (_TILE_CELLS * scale_m)]
+        places = _native.ground_tile(depth_m, [*how, period, 1.0 / period, *offset])
+        if places is not None:
+            return cv2.remap(noise, places[0], places[1], interpolation=cv2.INTER_LINEAR)
     xs = (np.arange(width, dtype=np.float32) - width / 2.0).reshape(1, -1)
     ys = (np.arange(height, dtype=np.float32) - height / 2.0).reshape(-1, 1)
     across = xs * depth_m / focal_px
@@ -283,7 +292,6 @@ def ground_noise(
         seam. Fast mode folds with a floor where exact mode takes a remainder.
         """
         pixels = metres * (_TILE_PX / (_TILE_CELLS * scale_m))
-        period = 2.0 * (_TILE_PX - 1)
         if mode.fast():
             # The same fold by a floor: `np.mod` on a frame of floats was a
             # tenth of a settled-snow frame, and this is a tenth of that. It
@@ -294,7 +302,6 @@ def ground_noise(
         folded = np.mod(pixels, period)
         return np.where(folded > period / 2.0, period - folded, folded).astype(np.float32)
 
-    offset = rng.uniform(0.0, 100.0, size=2)
     return cv2.remap(
         noise,
         tile(across + mode.scalar(offset[0])),

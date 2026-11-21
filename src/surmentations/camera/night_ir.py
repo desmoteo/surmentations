@@ -56,7 +56,7 @@ from albumentations.core.pydantic import check_range_bounds, nondecreasing
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
-from surmentations import mode
+from surmentations import _native, mode
 from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
 from surmentations.camera.night_lighting import (
     SceneLighting,
@@ -555,6 +555,16 @@ def near_infrared_reflectance(
     read off colour, and colour says "leaf" only for a green leaf in good
     light; a labelled one is lifted whatever colour it photographed as.
     """
+    if mode.fast():
+        # In one pass where the compiled kernels are there. The frame's
+        # mean response, which the labelled leaves are lit against, is the
+        # response of its mean colour.
+        usual = float(np.dot(cv2.mean(linear_rgb)[:3], _NIR_RESPONSE.astype(np.float64)))
+        done = _native.nir_reflectance(
+            linear_rgb, vegetation, _NIR_RESPONSE, vegetation_gain, _LABELLED_GREENNESS, usual
+        )
+        if done is not None:
+            return done
     broadband = linear_rgb @ _NIR_RESPONSE
 
     # Greenness relative to red is where chlorophyll is, and chlorophyll is
@@ -937,32 +947,54 @@ class NightIrMode(CameraTransform):
         linear, scale, is_integer = to_linear_unit(img)
 
         reflectance = near_infrared_reflectance(linear, vegetation_gain, vegetation)
-        arriving = exposure + ambient
         lighting = SceneLighting() if lighting is None else lighting
-        if lighting.lit:
+        if lighting.lit and lighting.road is not None:
             # Lit by lamps: the road loses the day's light and shade, which
             # no lamp explains, and takes the pools and the beams.
-            if lighting.road is not None:
-                reflectance = even_road(reflectance, lighting.road)
-            if lighting.in_beam is not None and road_level is not None:
-                # A beam falls on a road, and a road in the day's deep
-                # shade photographed as black: lit, it would stay black.
-                # The shade was the light and not the road, so where a
-                # beam falls the road sends back most of what a road does.
-                floor = np.float32(_BEAM_ROAD * road_level) * lighting.in_beam
-                reflectance = np.maximum(reflectance, floor)
-            for thrown in (lighting.street, lighting.beams):
-                if thrown is not None:
-                    arriving = arriving + thrown
-        signal = reflectance * arriving
-        if night_sky is not None:
-            signal = signal * (1.0 - np.float32(1.0 - _NIGHT_SKY_LEVEL) * night_sky)
+            reflectance = even_road(reflectance, lighting.road)
+        beamed = lighting.lit and lighting.in_beam is not None and road_level is not None
+        sky_scale = 1.0 - _NIGHT_SKY_LEVEL
+        lit = None
+        if mode.fast():
+            # The light on every surface in one pass, where the compiled
+            # kernels are there; the same arithmetic below.
+            lit = _native.night_ir_light(
+                reflectance,
+                exposure,
+                lighting.in_beam if beamed else None,
+                lighting.street if lighting.lit else None,
+                lighting.beams if lighting.lit else None,
+                night_sky,
+                ambient,
+                _BEAM_ROAD * road_level if beamed and road_level is not None else 0.0,
+                sky_scale,
+            )
+        if lit is not None:
+            signal, reflectance = lit
+        else:
+            arriving = exposure + ambient
+            if lighting.lit:
+                if lighting.in_beam is not None and road_level is not None:
+                    # A beam falls on a road, and a road in the day's deep
+                    # shade photographed as black: lit, it would stay black.
+                    # The shade was the light and not the road, so where a
+                    # beam falls the road sends back most of what a road does.
+                    floor = np.float32(_BEAM_ROAD * road_level) * lighting.in_beam
+                    reflectance = np.maximum(reflectance, floor)
+                for thrown in (lighting.street, lighting.beams):
+                    if thrown is not None:
+                        arriving = arriving + thrown
+            signal = reflectance * arriving
+            if night_sky is not None:
+                signal = signal * (1.0 - np.float32(sky_scale) * night_sky)
 
         # Auto-exposure. The camera gains up until the scene is usable, so the
         # absolute level is set by the AE loop rather than by the illuminator's
         # nominal range — while the near/far *ratio* the inverse-square law
         # produced is untouched, which is the part that reads as night footage.
         reference_level = percentile(signal, 80.0)
+        level = 1.0
+        returned = glare = None
         if reference_level > 1e-6:
             level = target_level / reference_level
             if lighting.lit:
@@ -971,22 +1003,22 @@ class NightIrMode(CameraTransform):
                 # lit road is a white sheet; a camera holds its highlights.
                 brightest = percentile(signal, _HIGHLIGHT_PERCENTILE)
                 level = min(level, _HIGHLIGHT_LEVEL / max(brightest, 1e-6))
-            signal = signal * level
             if exposed is not None:
                 exposed[0] = float(level)
             if retro is not None:
                 # The glass beads in road paint send the illuminator's
                 # light back down its own beam, to a lens that is beside
                 # it: a few times what the paint's own brightness would.
-                signal = signal + np.float32(level) * retro * reflectance * exposure
+                returned = (retro, reflectance, exposure)
             if sheeting is not None:
                 # And sheeting hundreds of times what a white surface
                 # would, whatever the plate or the sign photographed as.
                 # Added once the camera has exposed for the scene, which is
                 # not for these; and spread as a lens spreads what is far
                 # over full scale, which is all that shows of it.
-                returned = np.minimum(np.float32(level) * sheeting * exposure, _SHEETING_MOST)
-                signal = signal + lens_glare(returned)
+                glare = lens_glare(
+                    np.minimum(np.float32(level) * sheeting * exposure, _SHEETING_MOST)
+                )
 
         # Gain deliberately does *not* rescale the signal here. On a real
         # camera gain is one of the things the AE loop uses to *reach* its
@@ -997,6 +1029,38 @@ class NightIrMode(CameraTransform):
         # featureless white plate covering 24% of the image. What gain does
         # control is the noise, below.
 
+        # Shot noise scales as sqrt(signal); read noise does not scale at all,
+        # which is why the shadows of a gained-up frame are the noisy part.
+        rng = np.random.default_rng(noise_seed)
+        noise = rng.standard_normal(signal.shape).astype(np.float32)
+        # Near-monochrome, with the slight residual cast these sensors keep
+        # rather than a mathematically perfect grey.
+        tint = np.array([1.0 + self.residual_tint, 1.0, 1.0 - self.residual_tint * 0.5])
+        vehicle_lamps = head_lamps = None
+        if lighting.vehicle_light is not None and lighting.vehicle_glow is not None:
+            vehicle_lamps = (lighting.vehicle_light, lighting.vehicle_glow)
+        if lighting.head_light is not None and lighting.head_glow is not None:
+            head_lamps = (lighting.head_light, lighting.head_glow)
+        done = None
+        if vehicle_lamps is None or vehicle_lamps[0].ndim == 3:
+            done = _native.night_ir_expose(
+                signal,
+                noise,
+                [level, _LAMP_BLOOM, 0.02, read_noise, gain, *tint],
+                returned,
+                glare,
+                vehicle_lamps,
+                head_lamps,
+            )
+        if done is not None:
+            return from_linear_unit(done, scale, is_integer, img.dtype)
+
+        if reference_level > 1e-6:
+            signal = signal * level
+        if returned is not None:
+            signal = signal + np.float32(level) * returned[0] * returned[1] * returned[2]
+        if glare is not None:
+            signal = signal + glare
         # The lamps. They are sources and not surfaces: what they send the
         # lens is theirs, whatever the illuminator delivers where they are
         # and wherever the auto-exposure has put the scene, which is
@@ -1004,28 +1068,19 @@ class NightIrMode(CameraTransform):
         # their own level, after both. White whatever their colour: with
         # the filter out a red lamp is a bright one and no more. (Channel
         # against channel: a maximum along an axis of three is far slower.)
-        for light, glow in (
-            (lighting.vehicle_light, lighting.vehicle_glow),
-            (lighting.head_light, lighting.head_glow),
-        ):
-            if light is None or glow is None:
+        for lamps in (vehicle_lamps, head_lamps):
+            if lamps is None:
                 continue
+            light, glow = lamps
             if light.ndim == 3:
                 light = np.maximum(np.maximum(light[..., 0], light[..., 1]), light[..., 2])
                 glow = np.maximum(np.maximum(glow[..., 0], glow[..., 1]), glow[..., 2])
             signal = signal + light + np.float32(_LAMP_BLOOM) * glow
 
-        # Shot noise scales as sqrt(signal); read noise does not scale at all,
-        # which is why the shadows of a gained-up frame are the noisy part.
-        rng = np.random.default_rng(noise_seed)
-        noise = rng.standard_normal(signal.shape).astype(np.float32)
         signal = signal + noise * (np.sqrt(np.maximum(signal, 0.0)) * 0.02 + read_noise) * gain
 
         signal = np.clip(signal, 0.0, 1.0)
 
-        # Near-monochrome, with the slight residual cast these sensors keep
-        # rather than a mathematically perfect grey.
-        tint = np.array([1.0 + self.residual_tint, 1.0, 1.0 - self.residual_tint * 0.5])
         out = signal[..., None] * tint.astype(np.float32)[None, None, :]
         np.clip(out, 0.0, 1.0, out=out)
         return from_linear_unit(out, scale, is_integer, img.dtype)

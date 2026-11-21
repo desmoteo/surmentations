@@ -29,7 +29,7 @@
  * ``surmentations._native`` refuses a library whose version is not its
  * own: a stale build is not called with the wrong arguments.
  */
-#define SM_ABI_VERSION 12
+#define SM_ABI_VERSION 14
 
 /** One instruction-set tier's kernels: what ``sm_kernels.c`` exports, once per tier.
  *
@@ -211,6 +211,230 @@ typedef struct {
         double *total, ptrdiff_t height, ptrdiff_t width,
         const float *x, const float *y, const float *radius, const float *weight,
         const int64_t *order, ptrdiff_t count);
+
+    /** night_light.street_air: the street lamps' light on the air along
+     * each of `pixels` lines of sight, added into `air`, and that times how
+     * far along the line it is into `reach`. A line is its unit direction
+     * (`rx`, `ry`, `rz`), its length `far` and its direction against `up`,
+     * `rising`; `lamps` is (count, 4), a head's place and its height.
+     * `nearest2` is the square of the nearest a line is taken to pass a
+     * lamp, `spill` what a lamp sends upwards and `forward` the asymmetry
+     * of the air's scattering. The numpy code's float arithmetic in its
+     * order.
+     */
+    void (*street_air)(
+        float *air, float *reach, const float *rx, const float *ry, const float *rz,
+        const float *far, const float *rising, ptrdiff_t pixels, const float *lamps,
+        ptrdiff_t count, const float *up, float nearest2, float spill, float forward);
+
+    /** road._add_puff for a whole table: `count` puffs of spray, each a
+     * Gaussian with its own axes and radii, added into `spray` less what
+     * hides them. `puffs` is (count, 15) doubles, a row as
+     * road._PUFF_COLUMNS has it; `stands`, `hidden` and `depth` (which may
+     * be NULL) are (height, width) like `spray`. numpy's float arithmetic
+     * with reciprocals for its divisions and a polynomial for its
+     * exponential: within a few millionths of a puff's density.
+     */
+    void (*spray_puffs)(
+        float *spray, const float *stands, const float *hidden, const float *depth,
+        ptrdiff_t height, ptrdiff_t width, const double *puffs, ptrdiff_t count,
+        float feather, float hides_wholly, float stands_nearer);
+
+    /** normals._normals_and_jump after its blur: each pixel's unit surface
+     * normal as the planes `nx`, `ny`, `nz`, and in `jump` the relative
+     * step in depth it was read across. `depth` is (height, width), and
+     * `u` (width) and `v` (height) each column's and row's line of sight.
+     * Differences are `step` apart and one-sided; height and width must
+     * be more than twice `step`. The numpy code's arithmetic to the bit.
+     */
+    void (*normals)(
+        float *nx, float *ny, float *nz, float *jump, const float *depth, const float *u,
+        const float *v, ptrdiff_t height, ptrdiff_t width, ptrdiff_t step);
+
+    /** night_ir.near_infrared_reflectance: a broad red-weighted `response`
+     * of `linear`, (pixels, 3), lifted by `gain` where the colour says
+     * leaf or `vegetation` (which may be NULL) does, by `labelled` and by
+     * the pixel's brightness against `usual`, the frame's mean response.
+     */
+    void (*nir_reflectance)(
+        float *out, const float *linear, const float *vegetation, ptrdiff_t pixels,
+        const float *response, float gain, float labelled, float usual);
+
+    /** NightIrMode.apply before its exposure: `signal` is `reflectance`,
+     * held up to `floor_scale` times `in_beam`, times the light arriving
+     * (`exposure` and `ambient`, `street`, `beams`), less `sky_scale` of
+     * the night `sky`; `lifted` is the reflectance so held. `in_beam`,
+     * `street`, `beams` and `sky` may be NULL.
+     */
+    void (*night_ir_light)(
+        float *signal, float *lifted, const float *reflectance, const float *exposure,
+        const float *in_beam, const float *street, const float *beams, const float *sky,
+        ptrdiff_t pixels, float ambient, float floor_scale, float sky_scale);
+
+    /** NightIrMode.apply from its exposure on, into `out`, (pixels, 3):
+     * the signal at the camera's level, what `retro` returns of `lifted`
+     * and `exposure`, the `glare`, the lamps (the traffic's (pixels, 3),
+     * the street's a plane each), the grain from `noise`, clipped and
+     * tinted. Each of those but `signal` and `noise` may be NULL. `how` is
+     * eight floats: level, bloom, shot, read noise, gain and the tint.
+     */
+    void (*night_ir_expose)(
+        float *out, const float *signal, const float *retro, const float *lifted,
+        const float *exposure, const float *glare, const float *vehicle_light,
+        const float *vehicle_glow, const float *head_light, const float *head_glow,
+        const float *noise, ptrdiff_t pixels, const float *how);
+
+    /** NightColorMode.apply before its exposure: `signal`, (pixels, 3), is
+     * each surface's colour times the light reaching it, and `brightness`
+     * its luminance. With `evened` a surface is first held up to the
+     * beam's floor and scaled to that lightness. `evened`, `in_beam`,
+     * `street`, `beams` and `sky` may be NULL. `how` is fourteen floats:
+     * the sky's glow, the street's colour and the headlamps', the floor's
+     * scale, the sky's, and the luminance's weights.
+     */
+    void (*night_colour_light)(
+        float *signal, float *brightness, const float *linear, const float *evened,
+        const float *in_beam, const float *street, const float *beams, const float *sky,
+        ptrdiff_t pixels, const float *how);
+
+    /** NightColorMode.apply from its exposure on: `out`, `signal` and
+     * `noise` are (pixels, 3); the traffic's lamps, (pixels, 3) each, and
+     * the street's, a plane each and in the colour `street`, may be NULL.
+     * `how` is five floats: level, bloom, shot, read noise and gain.
+     */
+    void (*night_colour_expose)(
+        float *out, const float *signal, const float *vehicle_light,
+        const float *vehicle_glow, const float *head_light, const float *head_glow,
+        const float *noise, ptrdiff_t pixels, const float *street, const float *how);
+
+    /** NightFog.apply before its halo: `radiance`, (pixels, 3), is
+     * `linear` with its lamps (`clipped`, a plane) lifted by `over`;
+     * `removed` is what the fog, of transmission `one_way`, takes of the
+     * lamps, and `weight` that summed over the channels. The numpy code's
+     * arithmetic to the bit.
+     */
+    void (*fog_lost)(
+        float *radiance, float *removed, float *weight, const float *linear,
+        const float *clipped, const float *one_way, ptrdiff_t pixels, float over);
+
+    /** NightFog.apply after its halo, into `out`, (pixels, 3): `radiance`
+     * through the fog, the `halo`, the lamps' `cones`, the `lit` volume
+     * and the illuminator's `wall`, a plane; the last three may be NULL.
+     * `how` is ten floats: the halo's share, whether the light crosses
+     * the fog twice, the cones' level a channel, the veil's share, its
+     * lit part and its diffuse part a channel.
+     */
+    void (*fog_veil)(
+        float *out, const float *radiance, const float *halo, const float *one_way,
+        const float *cones, const float *lit, const float *wall, ptrdiff_t pixels,
+        const float *how);
+
+    /** snow.RandomSnow's lying snow from the planes it is read from: the
+     * `level` ground, the picture's `relief`, how `steady` the level
+     * reads, how `green` it is, the labelled `lawn` and canopy (`named`),
+     * the `patch` noise, the `grain`, the `luma` and its mean `around`,
+     * and the `sky`. `lawn`, `named` and `patch` may be NULL. `how` is
+     * seven floats: where relief begins and its span, the patchiness, the
+     * patches' contrast, the strength, the grain's depth and a canopy's
+     * cover. The numpy code's fast-mode arithmetic to the bit.
+     */
+    void (*snow_settled)(
+        float *settled, const float *level, const float *relief, const float *steady,
+        const float *green, const float *lawn, const float *named, const float *patch,
+        const float *grain, const float *luma, const float *around, const float *sky,
+        ptrdiff_t pixels, const float *how);
+
+    /** ground.ground_noise's two maps into its noise tile, in fast mode:
+     * each pixel's place on the ground across and along, from `depth`,
+     * (height, width), in tile pixels and folded at the tile's edges.
+     * `how` is eight floats: the focal length, the pitch's cosine and
+     * sine, tile pixels a metre, the fold's span and its reciprocal, and
+     * the two offsets. The numpy code's arithmetic to the bit.
+     */
+    void (*ground_tile)(
+        float *tile_x, float *tile_y, const float *depth, ptrdiff_t height,
+        ptrdiff_t width, const float *how);
+
+    /** night_light.street_light: every street lamp's light on every point,
+     * added into `light`. `points` is (pixels, 3), `raised` how high each
+     * stands along `up`, and `lamps` (count, 4), a head's place and its
+     * height; `spill` is what a lamp sends upwards. numpy's arithmetic to
+     * the last bit of a float or one off it.
+     */
+    void (*street_light)(
+        float *light, const float *points, const float *raised, ptrdiff_t pixels,
+        const float *lamps, ptrdiff_t count, const float *up, float spill);
+
+    /** night_light.headlamp_light's sum: every lit vehicle's two dipped
+     * beams on every point, added into `light`. A point is its place along
+     * the ground's two axes (`along_first`, `along_second`) and its height
+     * `above`; `low` is nought well above any beam. `beams` is (count, 6)
+     * floats: a vehicle's front along the two axes, its heading along
+     * them, its scale and what the lens gets of its pool. `how` is seven:
+     * a lamp's width and widening, half the lamps' spacing, each lamp's
+     * level, where it halves, how far it reaches and how high. numpy's
+     * arithmetic within a few millionths of a pool.
+     */
+    void (*headlamp_beams)(
+        float *light, const float *along_first, const float *along_second,
+        const float *above, const float *low, ptrdiff_t pixels, const float *beams,
+        ptrdiff_t count, const float *how);
+
+    /** road.wheel_tracks: the weight of the two wheel tracks down each
+     * lane, into `out`. `piece` is each pixel's road, `across` its place
+     * across it, `width_px` the road's width there and `weight` whether it
+     * is road at all; `ragged` and `worn` may be NULL. `edges` holds every
+     * road's lane lines one after another, road r's from `first_edge[r]`
+     * to `first_edge[r + 1]`, for roads 1 to `roads`. `use` is how much
+     * each of 64 lanes is driven in, and `how` five floats: the band, the
+     * wander, half the wheels' spacing, the wear's floor and its gain. The
+     * numpy code's arithmetic to the bit.
+     */
+    void (*wheel_tracks)(
+        float *out, const int32_t *piece, const float *across, const float *width_px,
+        const float *weight, const float *ragged, const float *worn, ptrdiff_t pixels,
+        const double *edges, const int32_t *first_edge, int32_t roads, const float *use,
+        const float *how);
+
+    /** RandomRain.apply's lamps before its road: `out`, (pixels, 3), gains
+     * `lamp_light` up to full scale through `through`, a plane. The numpy
+     * code's arithmetic to the bit.
+     */
+    void (*lamps_lit)(
+        float *out, const float *lamp_light, const float *through, ptrdiff_t pixels);
+
+    /** RandomRain.apply between its road and its streaks, on `out`,
+     * (pixels, 3): the `spray` laid over it in the light `lit`, three
+     * values, then what of `lamp_light` is over full scale, through
+     * `through` and the spray, and `lamp_glow` by how wet the air is,
+     * from `glow_in_rain` up. `spray`, and the two lamp fields together,
+     * may be NULL. The numpy code's arithmetic to the bit.
+     */
+    void (*spray_and_lamps)(
+        float *out, const float *spray, const float *lamp_light, const float *lamp_glow,
+        const float *through, ptrdiff_t pixels, const float *lit, float glow_in_rain);
+
+    /** road.model_frame's `along`: the way a road runs at every pixel of a
+     * (height, width) frame, a unit vector into `along`, (height, width,
+     * 2), for a road that runs to `centre` on a horizon at row `horizon`
+     * with a `bend`. The numpy code's double arithmetic to the bit.
+     */
+    void (*road_along)(
+        float *along, ptrdiff_t height, ptrdiff_t width, double centre, double horizon,
+        double bend);
+
+    /** road.model_frame's `piece`, `across` and width in pixels (`span`),
+     * each (rows, width), for the rows a road can be on. `offset` is each
+     * pixel's place across the road and `at` the position it is counted
+     * as; `of_position` gives a position's carriageway, 0 being none, and
+     * `firsts` and `widths` each carriageway's first place and its width.
+     * `whole` is 1 where the pixel is road, `below` each row's distance
+     * below the horizon. The numpy code's arithmetic to the bit.
+     */
+    void (*road_places)(
+        int32_t *piece, float *across, float *span, const double *offset, const int64_t *at,
+        const uint8_t *whole, const double *below, ptrdiff_t rows, ptrdiff_t width,
+        const int32_t *of_position, const double *firsts, const double *widths);
 } sm_kernel_table;
 
 #endif

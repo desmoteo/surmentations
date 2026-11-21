@@ -246,3 +246,165 @@ SM_EXPORT void sm_splat_discs(
     const int64_t *order, ptrdiff_t count) {
     active->splat_discs(total, height, width, x, y, radius, weight, order, count);
 }
+
+/** The active tier's ``street_air``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_street_air(
+    float *air, float *reach, const float *rx, const float *ry, const float *rz,
+    const float *far, const float *rising, ptrdiff_t pixels, const float *lamps,
+    ptrdiff_t count, const float *up, float nearest2, float spill, float forward) {
+    active->street_air(
+        air, reach, rx, ry, rz, far, rising, pixels, lamps, count, up, nearest2, spill, forward);
+}
+
+/** The active tier's ``spray_puffs``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_spray_puffs(
+    float *spray, const float *stands, const float *hidden, const float *depth,
+    ptrdiff_t height, ptrdiff_t width, const double *puffs, ptrdiff_t count,
+    float feather, float hides_wholly, float stands_nearer) {
+    active->spray_puffs(
+        spray, stands, hidden, depth, height, width, puffs, count, feather, hides_wholly,
+        stands_nearer);
+}
+
+/** The active tier's ``normals``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_normals(
+    float *nx, float *ny, float *nz, float *jump, const float *depth, const float *u,
+    const float *v, ptrdiff_t height, ptrdiff_t width, ptrdiff_t step) {
+    active->normals(nx, ny, nz, jump, depth, u, v, height, width, step);
+}
+
+/** The active tier's ``nir_reflectance``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_nir_reflectance(
+    float *out, const float *linear, const float *vegetation, ptrdiff_t pixels,
+    const float *response, float gain, float labelled, float usual) {
+    active->nir_reflectance(out, linear, vegetation, pixels, response, gain, labelled, usual);
+}
+
+/** The active tier's ``night_ir_light``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_night_ir_light(
+    float *signal, float *lifted, const float *reflectance, const float *exposure,
+    const float *in_beam, const float *street, const float *beams, const float *sky,
+    ptrdiff_t pixels, float ambient, float floor_scale, float sky_scale) {
+    active->night_ir_light(
+        signal, lifted, reflectance, exposure, in_beam, street, beams, sky, pixels, ambient,
+        floor_scale, sky_scale);
+}
+
+/** The active tier's ``night_ir_expose``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_night_ir_expose(
+    float *out, const float *signal, const float *retro, const float *lifted,
+    const float *exposure, const float *glare, const float *vehicle_light,
+    const float *vehicle_glow, const float *head_light, const float *head_glow,
+    const float *noise, ptrdiff_t pixels, const float *how) {
+    active->night_ir_expose(
+        out, signal, retro, lifted, exposure, glare, vehicle_light, vehicle_glow, head_light,
+        head_glow, noise, pixels, how);
+}
+
+/** The active tier's ``night_colour_light``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_night_colour_light(
+    float *signal, float *brightness, const float *linear, const float *evened,
+    const float *in_beam, const float *street, const float *beams, const float *sky,
+    ptrdiff_t pixels, const float *how) {
+    active->night_colour_light(
+        signal, brightness, linear, evened, in_beam, street, beams, sky, pixels, how);
+}
+
+/** The active tier's ``night_colour_expose``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_night_colour_expose(
+    float *out, const float *signal, const float *vehicle_light, const float *vehicle_glow,
+    const float *head_light, const float *head_glow, const float *noise, ptrdiff_t pixels,
+    const float *street, const float *how) {
+    active->night_colour_expose(
+        out, signal, vehicle_light, vehicle_glow, head_light, head_glow, noise, pixels, street,
+        how);
+}
+
+/** The active tier's ``fog_lost``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_fog_lost(
+    float *radiance, float *removed, float *weight, const float *linear,
+    const float *clipped, const float *one_way, ptrdiff_t pixels, float over) {
+    active->fog_lost(radiance, removed, weight, linear, clipped, one_way, pixels, over);
+}
+
+/** The active tier's ``fog_veil``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_fog_veil(
+    float *out, const float *radiance, const float *halo, const float *one_way,
+    const float *cones, const float *lit, const float *wall, ptrdiff_t pixels,
+    const float *how) {
+    active->fog_veil(out, radiance, halo, one_way, cones, lit, wall, pixels, how);
+}
+
+/** The active tier's ``snow_settled``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_snow_settled(
+    float *settled, const float *level, const float *relief, const float *steady,
+    const float *green, const float *lawn, const float *named, const float *patch,
+    const float *grain, const float *luma, const float *around, const float *sky,
+    ptrdiff_t pixels, const float *how) {
+    active->snow_settled(
+        settled, level, relief, steady, green, lawn, named, patch, grain, luma, around, sky,
+        pixels, how);
+}
+
+/** The active tier's ``ground_tile``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_ground_tile(
+    float *tile_x, float *tile_y, const float *depth, ptrdiff_t height, ptrdiff_t width,
+    const float *how) {
+    active->ground_tile(tile_x, tile_y, depth, height, width, how);
+}
+
+/** The active tier's ``street_light``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_street_light(
+    float *light, const float *points, const float *raised, ptrdiff_t pixels,
+    const float *lamps, ptrdiff_t count, const float *up, float spill) {
+    active->street_light(light, points, raised, pixels, lamps, count, up, spill);
+}
+
+/** The active tier's ``headlamp_beams``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_headlamp_beams(
+    float *light, const float *along_first, const float *along_second, const float *above,
+    const float *low, ptrdiff_t pixels, const float *beams, ptrdiff_t count, const float *how) {
+    active->headlamp_beams(
+        light, along_first, along_second, above, low, pixels, beams, count, how);
+}
+
+/** The active tier's ``wheel_tracks``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_wheel_tracks(
+    float *out, const int32_t *piece, const float *across, const float *width_px,
+    const float *weight, const float *ragged, const float *worn, ptrdiff_t pixels,
+    const double *edges, const int32_t *first_edge, int32_t roads, const float *use,
+    const float *how) {
+    active->wheel_tracks(
+        out, piece, across, width_px, weight, ragged, worn, pixels, edges, first_edge, roads,
+        use, how);
+}
+
+/** The active tier's ``lamps_lit``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_lamps_lit(
+    float *out, const float *lamp_light, const float *through, ptrdiff_t pixels) {
+    active->lamps_lit(out, lamp_light, through, pixels);
+}
+
+/** The active tier's ``spray_and_lamps``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_spray_and_lamps(
+    float *out, const float *spray, const float *lamp_light, const float *lamp_glow,
+    const float *through, ptrdiff_t pixels, const float *lit, float glow_in_rain) {
+    active->spray_and_lamps(
+        out, spray, lamp_light, lamp_glow, through, pixels, lit, glow_in_rain);
+}
+
+/** The active tier's ``road_along``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_road_along(
+    float *along, ptrdiff_t height, ptrdiff_t width, double centre, double horizon,
+    double bend) {
+    active->road_along(along, height, width, centre, horizon, bend);
+}
+
+/** The active tier's ``road_places``; see ``sm_kernel_table``. */
+SM_EXPORT void sm_road_places(
+    int32_t *piece, float *across, float *span, const double *offset, const int64_t *at,
+    const uint8_t *whole, const double *below, ptrdiff_t rows, ptrdiff_t width,
+    const int32_t *of_position, const double *firsts, const double *widths) {
+    active->road_places(
+        piece, across, span, offset, at, whole, below, rows, width, of_position, firsts, widths);
+}

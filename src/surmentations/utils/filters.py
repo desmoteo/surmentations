@@ -96,3 +96,87 @@ def wide_dilate(mask: np.ndarray, diameter: int) -> np.ndarray:
     disc = max(3, round(diameter / factor) | 1)
     grown = cv2.dilate(small, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (disc, disc)))
     return cv2.resize(grown, (width, height), interpolation=cv2.INTER_LINEAR)
+
+
+# A glow round lamps is blurred on a copy reduced no more than this many
+# times, in fast mode, and only from this sigma up. Lamps are points: at a
+# half they are within 2% of the halo's own peak, at a third within 3%.
+_GLOW_REDUCED = 2
+_GLOW_LEAST_SIGMA = 8.0
+# The share of a frame past which the lamps' box is taken to be the frame.
+_GLOW_MOST_OF_FRAME = 0.7
+
+
+def blur_of_lights(field: np.ndarray, sigma: float) -> np.ndarray:
+    """A Gaussian blur of a field that is nothing but a few lights, taken only where they are.
+
+    ``field`` is ``(H, W)`` or ``(H, W, C)`` float32, nought but for its
+    lamps, and none of it negative. The blur of nothing is nothing, so the
+    filter is run on the box that holds the lamps and as far round it as
+    the filter reaches, and the rest is left at nought: the same values as
+    ``cv2.GaussianBlur`` of the whole frame to the bit, in the time the
+    lamps' share of the frame takes. A halo round two tail lamps is a
+    hundredth of a frame.
+
+    In fast mode (:mod:`surmentations.mode`) a halo of sigma 8 or more is
+    blurred on a copy of the box at half the size, to within 2% of the
+    halo's peak: traffic across a whole road fills the box, and the
+    smaller copy is what saves that case. Where the box meets the frame's
+    edge it is first carried on past it as the filter would mirror it,
+    since a smaller copy mirrors about another place and a lamp at the
+    edge came out a quarter wrong.
+    """
+    height, width = field.shape[:2]
+    radius = (round(sigma * 8.0 + 1.0) | 1) // 2
+    reduced = _GLOW_REDUCED if mode.fast() and sigma >= _GLOW_LEAST_SIGMA else 1
+    if min(height, width) <= radius + 1 or field.dtype != np.float32:
+        return np.asarray(cv2.GaussianBlur(field, (0, 0), sigmaX=sigma), dtype=np.float32)
+    # Which rows and which columns hold a lamp: the largest value of each.
+    flat = np.ascontiguousarray(field).reshape(height, -1)
+    rows = np.flatnonzero(flat.max(axis=1) > 0.0)
+    if not rows.size:
+        return np.zeros(field.shape, dtype=np.float32)
+    lit_columns = flat[rows[0] : rows[-1] + 1].max(axis=0).reshape(width, -1)
+    columns = np.flatnonzero(lit_columns.max(axis=1) > 0.0)
+    # Twice the filter's own reach: what it writes, and what that reads.
+    reach = 2 * radius + 2
+    top, bottom = int(rows[0]) - reach, int(rows[-1]) + 1 + reach
+    left, right = int(columns[0]) - reach, int(columns[-1]) + 1 + reach
+    inside = (slice(max(top, 0), min(bottom, height)), slice(max(left, 0), min(right, width)))
+    whole = (inside[0].stop - inside[0].start) * (inside[1].stop - inside[1].start) > (
+        _GLOW_MOST_OF_FRAME * height * width
+    )
+    if whole:
+        # The lamps are all over the frame: the box would be the frame.
+        if reduced == 1:
+            return np.asarray(cv2.GaussianBlur(field, (0, 0), sigmaX=sigma), dtype=np.float32)
+        top, bottom, left, right = -radius, height + radius, -radius, width + radius
+        inside = (slice(0, height), slice(0, width))
+    box = field[inside]
+    # Past the frame's edge, the frame mirrored, as far as the filter reads.
+    past = [
+        min(radius, max(0, -top)),
+        min(radius, max(0, bottom - height)),
+        min(radius, max(0, -left)),
+        min(radius, max(0, right - width)),
+    ]
+    if any(past):
+        box = cv2.copyMakeBorder(box, past[0], past[1], past[2], past[3], cv2.BORDER_REFLECT_101)
+    if reduced > 1:
+        size = (max(1, round(box.shape[1] / reduced)), max(1, round(box.shape[0] / reduced)))
+        small = cv2.resize(box, size, interpolation=cv2.INTER_AREA)
+        small = cv2.GaussianBlur(
+            small,
+            (0, 0),
+            sigmaX=sigma * size[0] / box.shape[1],
+            sigmaY=sigma * size[1] / box.shape[0],
+        )
+        blurred = cv2.resize(small, box.shape[1::-1], interpolation=cv2.INTER_LINEAR)
+    else:
+        blurred = cv2.GaussianBlur(np.ascontiguousarray(box), (0, 0), sigmaX=sigma)
+    kept = blurred[past[0] : blurred.shape[0] - past[1], past[2] : blurred.shape[1] - past[3]]
+    if whole:
+        return np.ascontiguousarray(kept, dtype=np.float32)
+    out = np.zeros(field.shape, dtype=np.float32)
+    out[inside] = kept
+    return out
