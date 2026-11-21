@@ -386,13 +386,18 @@ _ON_THE_ROAD = (SceneClass.VEHICLE, SceneClass.PERSON)
 # share of the snow in it that is gone, and how much of a track is left
 # where the road has been driven over least, each from the least traffic to
 # the most; the scales, in metres, over which a track strays and over which it
-# is worn more and less; and how much darker the road is where snow has
-# been worn off it, being wet.
+# is worn more and less, and the octaves of the first; and how much darker
+# the road is where snow has been worn off it, being wet.
+# A rut drifts over tens of metres, as a driver's line does. It strayed
+# over four, with finer octaves on top, and seen from a few tens of metres
+# off, where four metres of road are a few rows of pixels, a thin track
+# was a zigzag that read as hatching across the lanes.
 _TRACK_BAND = (0.045, 0.2)
 _TRACK_CLEARED = (0.45, 0.97)
 _TRACK_WEAR_FLOOR = (0.2, 0.9)
-_TRACK_RAGGED_M = 4.0
-_TRACK_WORN_M = 9.0
+_TRACK_RAGGED_M = 25.0
+_TRACK_RAGGED_OCTAVES = 2
+_TRACK_WORN_M = 20.0
 _TRACK_WETTING = 0.35
 
 _NAMED: dict[str, tuple[SceneClass, ...]] = {
@@ -1155,7 +1160,14 @@ class RandomSnow(CameraTransform):
             )
             if read is not None:
                 frame, lanes = read
-                ragged = ground_noise(depth_pm, focal, camera_pitch, _TRACK_RAGGED_M, rng)
+                ragged = ground_noise(
+                    depth_pm,
+                    focal,
+                    camera_pitch,
+                    _TRACK_RAGGED_M,
+                    rng,
+                    octaves=_TRACK_RAGGED_OCTAVES,
+                )
                 worn = ground_noise(depth_pm, focal, camera_pitch, _TRACK_WORN_M, rng)
                 low, high = _TRACK_BAND
                 band = low + (high - low) * traffic
