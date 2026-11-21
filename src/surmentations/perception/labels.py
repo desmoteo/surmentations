@@ -215,6 +215,15 @@ class SceneLabelEstimator(ABC):
     def estimate(self, image: np.ndarray) -> np.ndarray:
         """The :class:`SceneClass` of each pixel of an ``(H, W, 3)`` frame."""
 
+    def signature(self) -> str | None:
+        """What this estimator is, as far as that decides its labels; ``None`` if it cannot say.
+
+        As :meth:`surmentations.depth.estimator.DepthEstimator.signature`:
+        what a provider files its readings under on disk. ``None``, the
+        default, and they are not kept.
+        """
+        return None
+
 
 _NO_CUDA_MESSAGE = (
     "{cls} requires a CUDA GPU: it runs a segmentation network on every scene, which is "
@@ -309,6 +318,13 @@ class SegmentationLabelEstimator(SceneLabelEstimator):
         )
         self._std = (torch.tensor(processor.image_std, device=self.device) * per_unit).view(
             1, 3, 1, 1
+        )
+
+    def signature(self) -> str | None:
+        """The checkpoint, the precision asked for, the least confidence and the kind of device."""
+        return (
+            f"{type(self).__name__}|{self.model_name}|{self.half_precision}"
+            f"|{self.min_confidence!r}|{self.device.type}"
         )
 
     def estimate(self, image: np.ndarray) -> np.ndarray:

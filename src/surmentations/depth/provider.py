@@ -49,12 +49,23 @@ Two things, and the second is the one that makes sharing work at all:
   in the middle of a pipeline simply breaks the chain: the next request
   re-estimates, which is the old behaviour and never a wrong answer.
 
-Nothing is cached across samples. The cache holds a handful of scenes, and a
-scene is dropped the moment every array belonging to it has been freed.
+Nothing is held in memory across samples. The cache holds a handful of
+scenes, and a scene is dropped the moment every array belonging to it has
+been freed.
+
+Across epochs
+-------------
+A frame of a training set comes back every epoch, as a new array each time,
+and is read again each time: the depth, and with a provider that names the
+scene and reads its vehicles some 170 ms of networks. ``disk_cache`` keeps
+each reading in a file (:mod:`surmentations.depth.store`), found again by
+a hash of the frame's pixels and of what read it, so that the reading is
+made once for as long as the files are kept. It is off unless asked for.
 """
 
 from __future__ import annotations
 
+import os
 import threading
 import weakref
 from typing import Any, NamedTuple
@@ -69,6 +80,7 @@ from surmentations.depth.scale import (
     DEFAULT_MIN_DISTANCE_METERS,
     to_pseudo_metric,
 )
+from surmentations.depth.store import ReadingStore, SceneReading, StoreInfo, default_directory
 from surmentations.perception.geometry import (
     Camera,
     GeometryEstimator,
@@ -286,10 +298,26 @@ class SharedDepthProvider:
             otherwise evict each other's depth between two transforms and fall
             back to re-estimating. A scene whose arrays have all been freed is
             dropped regardless, so in an ordinary loop only one is ever held.
+        disk_cache: where to keep what is read of each frame from one run
+            to the next, and from one epoch to the next: a directory, or
+            ``True`` for ``surmentations`` under the user's cache
+            directory (``$SURMENTATIONS_CACHE`` names another). ``None``,
+            the default, keeps nothing on disk. A reading is found again
+            by the frame's own pixels, the estimators that made it, the
+            mode it was made in and the library's version, so nothing
+            stale is ever handed back; a frame given its labels by hand
+            (:meth:`remember`) is not kept, nor is anything made by an
+            estimator that does not describe itself
+            (:meth:`~surmentations.depth.estimator.DepthEstimator.signature`).
+            About half a megabyte a frame at 512 pixels.
+        disk_cache_max_gb: the most the directory may hold, or ``None``
+            for no limit. Past it nothing more is written and nothing is
+            thrown out.
 
-    The provider pickles as its estimators alone — cached depth is
-    per-process state — so it survives being sent to a ``DataLoader`` worker
-    if they do.
+    The provider pickles as its estimators and its settings — what it
+    holds in memory is per-process state — so it survives being sent to a
+    ``DataLoader`` worker if they do, and every worker then reads and
+    writes the same directory.
     """
 
     def __init__(
@@ -303,11 +331,13 @@ class SharedDepthProvider:
         labels: SceneLabelEstimator | None = None,
         geometry: InstallationGeometry | GeometryEstimator | None = None,
         vehicles: VehicleViewEstimator | None = None,
+        disk_cache: str | os.PathLike[str] | bool | None = None,
+        disk_cache_max_gb: float | None = None,
     ) -> None:
         """Wrap ``estimator``; see the class docstring for the arguments.
 
-        Raises ``ValueError`` if ``max_scenes`` is below 1 or the depth range
-        is not ``0 < near < far``.
+        Raises ``ValueError`` if ``max_scenes`` is below 1, the depth range
+        is not ``0 < near < far`` or the disk cache's limit is below 0.
         """
         if max_scenes < 1:
             raise ValueError(f"max_scenes must be at least 1, got {max_scenes}")
@@ -337,6 +367,16 @@ class SharedDepthProvider:
         self._vehicles = vehicles
         self._max_scenes = max_scenes
         self.depth_range_m = (float(near), float(far))
+        if disk_cache_max_gb is not None and disk_cache_max_gb < 0.0:
+            raise ValueError(f"disk_cache_max_gb must be 0 or more, got {disk_cache_max_gb}")
+        # Kept as a directory's name and a limit, which is what a worker
+        # is sent; the store itself is each process's own.
+        self._disk_cache: str | None = None
+        if disk_cache is True:
+            self._disk_cache = str(default_directory())
+        elif disk_cache:
+            self._disk_cache = os.fspath(disk_cache)
+        self._disk_cache_max_gb = disk_cache_max_gb
         self._init_state()
 
     def _init_state(self) -> None:
@@ -352,6 +392,9 @@ class SharedDepthProvider:
         self._hits = 0
         self._misses = 0
         self._lock = threading.RLock()
+        self._store: ReadingStore | None = None
+        if self._disk_cache is not None:
+            self._store = ReadingStore(self._disk_cache, self._disk_cache_max_gb)
         _LIVE_PROVIDERS.add(self)
 
     def __getstate__(self) -> dict[str, Any]:
@@ -363,6 +406,8 @@ class SharedDepthProvider:
             "_vehicles": self._vehicles,
             "_max_scenes": self._max_scenes,
             "depth_range_m": self.depth_range_m,
+            "_disk_cache": self._disk_cache,
+            "_disk_cache_max_gb": self._disk_cache_max_gb,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -373,6 +418,8 @@ class SharedDepthProvider:
         self._vehicles = state.get("_vehicles")
         self._max_scenes = state["_max_scenes"]
         self.depth_range_m = state["depth_range_m"]
+        self._disk_cache = state.get("_disk_cache")
+        self._disk_cache_max_gb = state.get("_disk_cache_max_gb")
         self._init_state()
 
     def _find(self, image: np.ndarray) -> _Scene | None:
@@ -435,7 +482,16 @@ class SharedDepthProvider:
                     f"{frame.shape[1]} x {frame.shape[0]}: the original of a frame is the "
                     "same picture at another size, and these are not the same shape."
                 )
-        depth = np.asarray(self._estimator.estimate(frame))
+        # What was read of this frame another time, where readings are
+        # kept: not for a frame whose labels are the caller's own.
+        key = self._store_key(frame, source) if labels is None else None
+        kept = None
+        if key is not None and self._store is not None:
+            kept = self._store.load(key, frame.shape[:2])
+        if kept is not None:
+            depth = kept.depth
+        else:
+            depth = np.asarray(self._estimator.estimate(frame))
         if depth.shape != frame.shape[:2]:
             raise ValueError(
                 f"{type(self._estimator).__name__}.estimate returned depth of shape "
@@ -449,7 +505,9 @@ class SharedDepthProvider:
         scene = _Scene(depth, image)
 
         named = None
-        if labels is None and self._labels is not None:
+        if kept is not None:
+            labels = kept.labels
+        elif labels is None and self._labels is not None:
             # Named in the frame as it was taken, and brought to the size
             # of the frame the pipeline works at.
             named = np.asarray(self._labels.estimate(source))
@@ -469,11 +527,45 @@ class SharedDepthProvider:
         elif geometry is None:
             geometry = self._geometry
         scene.geometry = geometry
-        self._read_vehicles(scene, frame, source, named)
+        if kept is not None:
+            scene.vehicles, scene.street_lamps, scene.signs = (
+                kept.vehicles,
+                kept.street_lamps,
+                kept.signs,
+            )
+        else:
+            self._read_vehicles(scene, frame, source, named)
+            if key is not None and self._store is not None:
+                self._store.save(
+                    key,
+                    SceneReading(
+                        depth, scene.labels, scene.vehicles, scene.street_lamps, scene.signs
+                    ),
+                )
 
         self._scenes.append(scene)
         self._prune()
         return scene
+
+    def _store_key(self, frame: np.ndarray, source: np.ndarray) -> str | None:
+        """What a reading of ``frame`` is filed under on disk; ``None`` if it is not to be kept.
+
+        Not kept without a store, nor when one of the estimators cannot
+        say what it is: its readings could not be told from another's.
+        """
+        if self._store is None:
+            return None
+        signatures = []
+        for name, estimator in (
+            ("depth", self._estimator),
+            ("labels", self._labels),
+            ("vehicles", self._vehicles),
+        ):
+            said = "" if estimator is None else getattr(estimator, "signature", lambda: None)()
+            if said is None:
+                return None
+            signatures.append(f"{name}={said}")
+        return self._store.key(frame, source, signatures)
 
     def get_depth(self, image: np.ndarray) -> np.ndarray:
         """Relative depth for ``image``, estimated at most once per scene.
@@ -905,6 +997,17 @@ class SharedDepthProvider:
         """
         with self._lock:
             return DepthCacheInfo(self._hits, self._misses, len(self._scenes))
+
+    def disk_cache_info(self) -> StoreInfo | None:
+        """What the readings kept on disk have saved, or ``None`` where none are kept.
+
+        Hits are frames whose reading was found there, and no network was
+        run for; misses are frames read afresh; ``written`` and ``refused``
+        say what became of those. Counted by this process: a ``DataLoader``
+        worker has its own.
+        """
+        with self._lock:
+            return None if self._store is None else self._store.info()
 
 
 def settled_view(

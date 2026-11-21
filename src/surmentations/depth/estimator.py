@@ -62,6 +62,19 @@ class DepthEstimator(ABC):
         """
         return None
 
+    def signature(self) -> str | None:
+        """What this estimator is, as far as that decides its output; ``None`` if it cannot say.
+
+        Two estimators with the same signature make the same map of the
+        same frame. A provider that keeps its readings on disk
+        (:mod:`surmentations.depth.store`) files each under it, so that a
+        map made by another checkpoint or another setting is never taken
+        for this one's. The default is ``None``, and what such an
+        estimator makes is not kept: a subclass that wants it kept names
+        its class, its weights and every setting its output depends on.
+        """
+        return None
+
 
 class DepthAnythingV2Estimator(DepthEstimator):
     """Depth Anything V2 (Small), the shipped default :class:`DepthEstimator`.
@@ -116,6 +129,7 @@ class DepthAnythingV2Estimator(DepthEstimator):
             raise RuntimeError(_NO_CUDA_MESSAGE.format(cls=type(self).__name__))
         if disparity_offset <= 0:
             raise ValueError("disparity_offset must be > 0 (it bounds the farthest depth)")
+        self.model_name = model_name
         self.disparity_offset = disparity_offset
         self.half_precision = half_precision
 
@@ -131,6 +145,13 @@ class DepthAnythingV2Estimator(DepthEstimator):
         # Skip the processor's overhead where doing so changes nothing.
         self._direct = False
         self._direct = self._direct_matches_processor()
+
+    def signature(self) -> str | None:
+        """The checkpoint, the offset, the precision asked for and the kind of device."""
+        return (
+            f"{type(self).__name__}|{self.model_name}|{self.disparity_offset!r}"
+            f"|{self.half_precision}|{self.device.type}"
+        )
 
     def _model_input_size(self, height: int, width: int) -> tuple[int, int] | None:
         """The size the model's own processor would resize a frame to.

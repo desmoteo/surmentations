@@ -589,6 +589,15 @@ class VehicleViewEstimator(ABC):
         """
         return np.zeros((0, 5), dtype=np.float32)
 
+    def signature(self) -> str | None:
+        """What this estimator is, as far as that decides what it finds; ``None`` if it cannot say.
+
+        As :meth:`surmentations.depth.estimator.DepthEstimator.signature`:
+        what a provider files its readings under on disk. ``None``, the
+        default, and they are not kept.
+        """
+        return None
+
 
 class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
     """Vehicle views from an open-vocabulary detector asked for lamps, the shipped default.
@@ -725,6 +734,13 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
             asked = VEHICLE_PROMPTS + STREET_LAMP_PROMPTS + SIGN_PROMPTS
             self._seen = (key, self._find(whole, asked, least))
         return self._seen[1]
+
+    def signature(self) -> str | None:
+        """The checkpoint, the precision and the kind of device, and how it is asked."""
+        return (
+            f"{type(self).__name__}|{self.model_name}|{self.grid}|{self.max_vehicles}"
+            f"|{self.min_pixels}|{self.min_score!r}|{self.half_precision}|{self.device.type}"
+        )
 
     def street_signs(self, image: np.ndarray) -> np.ndarray:
         """The road signs of one ``(H, W, 3)`` frame (:func:`street_signs`).

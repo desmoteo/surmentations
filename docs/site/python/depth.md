@@ -9,5 +9,6 @@ surmentations.depth
 surmentations.depth.estimator
 surmentations.depth.normals
 surmentations.depth.provider
+surmentations.depth.store
 surmentations.depth.scale
 ```
