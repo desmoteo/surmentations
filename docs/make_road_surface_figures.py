@@ -251,7 +251,7 @@ def spray_and_spacing(
             )
             transform.set_random_seed(4)
             rain_module.spaced_speeds = (
-                capped if cap else (lambda _frame, traffic, _ground, _shape: traffic)
+                capped if cap else (lambda _frame, traffic, _ground, _shape, _lies=None: traffic)
             )
             try:
                 tiles.append(transform(image=images[name])["image"])
