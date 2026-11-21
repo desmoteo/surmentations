@@ -77,6 +77,7 @@ jobs:
         run: |
           python docs/make_scene_understanding_figures.py
           python docs/make_road_surface_figures.py
+          python docs/make_pipeline_figures.py
           python docs/make_banner.py
 
       # With the pictures on disk, every link of every page is checked

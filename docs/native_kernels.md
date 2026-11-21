@@ -395,7 +395,7 @@ four example scenes, two seeds):
 | Multiplying by a reciprocal for a division | polygonal sprites in the flake kernel | the kernel 1.2 times (AVX2) to 1.4 times (SSE2) | 2e-6 of a sprite's peak |
 | Blur on a reduced copy, once its sigma reaches 8 or 16 px | defocus in `HousingOccluders` and `DirtSoil`, chroma in `TemporalDenoiseArtifacts`, settled snow and ground filling in `RandomSnow` and `RandomRain` | 1.2 to 4 times at 1024 px, less at 512 | 2 levels at most in the first three |
 | The depth network in half precision | every depth-conditioned transform | the estimate 2.2 to 2.5 times | see below |
-| Surface normals read at the depth map's 518 px | `RandomRain` with a wet road, `RandomSnow`, `CastShadows` | 70 ms to 15 ms at 1024 px | see below |
+| Surface normals read at the detail the depth map holds, 384 px (518 until November 2026; see the note at the end) | `RandomRain` with a wet road, `RandomSnow`, `CastShadows` | 70 ms to 15 ms at 1024 px | see below |
 | The wet road's reflection blurred on a copy reduced down the frame only | `RandomRain` | 95 ms to 11 ms at 1024 px | within the figures below |
 | A cube as two multiplications, not a power | the wet road's darkening | 20 ms at 1024 px | a rounding |
 | Folding the ground-noise tile with a floor, not a remainder | settled snow, puddles | 26 ms to 3 ms per field at 1024 px | millionths of a pixel |
@@ -1298,11 +1298,214 @@ measured.
 - **Threads.** The kernels run on one. A `DataLoader` already uses one
   worker per core, so splitting a frame across threads would oversubscribe.
 
+## Read at 384 pixels, not 518
+
+Added in November 2026, for the ready-made pipelines, whose cost is mostly
+the wet road on a 512-pixel frame.
+
+What is read off a depth map alone (the surface normals, where a road is
+wet, where puddles lie) was read at 518 pixels in fast mode, the size the
+network works at, and only for frames over 777 pixels. A 512-pixel frame,
+which is what a pipeline most often gets, was read at full size. It is now
+read at 384 pixels for any frame over 480
+([`depth_work_size`](../src/surmentations/depth/normals.py)).
+
+The network works at 518 pixels and its map holds less than that. Taken
+down to 384 and back, the depth maps of three sample scenes at 512 pixels
+move by 0.06 to 0.07% of their range on average and by 0.8 to 1.6% at one
+pixel in a hundred, along the edges of things. Half precision, which was
+taken earlier, moves them by 0.01%.
+
+Measured on those three scenes at 512 pixels, one core, against the same
+frame read at full size:
+
+| | Before | After | The frame differs by |
+| --- | ---: | ---: | --- |
+| A wet road, no streaks | 33 to 54 ms | 26 to 38 ms | 0.6 to 0.8 levels on average, 10 to 12 at one pixel in a hundred, over 16 on 0.3 to 0.5% of pixels |
+| Settled snow, no flakes | 33 to 64 ms | 33 to 61 ms | 0.4 to 1.0 on average, over 16 on 0.4 to 1.1% |
+
+The wet road gains because all of its reading is done at the reduced size;
+settled snow reads only its normals there, and most of its time is in what
+it reads off the picture's own texture at full size. Reading at 256 pixels
+was tried: the wet road gains a few milliseconds more and settled snow
+differs on two to three times as many pixels.
+
+The figures elsewhere in this document that speak of 518 pixels, and the
+table of fast mode against exact mode on 152 frames, were measured with
+the reading at 518 and frames over 777, and have not been measured again.
+At 1024 pixels the reading is now at 384 where it was at 518, so those
+frames differ from exact mode by somewhat more than the table says.
+
+## An eighth round: what reads the scene
+
+Added in November 2026. The road, the night's lighting and the wakes of
+the traffic were written after the rounds above and had never been through
+this method. [`native_kernel_candidates.md`](native_kernel_candidates.md)
+is the assessment that picked what to take; this is what was built from
+it, by the same three steps.
+
+### Algorithm
+
+- **The lamps' light on the air** summed each lamp's light along each line
+  of sight at eight points, with an arctangent for each end of the line
+  and a sine and a cosine at each point: 154 ms for 25 lamps on its
+  256-pixel grid, which was 98 of an infrared night's 169 ms. A point at
+  `s` along a line that passes the lamp at `h` is seen from the lamp in
+  the direction `(h, s)`, the direction halfway between two is their sum
+  made a unit, and the angle between two neighbours comes from its sine by
+  a short series. So the sum needs no angle at all: nine points by
+  Simpson's rule, in multiplications and square roots. It is within 0.4%
+  of a 400-point sum on average.
+- **Reading a road** tried 200 pairs of cues for each of five horizons, a
+  Python loop of small solves, and asked for each vehicle's and each
+  painted line's pixels with a pass over the frame apiece. The pairs are
+  now rows of one matrix, a labelling's pixels are sorted once, each
+  piece's long axis is the closed form for a two-by-two, and the road's
+  own coordinates are worked out on the rows below the horizon only. 72 ms
+  to 26 on a motorway with 46 vehicles, and the road, its lanes and its
+  paint come out the same to the bit.
+- **A wake's puffs** were placed and laid through the lens one at a time.
+  Each wake's are now placed together and the frame's laid through the
+  lens together, which leaves a table of puffs to draw.
+
+### C
+
+| Kernel | Replaces | numpy | C (AVX2 tier) | Agreement with numpy |
+| --- | --- | ---: | ---: | --- |
+| `street_air` | 25 lamps on 39,000 lines of sight | 82 ms | 5.9 ms | exact |
+| `spray_puffs` | 394 puffs of a motorway's spray | 13.0 ms | 1.0 ms | within 2e-6, of a density drawn from 0.004 up |
+| `normals` | one-sided differences, cross product, 410,000 pixels | 12.3 ms | 1.0 ms with its blur | exact |
+| `nir_reflectance`, `night_ir_light` (fast mode) | the infrared night before its exposure | | | to rounding: a sum of three weighted channels |
+| `night_ir_expose` | its exposure, lamps, grain and tint | 17.5 ms the whole `apply` | 11 to 14 ms | exact |
+| `night_colour_light` (fast mode) | the colour night before its exposure | | | to rounding, as above |
+| `night_colour_expose` | its exposure, lamps and grain | 30.7 ms the whole `apply` | 13.8 ms | exact |
+| `fog_lost`, `fog_veil` | the night fog's compositing round its two blurs | 30.7 ms the whole `apply` | 9.0 ms | exact |
+| `snow_settled` (fast mode) | where snow lies, from eleven fields | 5.2 ms | 0.5 ms | exact |
+| `ground_tile` (fast mode) | each pixel's place in the ground's noise | 4.6 ms a field | 0.9 ms with OpenCV's lookup | exact |
+
+The `apply` figures are at 800 x 480 and the rest at 640 x 640, on one
+pinned core. What the kernels leave of a night's `apply` is its random
+draw, a normal for every pixel, and its OpenCV calls.
+
+Three things about writing them:
+
+- **A plane the caller has not got is a block of zeros.** A street with no
+  lamps, a frame with no sky, snow with no patches: each kernel has one
+  loop, and reads a missing plane from a block of 512 zeros, which added
+  or multiplied in changes no float. No second form of a loop to keep in
+  step with the first.
+- **`exp` as a polynomial.** A puff is `exp(-q)`, and the build has no
+  vector `exp`. It is `exp(-q / 32)` raised to the 32nd power by five
+  squarings, and that, for an argument under a half, is its series to the
+  seventh power: multiplications only, and good to a few millionths of
+  the value. The sprite kernels use a table for the same thing, which
+  costs a lookup the vectoriser cannot do.
+- **`floor` by a conversion.** Before SSE4.1 the library's `floorf` is a
+  call. For a value an int holds it is the value converted there and
+  back, less one where that came out larger: the SSE2 tier vectorises it.
+
+Where a kernel is used in fast mode only, it is because numpy's own code
+is not float32 there or leaves a sum to its matrix product: the frame is
+then a level off in a few values in a thousand, as fast mode's other
+forms are, and exact mode runs the numpy code.
+
+### Verified
+
+- [`tests/unit/test_native_scene_kernels.py`](../tests/unit/test_native_scene_kernels.py)
+  holds each to numpy on every tier, as the table says, and the two
+  nights and the night fog frame for frame.
+- All of the marked loops vectorise on the SSE2 and AVX2 tiers
+  (`test_native_build.py`).
+- `native/check/run.sh` prints six more lines, twenty-one in all. The
+  SSE2 and AVX2 builds (glibc, GCC 13.3) and an arm64 build under QEMU
+  (musl, GCC 13.2) print the same twenty-one. The Jetson was not
+  reachable, so no arm64 hardware has run them and nothing was timed on
+  arm64. (The spray's line has since changed with its inputs; see the
+  ninth round.)
+- The kernel tests, the road's and the night lighting's, 264 in all, pass
+  with the library built with `-fsanitize=address,undefined`.
+- On the two scenes with a full provider, frames made before and after
+  are the same bytes for the infrared and colour nights, fog with lamps,
+  the wet road and lying snow. The colour night with fog differs by up to
+  four levels on 0.06% of values (the lit air's nine points for eight).
+  Spray differs where a wake ends at its road's edge: a wake's random
+  sway is now drawn for all of its puffs at once, so what is drawn after
+  such a wake is another draw of the same thing.
+
+## A ninth round: lamps, tracks and the road's frame
+
+Added the day after the eighth, from what a profile of the costliest
+frames still showed. Seven more kernels and one filter.
+
+| Kernel | Replaces | numpy | C (AVX2 tier) | Agreement with numpy |
+| --- | --- | ---: | ---: | --- |
+| `street_light` | 25 lamps' pools on 39,000 points | 5.3 ms | 0.5 ms | the last bit of a float or one off it |
+| `headlamp_beams` | 15 vehicles' dipped beams on the same | 4.6 ms with their placing | 1.6 ms | 2e-6 of a pool |
+| `wheel_tracks` | each pixel's lane and the two tracks down it, 410,000 pixels | 5.3 to 7.1 ms | 0.9 ms | exact |
+| `road_along`, `road_places` | the road frame's four fields | 7.4 ms the whole of `model_frame` | 3.8 ms | exact |
+| `lamps_lit`, `spray_and_lamps` | the rain's lamps and spray over its road | 9.0 ms | 1.5 ms | exact |
+
+And `blur_of_lights` ([`utils/filters.py`](../src/surmentations/utils/filters.py)),
+which is not C: the halo round lamps in fog, and the glow of lamps the
+picture already shows burning in rain, were Gaussian blurs of a whole
+frame that is nothing but a few lamps, 11 ms each at 640 pixels and half
+of a fog with lamps in it. The blur is now taken on the box the lamps are
+in, with the filter's reach round it, which is the blur of the frame to
+the bit; and in fast mode on a copy of the box at half the size for a
+sigma of 8 or more, to within 2% of the halo's peak. 2 ms for two lamps,
+6 for thirty across the frame.
+
+What these were, and what writing them showed:
+
+- **A search that is a scan.** Each pixel's lane is found by numpy with a
+  binary search among its road's lane lines, which is a lookup a pixel
+  and nothing a compiler vectorises. A road has a dozen lines at most, so
+  the kernel tries each in turn for a block of pixels at once, keeping the
+  last one passed: the same lane, with no branch and no lookup, and five
+  to seven times as fast. It is in double where numpy's arithmetic is and
+  in float where that is, and gives its bits.
+- **Read before you choose.** `which = on_this_road ? lane[i] + n : which`
+  reads `lane[i]` only for some pixels, which is a branch to a compiler
+  that has no masked load, and the SSE2 tier left the loop scalar. Read
+  into a local first, and then chosen, it vectorises. The same with
+  `a && b` on two comparisons, which is `a & b` here.
+- **The cost was not where I had put it.** `model_frame` was passed over
+  as a kernel on the reckoning that half of it was a percentile. Timed
+  part by part, the percentile is 0.3 ms and the unit vector of the
+  road's direction at every pixel, two divisions and a root in double, is
+  4.8: that is `road_along`, at 0.6.
+- **A power of one and a half is a root and a product.** numpy raises the
+  cosine by `powf`; the kernel multiplies it by its root, which is the
+  same float or its neighbour.
+
+Not done, and why: the wet road's own blurs and the reduced copies its
+reading is taken on are 30 of its 73 ms on a depth-only provider, and
+each was set where it is in an earlier round with the frame it changes
+looked at. They were left. So was the infrared night's noise, a float64
+draw for every pixel: drawn in float32 it is twice as fast and another
+picture for every seed.
+
+The vehicle mask is still labelled into its pieces many times a frame,
+20 in a wet road with spray and lamps and 93 in an infrared night: 4 to
+10 ms, in a dozen places that would each have to be handed one labelling.
+
+Verified as the eighth round was: every kernel against numpy on every
+tier ([`tests/unit/test_native_scene_kernels.py`](../tests/unit/test_native_scene_kernels.py)),
+every marked loop vectorised on both tiers, 290 kernel, road, lighting
+and filter tests under `-fsanitize=address,undefined`, and three more
+hash lines, twenty-four in all, the same from the SSE2 and AVX2 builds
+and from an arm64 build under QEMU. (The check's own inputs had a sine
+and a cosine in them, which the two C libraries round differently; they
+are made with a root now.) Frames made before and after this round
+differ by one level at most, on 0.14% of values at most. Whole frames
+are timed in [`pipelines.md`](pipelines.md#with-a-provider-that-reads-the-scene).
+
 ## Reproducing
 
 ```bash
 python hatch_build.py                         # build the kernels in place
-pytest tests/unit/test_native_kernels.py tests/unit/test_native_build.py -q
+pytest tests/unit/test_native_kernels.py tests/unit/test_native_scene_kernels.py \
+    tests/unit/test_native_build.py -q
 sh native/check/run.sh                        # hashes, per tier
 taskset -c 2 sh native/experiments/run.sh     # plain C against intrinsics
 SURMENTATIONS_NATIVE=0 pytest tests -q    # the numpy path alone
@@ -1337,5 +1540,5 @@ python scripts/benchmark_single_core.py save-depth depth.npz      # where the GP
 # on the board, its core 2 to itself:
 taskset -c 2 python scripts/benchmark_single_core.py run --load-depth depth.npz --out now.json
 taskset -c 2 sh native/experiments/run.sh                         # plain C against NEON
-sh native/check/run.sh                                            # the same fifteen hashes
+sh native/check/run.sh                                            # the same twenty-four hashes
 ```

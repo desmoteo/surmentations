@@ -3,12 +3,11 @@
 The obvious way to use this library is to list every effect with a
 probability and let them fire independently. That is what the README's
 examples do, and for two or three effects it is fine. At fourteen it produces
-frames that could not exist: fog and snow at once, a sun flare in a scene the
-camera is lighting with its infrared illuminator, hard midday shadows under
-an IR-mode night sky.
+frames that could not exist: a sun flare in a scene the camera is lighting
+with its infrared illuminator, hard midday shadows under falling rain, a
+downpour in a car park under a roof.
 
-This is a worked composite that does not, with measured frequencies and a
-measured cost. It ships as
+This is a worked composite that does not. It ships as
 [`surmentations.presets.surveillance`](../src/surmentations/presets/pipelines.py),
 alongside a CPU-only `surveillance_lite`:
 
@@ -16,31 +15,19 @@ alongside a CPU-only `surveillance_lite`:
 from surmentations.presets import surveillance, surveillance_lite
 ```
 
-Every probability below is a keyword argument, because the defaults encode how
-often each condition occurs in a temperate maritime climate on a mixed camera
-fleet, and **that will not match your footage**. The rest of this document is
-why the numbers are what they are, so you can change them deliberately.
+Every number below is a keyword argument or a named constant, because the
+defaults are estimates of how often each condition holds at a lowland site
+in central Europe, and **that will not match your footage**. The rest of
+this document is why the numbers are what they are, so you can change them
+deliberately. Where each estimate comes from, and how far to trust it, is in
+[`aware_effects_and_pipelines_review.md`](aware_effects_and_pipelines_review.md).
 
-> **`severity` decides how degraded a frame gets** (1-5, default 1), and it is
-> the first thing to change if the output looks too heavy. Omitting it is not
-> neutral: the transforms then run on their own constructor defaults, which
-> span the whole physically plausible range, so `RandomRain` reaches 200 mm/h
-> — a tropical cloudburst — where severity 1 is 2-12 mm/h. Those wide defaults
-> exist so one transform can explore its parameter space; they are the wrong
-> thing for a pipeline that stacks three or four effects at once — and it
-> compounds, so level 2 on each of three effects is not an ordinary frame but
-> a bad one. That is why the default is 1. Measured, a typical frame keeps
-> 75-81% of its high-frequency detail; on the library defaults the median
-> frame kept 77% and the worst kept 9%.
->
-> Two other things were driving the "too aggressive" impression and are now
-> fixed. The night branches used a strong under-exposure and warm cast, which
-> put a **29-level median red-blue shift** on `surveillance_lite` — it read as
-> a sepia filter over a daylit frame rather than as night, because neither
-> branch can relight the scene. `surveillance_lite` now renders no night at
-> all and says so, and `surveillance`'s version is mild enough that the
-> under-exposure carries the impression while the tint only hints: the median
-> cast is 3.1 levels, with 2 frames in 20 above 15.
+> **`severity` decides how degraded the camera's own chain is** (1-5,
+> default 1), and it is the first thing to change if the output looks too
+> heavy. A pipeline stacks several effects and their severities compound,
+> so level 2 on each of three is not an ordinary frame but a bad one. The
+> weather is not on this dial: each state of it is drawn at its own
+> strength (below).
 
 > **Severity is fixed per pipeline, not drawn per frame**, and that is
 > deliberate. Picking it per frame with a `OneOf` gate looks obvious and is
@@ -49,146 +36,246 @@ why the numbers are what they are, so you can change them deliberately.
 > pipeline of same-shaped gates never desynchronises — they all fire together
 > whenever the shared draw falls below the smallest `p`. Measured, that turned
 > an expected 2.4 effects per frame into 64% of frames with one effect or none
-> and 12% with nine or more stacked, which is exactly the "too invasive" look.
-> Build two pipelines and alternate if you want a mixture; that composes
-> correctly because the choice is then outside Albumentations' RNG.
->
-> Applying severity directly rather than through a gate brings the effect
-> count back to 2.3 with a variance of 1.85 — what independent draws give —
-> and heavily stacked frames from 12% to **0.0-0.3%** across seeds. It is
-> reduced rather than eliminated: the containers choosing the lighting and
-> weather state still share the stream, so a frame with eight or more effects
-> turns up occasionally. `tests/unit/test_pipeline_presets.py` pins the rate.
+> and 12% with nine or more stacked. Build two pipelines and alternate if you
+> want a mixture; that composes correctly because the choice is then outside
+> Albumentations' RNG. The weather's spread of strengths does not need it:
+> its states are the arms of *one* choice, which consumes one draw however
+> many arms it has.
 
 > **Seed once, not per frame.** Calling `set_random_seed` before every frame
 > correlates every transform's probability check: frames then come out with
-> nearly all effects or nearly none. Measured on `surveillance_lite`, 27% of
-> frames are left untouched with a variance of 7.25 effects per frame, against
-> 8% and 1.81 when the seed is set once and samples are streamed through. This
-> is the behaviour a training loop wants anyway.
+> nearly all effects or nearly none. Set the seed once and stream samples
+> through, which is what a training loop does anyway.
 
-## What the naive pipeline gets wrong
-
-**Mutually exclusive states fire together.** Rain, snow and fog are different
-states of the same atmosphere. Independent probabilities give you all three at
-once on `p³` of frames, each compositing its own veil over the last.
+## What a naive pipeline gets wrong
 
 **Contradictory lighting.** `NightIrMode` converts the frame to what an IR
 sensor sees under its own illuminator. `SunFlare` and `CastShadows` are
-direct-sunlight phenomena. A frame with both is not a hard case for a model to
-learn — it is an impossible one.
+direct-sunlight phenomena. So is neither of them possible under rain, fog or
+falling snow, which come with cloud: an earlier version of this pipeline
+drew hard shadows on three day frames in ten whatever was falling.
+
+**Common weather at rare strengths.** It rains for about one hour in
+fifteen, and most of that rain is too light for a camera to see falling. A
+pipeline that draws rain on 6% of frames, as often as it rains, and always
+at 20 to 45 mm/h, which falls for an hour a year, matches neither what a
+camera sees nor what a model should be shown more of. That is what this
+pipeline did until November 2026.
+
+**The ground outlasts the sky.** A road stays wet for longer than the rain
+lasts, and snow lies for days after an hour's fall. A wet road with nothing
+falling is a commoner frame than rain, and it could not be drawn: the road
+was wet only in the rain's own branch.
+
+**Rain, snow and fog are not three exclusive things.** Rain and snow are:
+they are kinds of precipitation. Fog is a state of the air, and drizzle
+falls through it a good part of the time. What is exclusive is a *state of
+the air and the ground together*, of which there are ten here.
 
 **Correlated things are drawn independently.** Water on the front element is
 far more likely while it is raining than on a dry afternoon. Drawing the two
 independently gets the *joint* distribution wrong even when each marginal is
-right.
+right. But droplets are **not** implied by rain and rain is **not** required
+for droplets: a recessed or shielded lens stays dry through a downpour, and
+dew and residual drops put water on the glass under a clear sky. The
+relationship is a conditional probability, not an implication.
 
-Note the shape of that third problem, because it is easy to over-correct.
-Droplets are **not** implied by rain and rain is **not** required for
-droplets: a recessed or shielded lens stays dry through a downpour, and dew,
-overnight condensation, residual drops after the rain stops and wind-blown
-spray all put water on the glass under a clear sky. The relationship is a
-conditional probability, not an implication. An earlier version of this recipe
-made droplets strictly conditional on wet weather, which is simply the same
-error pointing the other way.
+**The frame is not always what the pipeline takes it for.** Every branch
+below turns a dry daylight photograph into something else. A photograph
+taken at night, lit again by `NightIrMode`, and one taken under a roof and
+rained on, are impossible frames of a different kind.
 
-There is also a statistical error underneath all of it: **probability is doing
-two different jobs.** Some of these are *events* (it started raining), some
-are *camera properties* (this sensor has a rolling shutter and always has). A
-rolling-shutter artefact at `p=0.15` asserts that 85% of frames came from a
-global-shutter sensor, which for CCTV is close to backwards.
+**Probability is doing two different jobs.** Some of these are *events* (it
+started raining), some are *camera properties* (this camera has wide dynamic
+range switched on and always has). Drawing a property per frame describes a
+fleet of cameras sampled one frame at a time, which is right for a dataset
+pooled from many installations and wrong for one long recording.
 
 ## The structure
 
-Sample a lighting state, then a weather state (each of which carries its own
-probability of water on the glass), then apply the camera's own degradations
-in physical order.
-
 ```mermaid
 flowchart TD
-    START([frame]) --> LIGHT{"lighting state<br/>(exclusive)"}
-    LIGHT -->|55%| DAY["day<br/>CastShadows p=0.30<br/>SunFlare p=0.12"]
-    LIGHT -->|15%| LIT["lit night<br/>ExposureTransient -1 to -2.6 stops,<br/>warm cast"]
-    LIGHT -->|30%| IR["IR night<br/>NightIrMode<br/>(rain and falling snow are lit<br/>by the lamp, after it)"]
-    DAY --> W{"weather state<br/>(exclusive)"}
+    START([frame]) --> SRC{"what the frame is<br/>(read, not drawn)"}
+    SRC -->|"under a roof"| TAIL
+    SRC -->|"a night already"| ASIS["a night's weather,<br/>in the light it has"]
+    SRC -->|"out of doors by day"| LIGHT{"lighting state<br/>(exclusive)"}
+    LIGHT -->|55%| DAY["day"]
+    LIGHT -->|15%| LIT["night in colour<br/>NightColorMode"]
+    LIGHT -->|30%| IR["infrared night<br/>NightIrMode"]
+    DAY --> W{"state of the air and the ground<br/>(exclusive, ten of them)"}
     LIT --> W
     IR --> W
-    W -->|88%| CLEAR["clear<br/>droplets p=0.06<br/>dew, residual, spray"]
-    W -->|6%| RAIN["rain<br/>RandomRain by day,<br/>NightRain under IR<br/>droplets p=0.35"]
-    W -->|3%| SNOW["snow<br/>RandomSnow; under IR its flakes<br/>are NightSnow<br/>droplets p=0.10"]
-    W -->|3%| FOG["fog<br/>droplets p=0.30"]
-    CLEAR --> TAIL
-    RAIN --> TAIL
-    SNOW --> TAIL
-    FOG --> TAIL
-    TAIL["glass, sensor, ISP, codec<br/>independent, physical order"] --> T1["DirtSoil p=0.25"]
-    T1 --> T2["HousingOccluders p=0.12"]
-    T2 --> T3["AcFlicker p=0.45 night / 0.05 day"]
-    T3 --> T4["RollingShutter p=0.50"]
-    T4 --> T4b["SensorNoise p=0.70 lit night / 0.15 day / none under IR"]
-    T4b --> T5["ExposureTransient p=0.10"]
-    T5 --> T6["WdrToneMapping p=0.12"]
-    T6 --> T7["TemporalDenoiseArtifacts p=0.30 night / 0.12 day"]
-    T7 --> T8["VideoCodecArtifacts p=0.15"]
-    T8 --> OUT([augmented frame])
+    ASIS --> TAIL
+    W -->|"dry air"| DRY["dry road, or snow lying:<br/>the only states with a sun<br/>CastShadows, SunFlare by day"]
+    W -->|"wet road"| WETROAD["nothing falling"]
+    W -->|"rain"| RAIN["light, moderate or heavy;<br/>lamps and spray by day"]
+    W -->|"fog"| FOG["thin, dense, or with drizzle;<br/>lamps lit by day"]
+    W -->|"snow"| SNOW["falling"]
+    DRY --> GLASS["water on the glass,<br/>at the state's own odds"]
+    WETROAD --> GLASS
+    RAIN --> GLASS
+    FOG --> GLASS
+    SNOW --> GLASS
+    GLASS --> TAIL["glass, sensor, ISP, codec<br/>independent, physical order,<br/>odds by the light"]
+    TAIL --> OUT([augmented frame])
 ```
 
-Two different mechanisms are at work here and it is worth being explicit about
+Three different mechanisms are at work and it is worth being explicit about
 which is which.
 
-**The two `{diamond}` nodes are exclusive choices** — one lighting state and
-one weather state per frame, implemented as `OneOf`, so nothing can select
+**The first diamond is read off the frame.** Nothing is drawn. A frame half
+of which is nearly black is a night already
+([`read_source`](../src/surmentations/presets/source.py)); a frame whose
+labels show no sky, road, vegetation or open ground is under a roof, which
+only a provider with scene labels can tell.
+
+A night photograph and a car park under a roof, with the same draw of the
+pipeline each: taken for dry daylight frames on the left (`read_source=False`),
+read for what they are on the right. The night is not lit a second time,
+and it does not rain indoors:
+
+![a night photograph and a car park, taken for daylight frames and read for what they are](https://desmoteo.github.io/surmentations/assets/pipelines/source.webp)
+
+**The other two are exclusive choices** — one lighting state and one state
+of the air and the ground per frame, each a `OneOf`, so nothing can select
 two. That is what makes the impossible combinations impossible: it is
 structural, not a matter of probabilities being small.
 
-**Everything in the tail is independent** and each has its own probability, as
-listed. They are not all applied; a typical frame gets two or three of them.
+**Everything in the tail is independent** and each has its own probability.
 They are independent because they genuinely are — a dirty dome tells you
 nothing about whether the encoder dropped a frame.
 
+## The states, and how often each is drawn
+
+The caller gives five shares of time (`rain`, `snow`, `fog`, `wet_road`,
+`snow_lying`); named constants say how rain divides by strength and fog by
+thickness
+([`weather_shares`](../src/surmentations/presets/pipelines.py)).
+
+| State | Share of time | Drawn, by day | Drawn with |
+| --- | --- | --- | --- |
+| Dry air, dry road | 0.783 | 0.444 | nothing; by day, shadows and a flare |
+| Dry air, road still wet | 0.100 | 0.158 | `RandomRain` with no streaks, at its lowest rate |
+| Light rain, to 3 mm/h | 0.044 | 0.106 | `RandomRain` |
+| Moderate rain, to 10 mm/h | 0.016 | 0.063 | `RandomRain` |
+| Heavy rain, 10 to 50 mm/h | 0.0015 | 0.020 | `RandomRain` |
+| Fog, 200 m to 1 km | 0.012 | 0.039 | `RandomFog`; `NightFog` at night |
+| Dense fog, 50 to 200 m | 0.004 | 0.022 | the same |
+| Fog with drizzle | 0.004 | 0.022 | `RandomRain` with no streaks, then the fog |
+| Snow falling | 0.006 | 0.039 | `RandomSnow`, 0.2 to 2.5 mm/h of water |
+| Snow lying, none falling | 0.030 | 0.086 | `RandomSnow` with no flakes |
+
+Each state by day, drawn alone on one scene, without the camera's own chain
+after it and with nothing on the glass. The provider reads the scene and
+its vehicles, so the traffic's lamps are lit in rain and fog; the sun is
+out in the first and the last:
+
+![the ten states of the air and the ground, by day](https://desmoteo.github.io/surmentations/assets/pipelines/states.webp)
+
+**"Drawn" is not "share of time", on purpose.** A pipeline that drew each
+state as often as it happens would be nearly all dry frames: right for
+measuring a model, wasteful for training one. `prior_power` raises each
+share to a power before the draw
+([`rebalanced`](../src/surmentations/presets/pipelines.py)): 1 is the share
+itself, 0 makes every state as likely as every other, and the default, 0.5,
+is the square root, the usual choice for classes with a long tail. Rare
+states are drawn more often than they happen and still less often than
+common ones.
+
+**Fog follows the hour.** It forms after dark and clears after sunrise, so
+its share is halved by day and half as much again at night
+(`FOG_BY_HOUR`).
+
+**The ground is drawn with the sky, not after it.** Nine rains in ten fall
+on a road already wet, and eight snowfalls in ten on snow already lying
+(`WET_UNDER_RAIN`, `SNOW_UNDER_SNOW`); how wet and how deep is drawn over
+the transform's whole range unless `ground_severity` fixes it.
+
+**`weather_severity` is for storms.** Left unset, each state has the
+strength in the table. A level 1-5 draws all rain, snow and fog at that
+level of the severity ladder instead, which is what this pipeline used to
+do at level 2.
+
+**Traffic.** By day, on a provider that reads the vehicles, the rain
+states light the traffic's lamps and lay its spray, the fog states light
+its lamps, and a road still wet has spray. Each vehicle goes no faster than
+the gap ahead of it allows, so a queue throws up none
+([`road_surface.md`](road_surface.md)). Without a reader none of this is
+drawn.
+
 ## The recipe
+
+A reduced version of the importable pipeline, to show its shape: two
+lighting states where that has three, one strength of rain and one of fog,
+and no reading of the frame.
 
 ```python
 import albumentations as A
 from surmentations.atmosphere import RandomFog, RandomRain, RandomSnow
+from surmentations.atmosphere.night_fog import NightFog
+from surmentations.atmosphere.night_rain import NightRain
 from surmentations.camera import (
     AcFlicker, ExposureTransient, NightIrMode, RollingShutter, SensorNoise,
     TemporalDenoiseArtifacts, VideoCodecArtifacts, WdrToneMapping,
 )
 from surmentations.lens import DirtSoil, HousingOccluders, SunFlare, WaterDroplets
+from surmentations.presets import rebalanced, weather_shares
 from surmentations.scene import CastShadows
 
+# P(water on the glass | state).
+WET = {"dry": 0.06, "wet_road": 0.15, "rain": 0.35, "fog": 0.18, "snow": 0.10}
 
-def _weather(
-    depth_provider,
-    rain=0.06, snow=0.03, fog=0.03,
-    wet_rain=0.35, wet_snow=0.10, wet_fog=0.30, wet_clear=0.06,
-):
-    """Exactly one atmospheric state, including 'clear'.
 
-    Each state carries its own probability of water on the front element, so
-    rain can arrive without droplets (a shielded lens) and droplets can arrive
-    without rain (dew, residual drops, spray). The weather sets the odds; it
-    does not decide the outcome.
+def _weather(provider, hour, relight=None, sunlit=(), sunlit_after=(), prior_power=0.5):
+    """Exactly one state of the air and the ground, including 'dry'.
+
+    Each state carries its own probability of water on the front element,
+    so rain can arrive without droplets (a shielded lens) and droplets
+    without rain (dew, residual drops). The sun is out only in the states
+    with dry air. `relight` makes a night of the frame: what is in the
+    scene goes before it and what is in the air after it.
     """
-    clear = max(1.0 - rain - snow - fog, 1e-6)
-    return A.OneOf([
-        A.Sequential([
-            RandomRain(depth_provider=depth_provider, p=1.0),
-            WaterDroplets(p=wet_rain),
-        ], p=rain),
-        A.Sequential([
-            RandomSnow(depth_provider=depth_provider, p=1.0),
-            WaterDroplets(p=wet_snow),
-        ], p=snow),
-        A.Sequential([
-            RandomFog(depth_provider=depth_provider, p=1.0),
-            WaterDroplets(p=wet_fog),
-        ], p=fog),
-        A.Sequential([
-            WaterDroplets(p=wet_clear),
-        ], p=clear),
-    ], p=1.0)
+    share = rebalanced(weather_shares(hour=hour), prior_power)
+    night = [relight] if relight is not None else []
+    streaks = {"max_streaks": 0} if night else {}
+
+    def road(rate, **more):
+        return RandomRain(
+            depth_provider=provider, p=1.0, rain_rate_range_mm_h=rate,
+            wetness_probability=1.0, **more,
+        )
+
+    def drops(state):
+        return WaterDroplets(p=WET[state])
+
+    fog = NightFog if night else RandomFog
+    arms = {
+        "dry": [*sunlit, *night, drops("dry"), *sunlit_after],
+        "wet_road": [road((2.0, 2.0), max_streaks=0), *night, drops("wet_road")],
+        "rain": [
+            road((2.0, 10.0), **streaks),
+            *night,
+            *([NightRain(p=1.0, rain_rate_range_mm_h=(2.0, 10.0))] if night else []),
+            drops("rain"),
+        ],
+        "fog": [*night, fog(depth_provider=provider, p=1.0), drops("fog")],
+        "snow": [RandomSnow(depth_provider=provider, p=1.0), *night, drops("snow")],
+        "snow_lying": [
+            RandomSnow(
+                depth_provider=provider, p=1.0, max_flakes=0, accumulation_probability=1.0
+            ),
+            *sunlit, *night, drops("dry"), *sunlit_after,
+        ],
+    }
+    weight = {
+        "dry": share["dry"],
+        "wet_road": share["wet_road"],
+        "rain": share["rain_light"] + share["rain_moderate"] + share["rain_heavy"],
+        "fog": share["fog_thin"] + share["fog_dense"] + share["fog_rain"],
+        "snow": share["snow"],
+        "snow_lying": share["snow_lying"],
+    }
+    return A.OneOf([A.Sequential(arms[name], p=weight[name]) for name in arms], p=1.0)
 
 
 def _stream(lit_by_mains, codec_p, infrared=False):
@@ -200,63 +287,49 @@ def _stream(lit_by_mains, codec_p, infrared=False):
     return [
         # Optics: on the glass, in front of everything the sensor does.
         DirtSoil(p=0.25),
-        # A dark silhouette by day; lit by the IR ring, and glowing, only
-        # once the camera has switched its illuminator on.
-        HousingOccluders(p=0.12, glow_range=(0.6, 1.6) if infrared else (0.0, 0.0)),
-        # Sensor. Mains banding needs artificial light, so it belongs to the
-        # night branches outdoors (and would be all-day indoors).
-        AcFlicker(p=0.45 if lit_by_mains else 0.05),
-        RollingShutter(p=0.50),
-        # Colour sensor noise follows the light: high gain and usual under
-        # artificial light, low and occasional by day, and none under the
-        # infrared ring, where NightIrMode has its own.
-        *(
-            []
-            if infrared
-            else [SensorNoise(p=0.70, gain_range_db=(14.0, 23.0))]
-            if lit_by_mains
-            else [SensorNoise(p=0.15, gain_range_db=(4.0, 10.0))]
+        # A dark silhouette by day; lit by the IR ring, glowing, and far
+        # more often there, once the camera has switched its illuminator on.
+        HousingOccluders(
+            p=0.20 if infrared else 0.03,
+            glow_range=(0.6, 1.6) if infrared else (0.0, 0.0),
         ),
+        # Sensor. Mains banding needs mains light and a short shutter.
+        AcFlicker(p=0.05 if infrared else 0.15 if lit_by_mains else 0.02),
+        # A whole-frame shear needs the mount to move.
+        RollingShutter(p=0.10),
+        # Colour sensor noise, where the night's own transform has none.
+        *([] if infrared else [SensorNoise(p=0.15, gain_range_db=(4.0, 10.0))]),
         # ISP.
-        ExposureTransient(p=0.10),
-        WdrToneMapping(p=0.12),
-        TemporalDenoiseArtifacts(p=0.30 if lit_by_mains else 0.12),
+        ExposureTransient(p=0.05),
+        WdrToneMapping(p=0.30),
+        TemporalDenoiseArtifacts(p=0.8 if lit_by_mains else 0.2),
         # Transmission, last: it acts on the finished picture.
         VideoCodecArtifacts(p=codec_p),
     ]
 
 
-def surveillance(depth_provider, day=0.55, lit_night=0.15, ir_night=0.30, codec_p=0.15):
-    """One lighting state, one weather state, then the camera's own chain."""
+def surveillance(depth_provider, day=0.70, ir_night=0.30, codec_p=0.15):
+    """One lighting state, one state of the air and ground, then the camera's own chain."""
     day_branch = A.Sequential([
-        CastShadows(depth_provider=depth_provider, p=0.30),
-        _weather(depth_provider),
-        SunFlare(p=0.12),
+        _weather(
+            depth_provider, "day",
+            sunlit=(CastShadows(depth_provider=depth_provider, p=0.30),),
+            sunlit_after=(SunFlare(p=0.12),),
+        ),
         *_stream(lit_by_mains=False, codec_p=codec_p),
     ], p=day)
-
-    # Night under street or shop lighting, camera still in colour: under-
-    # exposed and warm-cast, with the IR-cut filter still in place.
-    lit = A.Sequential([
-        _weather(depth_provider),
-        ExposureTransient(
-            p=1.0,
-            exposure_error_stops_range=(-2.6, -1.0),
-            assumed_temperature_range_k=(5000.0, 6500.0),
-            actual_temperature_range_k=(2000.0, 3200.0),
-        ),
-        *_stream(lit_by_mains=True, codec_p=codec_p),
-    ], p=lit_night)
 
     # Ambient low enough that the camera has cut to monochrome and switched
     # its own illuminator on.
     ir = A.Sequential([
-        _weather(depth_provider),
-        NightIrMode(depth_provider=depth_provider, p=1.0),
+        _weather(
+            depth_provider, "night",
+            relight=NightIrMode(depth_provider=depth_provider, p=1.0),
+        ),
         *_stream(lit_by_mains=True, codec_p=codec_p, infrared=True),
     ], p=ir_night)
 
-    return A.Compose([A.OneOf([day_branch, lit, ir], p=1.0)])
+    return A.Compose([A.OneOf([day_branch, ir], p=1.0)])
 ```
 
 Used as:
@@ -274,182 +347,290 @@ its camera is mounted. Nothing in the pipeline changes; every transform in
 it asks the provider:
 
 ```python
-from surmentations.perception import InstallationGeometry, SegmentationLabelEstimator
+from surmentations.perception import (
+    InstallationGeometry, OpenVocabularyVehicleEstimator, SegmentationLabelEstimator,
+)
 
 provider = SharedDepthProvider(
     DepthAnythingV2Estimator(),
     labels=SegmentationLabelEstimator(),
     geometry=InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_m=6.5),
+    vehicles=OpenVocabularyVehicleEstimator(),
 )
 transform = surveillance(provider)
 ```
 
 The weather then falls through one camera, the wet road and the settled
-snow keep off what stands on them, and the infrared branch's illuminator
-works over the scene's real distances. A provider that also has a vehicle
-reader (`vehicles=OpenVocabularyVehicleEstimator()`) has `NightIrMode`
-light the traffic's lamps on that branch. `RandomRain`'s spray and its
-daytime lamps are parameters of its own, off by default, and the pipelines
-leave them off. See [`scene_understanding.md`](scene_understanding.md).
+snow keep off what stands on them, and a frame taken under a roof gets no
+weather. With the vehicle reader, both night branches are lit from the
+scene's own street lamps and traffic, the traffic's lamps are lit in rain
+and fog, and a wet road has its spray. See
+[`scene_understanding.md`](scene_understanding.md) and
+[`road_surface.md`](road_surface.md).
 
-### Why `NightIrMode` is `p=1.0` *inside* its branch
+### Why the night's transform is `p=1.0` *inside* its branch
 
-Because the branch **is** the IR-night state, and its weight — 30% — is what
-says how often that state occurs. A camera that has cut to monochrome and
-switched its illuminator on has done so completely; there is no such thing as
-30% of an IR frame.
+Because the branch **is** the night, and its weight is what says how often
+that state occurs. A camera that has cut to monochrome and switched its
+illuminator on has done so completely; there is no such thing as 30% of an
+IR frame.
 
-Night that is not IR night is a separate state, and it gets its own branch.
-The split matters: modern cameras hold colour far into the evening under
-street lighting, and a model trained only on IR night has never seen the
-colour-at-night domain.
+Which of the two nights a camera has is a matter of where it stands. On a
+lit street it holds colour all night; on an unlit road it goes to infrared
+every night. The weights `lit_night=0.15, ir_night=0.30` describe a fleet of
+both. For one camera, set the one it does not have to 0.
 
-So the thing to tune is the **branch weights**, not the transform's `p`.
-`ir_night=0.30, lit_night=0.15` says 45% of frames are after dark and two
-thirds of those have tripped to IR.
+### Why the night's transform is in the *middle* of each state
+
+A wet road and settled snow are the scene: they go before the frame is made
+a night, so that the night's lamps light them. Rain and snow in the air are
+lit by those lamps and go after it, as `NightRain` and `NightSnow`, with
+`RandomRain` and `RandomSnow` before it told to draw no streaks and no
+flakes. Fog goes after it too: at night it is lit by the lamps in it. Under
+infrared the lamp is the camera's own, so what is in the air and on the
+glass is lit from centimetres away; in a night in colour there is no such
+lamp, and rain shows only in the street's light.
+
+Four of the states in each lighting state. Down the middle and the right
+the frame is made a night between the state's two halves: the wet road and
+the settled snow are lit by the night's lamps, and the rain, the fog and
+the snow in the air show in their light:
+
+![four states by day, in a night in colour and in an infrared night](https://desmoteo.github.io/surmentations/assets/pipelines/lighting.webp)
+
+The pipeline's own draws, with the camera's chain after the weather, are
+in the [scene gallery](examples/scenes/README.md), four to a scene.
 
 ## Measured behaviour
 
-Over 3000 images, recorded with `surmentations.diagnostics`:
+The importable `surveillance`, over 3000 draws, recorded with
+`surmentations.diagnostics`:
 
 | Property | Measured | Designed |
 | --- | --- | --- |
-| Two or more weather states at once | **0** | impossible |
-| `NightIrMode` with `SunFlare` or `CastShadows` | **0** | impossible |
-| IR night | 29.5% | 30% |
-| Rain / snow / fog | 7.0 / 3.2 / 2.7% | 6 / 3 / 3% |
-| Droplets given rain | 37.0% | 35% |
-| Droplets given fog | 29.3% | 30% |
-| Droplets given snow | 12.6% | 10% |
-| Droplets given clear | 5.0% | 6% |
-| **Droplets with no weather** | **131 frames** | allowed — dew, residual, spray |
-| **Weather with no droplets** | **274 frames** | allowed — shielded lens |
+| Day / night in colour / infrared night | 55.3 / 15.9 / 28.8% | 55 / 15 / 30% |
+| Dry air over a dry road | 45.6% | 44% by day, 42% at night |
+| Road still wet, nothing falling | 15.1% | 15 to 16% |
+| Rain: light / moderate / heavy | 10.4 / 6.1 / 1.5% | 10 / 6 / 2% |
+| Fog, without and with drizzle | 7.3 / 2.7% | 6 to 10 / 2 to 4% by the hour |
+| Snow falling / lying | 4.3 / 7.1% | 4 / 8% |
+| Droplets given rain falling | 28 to 31% | 35% |
+| Droplets given a dry road | 7% | 6% |
+| A sun effect given rain, fog or falling snow | **0** | impossible |
+| A sun effect given dry air by day | 36% | 0.30 and 0.12, independent |
+| A night made of a frame that was one | **0** | impossible |
+| Effects per frame | mean 2.9, variance 2.6 | independent draws |
+| Frames left untouched | 4.8% | |
 
-The last two rows are the point of the revision: both directions occur, at
-rates the weather conditions but does not dictate.
+## What is drawn together
+
+A state is itself a combination: the air, the ground, and at night the
+light. On top of it each state has its own odds of what goes with it on
+the camera: water on the glass, and with snow, snow on the housing. Eight
+of them, each drawn for certain here:
+
+![eight things the pipeline draws together](https://desmoteo.github.io/surmentations/assets/pipelines/combinations.webp)
+
+How often each comes up, over 4000 draws of the importable pipeline. The
+first column is the estimate of how often it happens, for the reference
+site; the second is the pipeline drawing the states as often as they happen
+(`prior_power=1.0`), which should be near it; the third is the default.
+
+| Together | Share of time, estimated | Drawn, matched | Drawn, default |
+| --- | --- | --- | --- |
+| Rain falling on a wet road | 6% | 5.6% | 18.2% |
+| Road wet, nothing falling | 10% | 9.2% | 15.1% |
+| Rain falling, water on the glass | 3% | 1.7% | 6.3% |
+| Road wet, nothing falling, drops left on the glass | 1.5% | 1.0% | 1.9% |
+| Rain through fog | 0.4% | 0.2% | 2.6% |
+| Rain through fog, water on the glass | 0.2% | under 0.1% | 0.8% |
+| Fog, water on the glass | 0.6% | under 0.1% | 1.4% |
+| Fog at night / by day | 1.4 / 0.6% | 1.3 / 0.3% | 5.6 / 4.3% |
+| Snow lying, none falling | 3% | 2.7% | 7.3% |
+| Snow falling on lying snow | 0.5% | 0.5% | 3.5% |
+| Snow, falling or lying, and on the housing | not estimated | 0.5% | 2.6% |
+| Snow lying, the sun out | not estimated | 0.3% | 1.8% |
+| Rain falling at night | 3% | 2.9% | 9.4% |
+| Infrared night, rain, a wet lens in the lamp | not estimated | 0.5% | 1.8% |
+| **The sun with rain, fog or falling snow** | never | **0** | **0** |
+| **The sun at night** | never | **0** | **0** |
+| **Snow with rain or fog** | sleet is not drawn | **0** | **0** |
+
+Two rows fall short of their estimates on purpose or by sampling. Water on
+the glass in rain is drawn at 0.35 where the estimate for a mixed fleet is
+0.45: it is a housing's property, 0.7 for an exposed dome and 0.2 for a
+hooded bullet, and `wet_rain` is the argument. And a combination under
+half a percent is a handful of frames in 4000: the fog rows of the matched
+column are too few to say more than that they are rare.
+
+What the pipeline does not draw together, though it happens: frost on the
+glass on a cold clear night, insects and webs by season, heat shimmer on a
+hot dry day, and a wind that slants the rain and shakes the mount at once.
+The transforms exist (`FrostOnGlass`, `NightInsects`, `SpiderWeb`,
+`HeatShimmer`, `CameraVibration`); none has a place in the pipeline yet.
 
 ## Cost
 
-Measured at 512 px on the reference photograph, 100 images:
+On one CPU core with the depth network on the GPU, 512 px, `codec=0.0`,
+300 frames, on a provider that has depth alone: **35 ms at the median, 34
+on average and 57 at the 90th percentile**, each frame the least of three
+runs. The pipeline it replaces took 12 at the median. The difference is the weather: a wet road, a fog or a
+night is drawn on most frames now, where 88 frames in a hundred used to
+get none.
 
-| | median | mean | p90 | 8 workers |
-| --- | --- | --- | --- | --- |
-| this recipe | 112 ms | 181 ms | 380 ms | **44 img/s** |
-| 14 effects, independent, `p=0.15` | 104 ms | 193 ms | 384 ms | 41 img/s |
+Where it goes, as shares of the whole: `RandomRain` 37% (42 ms a call, on
+four frames in ten, most of it the wet road), `RandomSnow` 11%, the noise
+reducer 11%, water on the glass 6%, wide dynamic range 5%, and nothing
+else over 4%.
 
-At 1024 px: 252 ms median, 338 ms mean, 24 img/s from 8 workers.
+The arguments that move it, each table measured in one run (the machine's
+own drift between runs is several milliseconds, and only figures from one
+run compare):
 
-The mean sits well above the median because cost depends on which effects
-fire; the p90 is what a `DataLoader` worker must keep up with, not the median.
+| | Median | Mean | 90th percentile |
+| --- | ---: | ---: | ---: |
+| As shipped, `prior_power=0.5` | 49 ms | 48 | 85 |
+| `prior_power=0.75` | 32 | 38 | 74 |
+| `prior_power=1.0`: four frames in five dry | 22 | 28 | 62 |
+| `ground_severity=0, wet_road=0, snow_lying=0`: nothing on the ground | 29 | 31 | 59 |
 
-### Where the time goes, and what to trim
+| | Median | Mean | 90th percentile |
+| --- | ---: | ---: | ---: |
+| As shipped, `wdr=0.30, denoise=0.8` | 40 ms | 39 | 69 |
+| `wdr=0` | 36 | 37 | 66 |
+| `denoise=0` | 37 | 34 | 64 |
+| `wdr=0, denoise=0`: a camera with both off | 36 | 33 | 62 |
 
-| | ms | share |
-| --- | --- | --- |
-| `VideoCodecArtifacts` | 28.5 | ~26% |
-| depth estimate (paid once if any depth-conditioned effect fires) | 26.0 | ~23% |
-| `WdrToneMapping` | 13.1 | ~12% |
-| `DirtSoil` | 8.5 | ~8% |
-| `TemporalDenoiseArtifacts` | 7.2 | ~7% |
-| `WaterDroplets` | 8.1 | ~7% |
-| everything else | ~20 | ~17% |
+(Each table is one run on a machine that was doing other work, so its
+rows compare with each other and not with the figures above; the first
+was taken before the last of the work below, which took a tenth off.)
 
-**The codec is the biggest line, and for most datasets it should be near
+Three things were done to bring it down, in November 2026:
+
+- **No grain of far rain or far snow where nothing is falling**, or where
+  the night's own transform draws what falls. It is the speckle of a count
+  of drops, a tenth of the transform's time, and there was nothing for it
+  to match.
+- **What is read off the depth map is read at 384 pixels** in fast mode,
+  for any frame over 480: the lie of the ground, where a road is wet. It
+  was 518, for frames over 777, so a 512-pixel frame was read at full
+  size. [`native_kernels.md`](native_kernels.md) has what that changes.
+  These two took 14% off the mean and 19% off the median at 512 px, and
+  8% off at 1024.
+- **Twelve more compiled kernels**, for the surface normals, the lying
+  snow and the ground's noise among them
+  ([the eighth round](native_kernels.md#an-eighth-round-what-reads-the-scene)):
+  another 9% off, frame for frame.
+
+The camera's settings are also drawn nearer to how often they are on: wide
+dynamic range on 0.30 of frames (it was 0.12) and the noise reducer on 0.8
+of night frames (0.30). Together they are 6 to 7 ms of the 39, and both
+are arguments (`wdr`, `denoise`).
+
+### With a provider that reads the scene
+
+Labels, the installation's geometry and the vehicle reader give the
+effects a road to wet, traffic to trail spray and lamps to light, and each
+costs what it reads. One core, the least of three runs taken turn about,
+on a city road (800 x 480, 15 vehicles, 22 street lamps) and a motorway
+(640 x 640, 46 vehicles); "before" is the library as it stood before the
+kernels and the road's reading were reworked in November 2026:
+
+| A frame of | City road, before | now | Motorway, before | now |
+| --- | ---: | ---: | ---: | ---: |
+| An infrared night | 153 ms | 54 | 200 | 64 |
+| A night in colour | 146 | 45 | 203 | 57 |
+| A night in colour, with fog | 183 | 63 | 240 | 78 |
+| Fog by day, the traffic's lamps lit | 48 | 40 | 55 | 41 |
+| A wet road | 147 | 86 | 163 | 92 |
+| A wet road with spray and lamps | 211 | 125 | 263 | 152 |
+| Snow lying | 147 | 97 | 170 | 103 |
+
+The whole pipeline on such a provider, at 512 px on a frame with a road in
+it, went from 172 ms a frame on average to 82 (180 to 81 at the median,
+306 to 142 at the 90th percentile): `RandomRain` is 39% of that, the two
+nights 29% and `RandomSnow` 8%.
+
+What it was: the nights summed every street lamp's light along every line
+of sight with a sine and a cosine at each of eight points, which is now a
+kernel that takes no angle at all; and a road was read with a Python loop
+over 200 trial roads and a pass over the frame for every vehicle, which
+is now a matrix, one sort and three kernels, 72 ms to 23 on the motorway,
+and reads the same road. The lamps' pools and beams, the wheel tracks,
+the spray and the haloes round lamps in fog have a kernel each too
+([`native_kernels.md`](native_kernels.md#a-ninth-round-lamps-tracks-and-the-roads-frame)).
+
+Lying snow still reads the picture's own texture at full size: where a
+canopy is, and where level ground runs to an object's edge. That was not
+moved to a smaller copy. It is the picture's own edges that the snow's
+edge has to follow, and reading only the depth map smaller already moves
+that edge on about one pixel in a hundred. The snow was made cheaper by
+kernels instead.
+
+**The reading itself now costs more than what is drawn from it.** All of
+the above is with the scene already read. A provider's first sight of a
+frame, on the same machine's GPU (an 8 GB laptop card), is 170 ms at the
+median at 512 px, from 115 to 265 over six scenes:
+
+| | First sight of a frame |
+| --- | ---: |
+| Depth | 25 ms (14 on a provider that has depth alone) |
+| Labels | 31 ms |
+| Geometry, on the CPU | 3 ms |
+| The vehicle reader: vehicles, their lamps, street lamps, signs | 115 ms, from 57 to 198 with the traffic |
+
+A provider holds on to the last frames it read, so the transforms of one
+pipeline share a reading, but a training set seen once an epoch is read
+again every epoch. `SharedDepthProvider(disk_cache=...)` keeps each
+reading in a file ([`depth/store.py`](../src/surmentations/depth/store.py))
+and finds it again by the frame's own pixels:
+
+| | A frame's first sight in a process |
+| --- | ---: |
+| Read by the networks | 163 ms |
+| Read and written to disk, the first epoch | 177 ms |
+| Found on disk, every later one | 8 ms |
+| The same for a provider with depth alone | 29 ms, and 3 ms |
+
+About 550 kB a frame at 512 px. For a fixed set of frames that is the
+largest saving there is to make here, and the pipeline's pictures are the
+same with it and without.
+
+**The codec is the biggest single line, and for most datasets it should be
 zero.** If your frames came out of an H.264 or H.265 stream — which CCTV
 frames did — the compression artefacts are already in the pixels, and
-`VideoCodecArtifacts` adds a *second* generation of them. Set `codec_p=0.0`
-and you lose nothing your data does not already have. It earns its place only
-when training on clean or synthetic imagery destined for a compressed stream.
+`VideoCodecArtifacts` adds a *second* generation of them. Set `codec=0.0`
+and you lose nothing your data does not already have.
 
 **Packet loss rides with the codec.** `TransmissionFaults` damages a real
-H.264 stream and decodes it, about 150 ms a call, at `faults=0.03` by
-default. It needs ffmpeg as the codec stage does, so when `codec=0.0` an
-unset `faults` is zero too and the pipeline still builds on a machine
-without the binary. Unlike compression, loss is not already in decoded
-frames unless the link that carried them was bad: set `faults` explicitly
-to keep it with `codec=0.0`.
-
-Physically honest probabilities for the always-on camera properties would put
-codec at `p≈0.6`, WDR at `p≈0.25` and denoise at `p≈0.3`, costing roughly
-**210 ms** instead of 112. The values above are a deliberate trade, and they
-under-represent how often a real camera applies those three.
+H.264 stream and decodes it, at `faults=0.03` by default. It needs ffmpeg
+as the codec stage does, so when `codec=0.0` an unset `faults` is zero too
+and the pipeline still builds on a machine without the binary.
 
 ## Adapting the priors
 
 | Parameter | Here | What it encodes |
 | --- | --- | --- |
-| `day` / `lit_night` / `ir_night` | 0.55 / 0.15 / 0.30 | Share of frames in each lighting state. Latitude, season, whether labels concentrate in daylight, and how readily your cameras trip to IR. |
-| `rain` / `snow` / `fog` | 0.06 / 0.03 / 0.03 | Absolute frequency of each weather state; the remainder is clear. ~12% total suits a temperate maritime climate, an arid site nearer 2%. Set `snow=0` outside snow latitudes. |
-| `wet_rain` / `wet_fog` / `wet_snow` / `wet_clear` | 0.35 / 0.30 / 0.10 / 0.06 | P(water on the glass \| weather state). A recessed lens stays dry far longer than an exposed dome; `wet_clear` covers dew, residual drops and spray, so a coastal or irrigated site wants more. |
-| `codec_p` | 0.15 | See above — usually 0 for footage already sourced from video. |
-| `DirtSoil` `p` | 0.25 | How much of your fleet is overdue for cleaning. Rises steeply with maintenance interval. |
-| `RollingShutter` `p` | 0.50 | Not "how many cameras have a rolling shutter" (all of them) but how often there is enough motion — wind, a passing vehicle — for the artefact to show. |
+| `day` / `lit_night` / `ir_night` | 0.55 / 0.15 / 0.30 | Share of frames in each lighting state. Frames taken evenly round the clock are nearly half at night; frames taken when something passes follow the traffic, a fifth of which runs in darkness. Colour or infrared is the site's lighting. |
+| `rain` / `snow` / `fog` | 0.065 / 0.006 / 0.02 | The share of time each is there. A Mediterranean coast has half the rain and no snow; a river basin several times the fog. |
+| `wet_road` / `snow_lying` | 0.10 / 0.03 | The share of time the ground still shows what fell. Both rise steeply in winter. |
+| `prior_power` | 0.5 | 1 to draw the weather as often as it happens, lower to be shown more of what is rare. |
+| `weather_severity` | unset | A level 1-5 to draw all weather at one strength. |
+| `wet_rain` / `wet_fog` / `wet_snow` / `wet_after` / `wet_clear` | 0.35 / 0.18 / 0.10 / 0.15 / 0.06 | P(water on the glass \| state). A housing's property more than a frame's: 0.7 in rain for an exposed dome, 0.2 for a hooded bullet. |
+| `snow_on_housing` | 0.30 | P(snow on the housing \| snow falling); half of it over snow that only lies. |
+| `shadows` / `flare` | 0.30 / 0.12 | Hard shadows and a sun flare, on the day frames with dry air. |
+| `codec` | 0.15 | See above — usually 0 for footage already sourced from video. |
+| `dirt` | 0.25 | How much of your fleet is overdue for cleaning. |
+| `occluders` | 0.12 | Insects and webs under the infrared ring; a quarter of it by day. |
+| `wdr` | 0.30 | The share of your cameras with wide dynamic range on: a setting, so 0 or 1 for one camera. |
+| `denoise` | 0.8 | The noise reducer's artefacts at night; a quarter of it by day. A setting too: 0 for cameras that have it off. |
+| `read_source` | on | Off to take every frame for a dry daylight one. |
 
-### Rain at night is a different transform
-
-The IR-night branch does not reuse the weather state the other two share, and
-the reason is ordering rather than taste. Rain lit by the camera's own
-illuminator has to follow the reflectance-to-infrared conversion — its
-streaks are *already* in infrared terms, so running them through that
-conversion would apply it twice. Fog still precedes it: it veils the scene,
-and the sensor then sees the veiled scene.
-
-Snow is split across the conversion. Its veil and settled snow are the scene
-and go before; its falling flakes are lit by the lamp and go after, as
-`NightSnow`, with `RandomSnow` built at `max_flakes=0` so the two do not both
-draw them. Left to `RandomSnow` alone the flakes were lit by the depth of
-whatever was behind them and vanished over anything distant.
-
-Rain is split the same way. `RandomRain`, built at `max_streaks=0`, goes
-before the conversion for the veil and the wet road, which are the scene;
-`NightRain` goes after it for the streaks. The branch used to hold
-`NightRain` alone, and lamp-lit rain fell on a road as dry as the
-photograph's.
-
-The same branch is the only one in which things on the dome glow. An insect
-or a web is a dark silhouette by day and under street lighting; under the
-infrared ring it is lit from centimetres away, so `HousingOccluders` is given
-a glow there and none anywhere else.
-
-Water on the glass follows the lighting state in two ways. Under the infrared
-ring `WaterDroplets` is given the same glow (`illuminator_glow_range`): a
-fogged dome scatters the ring's light back as a veil and each drop returns it
-from its rim, which is why a wet camera whites out at night. And in both
-night branches its `aperture_diameter_range_mm` is pinned to an open iris,
-1.4-3 mm. How sharp a drop looks is set by the aperture, so at night most of
-them dissolve into soft patches, while the day branch keeps the transform's
-default range, which also covers lenses that stop down in sunlight.
-
-Fog follows the lighting state too. By day it is `RandomFog`, an even veil
-lit by the sky. In the street-lit branch it is `NightFog`, lit by the lamps
-in the frame, so its veil is bright near them and dark between; under infrared it is `NightFog` placed *after* `NightIrMode`
-with `illuminator_backscatter_range` set, because the wall of light it raises
-is the camera's own. Both night branches also carry `SourceGlare` at
-`p=0.35`, which flares the lamps and headlights the frame contains and does
-nothing to a frame without any. (The printed recipe above keeps `RandomFog`
-in all three branches for brevity; the importable pipelines do not.)
-
-The rain in the street-lit night branch is seen by the same camera, so it is
-metered for 5-150 lux with that open iris. `RandomRain` derives its shutter
-time from the light level and the aperture, and at those levels it sits at
-the slow end of the shutter's range: long faint streaks, where the day
-branch mostly gets short flecks and dashes. It is also lit differently.
-`lamp_glint_range` is set, so each streak is lit by the lamps near it in
-the picture and by the dark sky otherwise: rain shows as bright flecks
-round each lamp and not at all between them, and a soaked road reflects
-the lamps as streaks of light. `overcast_range` is zero there, since cloud
-changes nothing about light that comes from a pole.
-
-So that branch builds its own four-way weather choice with the shared tail
-duplicated across the arms. That costs four sets of constructed objects and
-no runtime, and it keeps the exclusivity structural: a frame still gets
-exactly one weather state, and `NightRain` can only fire on the arm that
-chose rain. Measured over 2000 frames at `rain=0.10`: `NightRain` fires on
-3.3% (against `ir_night` 0.30 × `rain` 0.10 = 3%), always alongside
-`NightIrMode`, never alongside `RandomRain`.
-
-This matters more than it sounds, because it is the only configuration in
-which the rain is actually visible as rain — see below.
+The rest of the camera chain's odds (`RollingShutter` 0.10, `AcFlicker`
+0.02 by day and 0.15 under street lamps, `ExposureTransient` 0.05) are
+constants at the top of
+[`pipelines.py`](../src/surmentations/presets/pipelines.py), with what each
+is an estimate of. `surveillance_lite` takes `wdr` and `denoise` as well.
 
 ## Why rain looks like haze and not like streaks
 
@@ -478,19 +659,17 @@ light level and aperture instead of drawing it from that one narrow range.
 The picture varies a good deal more as a result. There is still no shutter
 speed at which daylight rain becomes dramatic.
 
-What actually says "rain" in a daylit frame is the **wet road** and water on
-the glass, which is why this pipeline raises `wetness_probability` to 0.5
-inside the rain branch rather than leaving it at the transform's default of
-0.4. It was 0.85. A wet road is also two to three times the cost of a rain
-frame, so if frames matter more than milliseconds, pass
-`ground_severity` and get one in every rain frame.
+What actually says "rain" in a daylit frame is the **wet road**, the grey
+light and water on the glass, which is why nine rain frames in ten here
+have the road wet, and why the commonest rain state of all, rain under
+3 mm/h, is worth drawing though nothing of it can be seen falling.
 
 How wet the road is, and how much snow has settled, are **not** tied to
-`weather_severity`. They follow how long the weather has lasted, so by
-default each frame draws the ground over its whole range under whatever is
-falling: a downpour on a road still dry, a flurry over deep snow. Pass
-`ground_severity` (0 dry and bare, 5 soaked and buried, from
-`GROUND_SEVERITY`) to `surveillance` or `weather_state` to fix it.
+how hard it is raining or snowing. They follow how long the weather has
+lasted, so by default each frame draws the ground over its whole range
+under whatever is falling: a downpour on a road barely damp, a flurry over
+deep snow. Pass `ground_severity` (0 dry and bare, 5 soaked and buried,
+from `GROUND_SEVERITY`) to `surveillance` or `weather_state` to fix it.
 Streaks become visible against dark backgrounds — night, dark buildings,
 shadowed foliage — so they carry the effect at night and the wet road
 carries it by day, with a distance veil only in views a kilometre or more
@@ -500,15 +679,8 @@ deep. Both are correct; only one is photogenic.
 
 A drop on the front element is centimetres from the sensor; a raindrop in the
 air is metres away. The one on the glass therefore dominates any frame it
-appears on, and at the weather's severity it dominated frames whose rain was
-invisible — which is how a sample can end up looking like it has more
-lens-water than rain even when the counts are 7 rain to 6 droplets.
-
-So `WaterDroplets` takes `droplet_severity`, defaulting to the camera chain's
-level rather than the weather's. Measured at 512 px, that is 15% of the
-frame's high-frequency detail rather than 24%. `wet_fog` also came down from
-0.30 to 0.18: rain splashing onto an exposed dome is the commonest source of
-water on glass, while fog has to condense on glass colder than the air.
+appears on. So `WaterDroplets` is built at the camera chain's level and not
+at the weather's strength.
 
 **At night it is visible**, and that is what `NightRain` is for. Lit by the
 camera instead of the sky, a drop at 0.4 m returns a hundred times what one
@@ -527,15 +699,18 @@ streaks look untouched.
 
 ## Caveats
 
-**Neither night branch relights the scene.** This is the weakest part of the
-recipe and it is worth stating plainly. The source frame is daylit, with
-daylight shadow structure and daylight shading. `NightIrMode` replaces its
-tonality with a real model — NIR reflectance, an inverse-square illuminator,
-gain-scaled noise — but the *shadows* underneath are still the sun's. The
-`lit_night` branch is cruder still: it underexposes and warms a daylight
-frame, which is a fair rendering of "an under-exposed frame under sodium
-lighting" and not a rendering of night. If your training set already contains
-genuine night footage, prefer it and lower both branch weights.
+**A night is as good as what the provider knows.** With scene labels and a
+vehicle reader, both night branches light the scene from its own street
+lamps and traffic. With depth alone there is nothing to say where a lamp
+is: the infrared branch is lit by the camera's illuminator and an even
+ambient, the colour branch by the sky's glow, and in both the day's
+shadows are still on the ground. If your training set already contains
+genuine night footage, prefer it and lower both weights.
+
+**The estimates are estimates.** The shares of time are from memory of
+climate normals and from summaries, not from hourly records of any site.
+Replace them with counts from the records of yours before trusting the
+proportions.
 
 **`physical_order` cannot sort this.** It works on flat lists and identifies
 transforms by class name, so a `OneOf` or `Sequential` gets the default stage.
@@ -543,15 +718,21 @@ The order inside each branch is written by hand and verified monotonic against
 `stage_of`. If you restructure, check that again rather than assuming.
 
 **Some of these are per-camera, not per-image.** WDR is a setting; a camera
-either has it enabled or does not. Modelling it per-image samples a *fleet* of
-cameras rather than a stream from one — right for a dataset drawn from many
-installations, wrong for one long recording. For the latter, fix those choices
-per clip.
+either has it enabled or does not (`wdr=0.0` or `1.0` for a recording from
+one). So are the noise reducer (`denoise`), the housing, and whether the
+site is lit. Modelling them per-image samples a *fleet* of cameras rather than a
+stream from one — right for a dataset drawn from many installations, wrong
+for one long recording. For the latter, fix those choices per camera.
 
 **Per-image, not per-clip.** Every draw is independent across images. If you
 train on video, consecutive frames will disagree about the weather.
 
+**One parked car is not known from one that is moving.** A row of them is a
+queue to the spray and throws up none; one alone, on a wet road, is given
+the spray of the speed the frame's traffic was drawn at.
+
 **The exclusions are structural, so they are cheap to break.** Moving
 `SunFlare` into the shared tail would silently reintroduce flare-at-night and
 nothing would fail. `tests/unit/test_pipeline_recipe.py` runs this recipe as
-the document prints it and asserts the table above — re-run it after editing.
+the document prints it and `tests/unit/test_pipeline_presets.py` the
+importable one — re-run them after editing.

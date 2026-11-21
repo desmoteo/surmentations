@@ -304,19 +304,19 @@ def _why_not(effect: str, scene: Scene) -> str | None:
 def _pipeline(scene: Scene, provider: SharedDepthProvider) -> tuple[str, Any]:
     """The shipped pipeline that fits the scene, and what it is called.
 
-    ``surveillance`` treats its input as a daylit outdoor frame and decides
-    for itself whether to turn it into night, so it is right for the day
-    scenes and wrong for the other two. A frame that is already night, or
-    under a roof, gets ``surveillance_lite`` with every frame treated as
-    artificially lit: the lens and the camera chain, no weather, no sun.
+    ``surveillance`` turns a daylit outdoor frame into another hour and
+    another weather. It reads a night frame for one itself, and a frame
+    under a roof where its provider has scene labels; the plain provider
+    of these pages has none, so the two scenes that are not daylit and
+    out of doors are given ``surveillance_lite`` by name, with every frame
+    treated as artificially lit: the lens and the camera chain, no
+    weather, no sun.
     """
     if scene.night or scene.sheltered:
         return "surveillance_lite", surveillance_lite(night=1.0, severity=2)
-    # Weather raised from its climatological 12% so that four draws show
-    # some; severity 2 because level 1 is deliberately close to invisible.
-    return "surveillance", surveillance(
-        provider, rain=0.25, snow=0.10, fog=0.15, severity=2, weather_severity=3
-    )
+    # The weather as the pipeline draws it, more than half of the frames;
+    # severity 2 because level 1 is deliberately close to invisible.
+    return "surveillance", surveillance(provider, severity=2)
 
 
 def label_picture(labels: np.ndarray) -> np.ndarray:

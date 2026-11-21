@@ -17,8 +17,9 @@ both off the picture, and `RandomSnow` and `RandomRain` use them:
 | A soaked road under cloud | `RandomRain`, with its wet road | on | nothing |
 | Tail lamps reflected in the road | `RandomRain`, with its wet road | on | scene labels |
 | Spray behind vehicles | `RandomRain(spray_range=...)` | `(0.0, 0.0)`: off | scene labels |
-| How fast the traffic is going | `RandomRain(traffic_speed_range_kmh=...)` | `(40.0, 130.0)` | with spray |
+| How fast the traffic is going | `RandomRain(traffic_speed_range_kmh=...)` | `(40.0, 130.0)`, and no faster than its spacing allows | with spray |
 | The traffic's lamps, lit | `RandomRain(vehicle_lamp_range=...)` | `(0.0, 0.0)`: off | scene labels |
+| The traffic's lamps in fog | `RandomFog(vehicle_lamp_range=...)` | `(0.0, 0.0)`: off | a vehicle reader |
 | The traffic's lamps at night | `NightIrMode(vehicle_lamp_range=...)`, `NightColorMode(...)` | `(0.7, 1.3)` | a vehicle reader |
 | Street lighting at night | `NightIrMode(street_lamp_range=...)`, `NightColorMode(...)` | `(0.6, 1.4)` | scene labels; better with a reader |
 | A night in colour | `NightColorMode(lamp_temperature_range_k=...)` | `(1900, 5500)` | lit only with labels |
@@ -189,12 +190,62 @@ has three parts, and each is drawn:
 
 Where each wake lies:
 
-- **Along the road's direction at the vehicle**, from the model above,
-  turned to the vehicle's own outline where that is long and close to it.
+- **On the ground, not in the picture.** Behind a vehicle on the road is
+  not down the frame: for a car off to one side it runs towards the foot
+  of the camera's mast, and twenty metres of wake is half the frame
+  behind a car near by and a few rows behind one far off. So a wake is
+  laid on the plane of the scene's ground, the one a night's lamps light,
+  in metres, and each puff of it is drawn as the scene's camera sees it
+  from where it hangs ([`wake_lies`](../src/surmentations/utils/road.py)).
+  It narrows as it runs away, and it is thicker seen along it than
+  across it.
+- **Along the vehicle's own heading**, which is, in order:
+  - *its own lamps' word*, where the reader found a pair on the end it
+    shows. That end is seen, so the vehicle points along the line from
+    the camera or back along it, turned by how far its outline lies to
+    one side of its lamps. It is the heading its beams are thrown along
+    at night;
+  - *its neighbours'*, the vehicles of its road within a few car lengths
+    that have a heading of their own, turned round where they go the
+    other way: traffic that close is parallel, on a slip road as on a
+    carriageway;
+  - *the line from the camera*, for a vehicle whose end is seen and has
+    no such neighbour;
+  - *the road's direction* from the model above, for a vehicle that shows
+    neither end.
 - **Behind the vehicle**, which is the next section.
+- **With no edge of its own making.** A cloud has none, and four things
+  gave these one. A wake was cut off at its vehicle's tail by a line in
+  the picture, which took the top off a cloud as tall as the vehicle: it
+  gathers over its first metres now and nothing cuts it. What hid it,
+  hid it at a line: a vehicle standing nearer by a row, the scenery
+  nearer by a share of the distance. Both do it over a few rows and a
+  range of distances. Seen along itself a wake is many puffs deep, and
+  their sum, cut off at the most that is counted, was a slab: it nears
+  the most and does not reach it. And touching vehicles are told apart
+  along the edges of their boxes, which showed as steps in the wake of
+  one and in the mist on both: what hides a wake, and the mist on the
+  vehicles, are evened from one outline to the next.
+- **Thinner than it was, seen from the side.** Each puff is 0.6 of what
+  it was in the picture, where a wake was as thick seen across as along.
+  Seen along itself from a mast it is about what it was; from a bridge
+  high over it, or from the side, a line of sight runs through less of
+  it and it is fainter, as it is.
 - **Some vehicles throw up nothing**: one lying across the road, which is
-  crossing, turning or parked; and any on a scrap of road under a
-  twentieth of the frame, whose direction is a guess.
+  crossing, turning or parked, unless its own lamps say which way it
+  points; and any on a scrap of road under a twentieth of the frame,
+  whose direction is a guess.
+
+The road's direction used to come first, turned to the long way of the
+vehicle's outline, and a wake was as long as so many of the outline's own
+lengths. One road model serves a whole frame, so a car on an exit ramp
+trailed its spray across the verge; an outline seen from a mast is a
+rear, a side and a roof together, and its long way leans to the
+horizontal; and an outline seen end on is as long as the car is wide. The
+wakes came out sideways and three times too long. Without a ground to
+lay them on (a provider with no labels cannot draw spray at all, so this
+is only a caller of [`vehicle_spray`](../src/surmentations/utils/road.py)
+with no `ground`), they are still laid that way.
 - **It stays on its road.** A wake ends where its road does, at the road's
   far end or where it turns out of the frame. It used to run on across the
   verge.
@@ -274,19 +325,57 @@ call; give a camera's own range where it is known.
 - **A wake is as long as its vehicle travels while the cloud hangs**,
   three quarters of a second: twenty metres at 100 km/h, eight at 40.
 
-Both figures were met in summaries and not checked at source; they are
-used as the shape of the dependence, not as measurements of this model.
+- **No vehicle goes faster than the gap ahead of it allows**
+  ([`spaced_speeds`](../src/surmentations/utils/road.py)). A frame does
+  not say how fast its traffic is going, but it says how close it is, and
+  nobody drives a second behind the car in front for long. The gap from
+  each vehicle to the one ahead in its lane, on the ground and in its own
+  metres, over a second, is the most it can be doing: ten metres is
+  36 km/h and a queue is standing. The vehicle ahead is held to a little
+  over the same, a column moving together. Traffic with room ahead keeps
+  the speed it was drawn; a column drawn at a motorway's speed is slowed
+  to what its spacing says and throws up the spray of that. The motorway
+  of these pages is such a column: its cars are one to three lengths
+  apart, and at the 105 km/h it is asked for it used to trail a
+  motorway's spray from every one.
+
+Spray at 1 on a soaked road, with every vehicle at the speed the frame's
+traffic was drawn at (left) and at what its spacing allows (right): the
+motorway's column and the queue on the city road's ramp were trailing the
+spray of 105 and 85 km/h:
+
+![spray with the traffic at the speed drawn, and at the speed its spacing allows](https://desmoteo.github.io/surmentations/assets/road_surface/spray_and_spacing.webp)
+
+The two figures from the literature were met in summaries and not checked
+at source; they are used as the shape of the dependence, not as
+measurements of this model.
 
 Left, a soaked road; right, the same with `spray_range=(0.6, 0.6)`, the
-traffic's lamps lit, and each scene's traffic at its own speed (about 105
-km/h on the motorway, 85 on the city road, under 45 in the street and at
-the junction, where there is next to no spray to see):
+traffic's lamps lit, and each scene's traffic asked for at its own speed
+(about 105 km/h on the motorway, 85 on the city road, under 45 in the
+street and at the junction) and slowed to what its spacing allows: the
+motorway's close column and the queue on the city road's ramp throw up
+next to none, and the cars with room ahead of them trail theirs:
 
 ![wet road and spray](https://desmoteo.github.io/surmentations/assets/road_surface/wet_road_and_spray.webp)
 
-Spray is off by default because of what one frame cannot say: how fast the
-traffic is moving, which is the caller's to give, and, on a road none of
-whose vehicles shows a lens, which way.
+Spray is off by default in `RandomRain` because of what one frame cannot
+say: how fast the traffic with room ahead of it is moving, which is the
+caller's to give, and, on a road none of whose vehicles shows a lens,
+which way. The ready-made pipelines turn it on for wet roads by day
+([`pipelines.md`](pipelines.md)).
+
+### In fog
+
+Traffic in fog drives with its lamps on, and in thick fog a car is two
+haloes before it is a car. `RandomFog(vehicle_lamp_range=...)` lights
+the lamps the reader found, nearly all of them at either end, each seen
+through the fog in front of it. What that fog takes out of a lamp's light
+it scatters round it: a halo that is widest where about half the light
+has been scattered, and gone with the lamp where the fog is too thick for
+either. A fog of some 120 m with the lamps dark, and lit:
+
+![fog by day with the traffic's lamps dark, and lit through it](https://desmoteo.github.io/surmentations/assets/road_surface/fog_lamps.webp)
 
 ## Lamps
 
@@ -366,6 +455,10 @@ provider knows where the points are
   puts under itself, half as strong at fourteen metres and gone by
   seventy-five, and cut off above the height of a bonnet, as a dipped beam
   is.
+- **A beam is brighter seen from ahead than from behind.** A road met at
+  a grazing angle throws light on ahead of the vehicle: at a camera it is
+  driving towards, and away from one behind it, which sees four tenths of
+  the pool. The figure is an estimate and not a measurement of any road.
 - **Which way a vehicle points** is first which end is seen: away from the
   camera for one seen from behind, at it for one seen from the front. Then
   how its outline leans from its pair of lamps: seen from one side as
@@ -434,9 +527,15 @@ distance, and its sum along a straight line has a closed form (Sun et al.,
 2005), weighted so that a luminaire lights the air under it and not above.
 `NightFog`, `NightRain` and `NightSnow`, which come after it in a pipeline,
 turn that into light (`lamp_cone_range`): times their own extinction
-coefficient and a quarter, which is what a drop sends sideways of what
-falls on it, less what the same weather takes out on the way back to the
-lens. Without that last term every lamp down a road in falling snow added
+coefficient and a quarter, which is what a drop that scattered alike in
+all directions would send any one way, less what the same weather takes
+out on the way back to the lens. A drop does not scatter alike in all
+directions: it sends light on more than back or aside. So along each line
+of sight the air this side of a lamp, where the lamp's light is coming
+towards the lens, counts for more than the air beyond it, and a cone seen
+from the side for less than it did (a Henyey-Greenstein phase function of
+asymmetry 0.5; fog's own is nearer 0.85, and less is taken for the light
+scattered more than once). Without that last term every lamp down a road in falling snow added
 up to a white wall. Rain and snow in a cone keep the grain of a count of
 particles; fog is smooth.
 
@@ -578,9 +677,17 @@ before, and with them:
 - **Frames taken at night with traffic in them were tested on drawn
   frames only.** The sample scenes have no night photograph with a vehicle
   in it.
-- **The traffic's speed is the caller's.** Nothing in a frame is read for
-  it; the default range covers a town and a motorway and is right for
-  neither.
+- **The traffic's speed is the caller's, up to what its spacing allows.**
+  Traffic with room ahead of it goes at the speed drawn, and the default
+  range covers a town and a motorway and is right for neither. A column
+  is slowed by its gaps; one parked car on its own is not known from one
+  that is moving, and is given the spray of the speed drawn.
+- **A wake's heading is its vehicle's lamps' word.** A vehicle with no
+  pair found and no neighbour that has one points along the line from the
+  camera, which for a car in a lane far to one side is some degrees out.
+  The ground is one plane: a wake on a ramp that climbs off it is laid
+  on the plane all the same. And the night's beams still take a vehicle
+  with no pair by its outline, so such a vehicle has two headings.
 - **A pale rim** can still show round vehicles on a dark wet road, where
   the tests that keep the road off the vehicle reach a pixel or two past
   it.

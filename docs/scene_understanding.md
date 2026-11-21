@@ -66,7 +66,7 @@ point of every scene placed at two numbers given by hand.
 | --- | --- | --- |
 | [`RandomRain`](transforms/RandomRain.md) | The wet road is laid on what is labelled paving, including where its normals wander and far down the road; kept off vehicles, people, poles, vegetation and lawns | One field of view and pitch; the road's horizon; the veil over real metres |
 | [`RandomSnow`](transforms/RandomSnow.md) | A labelled vehicle carries what `vehicle_cover_range` says; nothing settles on people, sky or water; a tree is a canopy and a lawn is ground, by name | One field of view and pitch; the veil over real metres |
-| [`RandomFog`](transforms/RandomFog.md), [`NightFog`](transforms/NightFog.md) | The sky is what is labelled sky | Real metres, unless `depth_scale` is given |
+| [`RandomFog`](transforms/RandomFog.md), [`NightFog`](transforms/NightFog.md) | The sky is what is labelled sky; with a vehicle reader, `RandomFog` lights the traffic's lamps through the fog (`vehicle_lamp_range`) | Real metres, unless `depth_scale` is given |
 | [`GroundFog`](transforms/GroundFog.md) | The sky | The layer is laid under the scene's camera: field of view, pitch and height |
 | [`NightIrMode`](transforms/NightIrMode.md) | Vegetation is bright whatever its colour; the sky is dark | The illuminator's inverse-square law over real metres |
 | [`CastShadows`](transforms/CastShadows.md) | | Which surfaces face up, through the scene's camera |

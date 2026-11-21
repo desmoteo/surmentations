@@ -1,6 +1,6 @@
 """Draw the figures of ``docs/road_surface.md``.
 
-Nine pictures, made from the photographs the galleries use, with a
+Eleven pictures, made from the photographs the galleries use, with a
 provider that carries scene labels and an estimated geometry:
 
 * the roads as the library reads them: painted lines, lane lines and the
@@ -8,6 +8,9 @@ provider that carries scene labels and an estimated geometry:
 * settled snow without wheel tracks and with them;
 * each scene's vehicles as a network reads them: which end, and its lamps;
 * a soaked road as it was, and with its traffic's spray and lamps;
+* a soaked road's spray with the traffic at the speed drawn, and at the
+  speed its spacing allows;
+* fog by day with the traffic's lamps dark, and lit through it;
 * infrared night lit evenly, as a daylight frame is, and lit by its street
   lamps and its traffic's lamps;
 * rain and snow with an even veil in the distance and with its grain;
@@ -41,7 +44,8 @@ sys.path.insert(0, str(REPO))
 from docs.gallery import networks, save  # noqa: E402
 from docs.generate_examples import _base_scene  # noqa: E402
 from docs.generate_scene_examples import SCENES, SCENES_DIR, _load, _original  # noqa: E402
-from surmentations.atmosphere import RandomRain, RandomSnow  # noqa: E402
+from surmentations.atmosphere import RandomFog, RandomRain, RandomSnow  # noqa: E402
+from surmentations.atmosphere import rain as rain_module  # noqa: E402
 from surmentations.atmosphere.night_fog import NightFog  # noqa: E402
 from surmentations.atmosphere.night_rain import NightRain  # noqa: E402
 from surmentations.atmosphere.night_snow import NightSnow  # noqa: E402
@@ -221,6 +225,62 @@ def compare(
     _save("wheel_tracks.webp" if effect == "snow" else "wet_road_and_spray.webp", tiles, 2)
 
 
+def spray_and_spacing(
+    images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]
+) -> None:
+    """Two roads in rain with the traffic at the speed drawn, and at what its spacing allows.
+
+    The same draw both times, a soaked road with ``spray_range`` at 1. On
+    the left every vehicle goes at the speed the frame's traffic was drawn
+    at, as it did before spacing was looked at: for that one picture the
+    cap is taken out of `RandomRain` by hand. On the right it is in, and a
+    column a few lengths apart throws up next to nothing.
+    """
+    capped = rain_module.spaced_speeds
+    tiles = []
+    for name in ("reference", "urban_road_day"):
+        for cap in (False, True):
+            settings = {**SEVERITY[2]["RandomRain"], **GROUND_SEVERITY[5]["RandomRain"]}
+            transform = RandomRain(
+                depth_provider=providers[name],
+                p=1.0,
+                camera_pitch_range_deg=_pitch(name),
+                spray_range=(1.0, 1.0),
+                traffic_speed_range_kmh=SPEEDS_KMH[name],
+                **settings,
+            )
+            transform.set_random_seed(4)
+            rain_module.spaced_speeds = (
+                capped if cap else (lambda _frame, traffic, _ground, _shape: traffic)
+            )
+            try:
+                tiles.append(transform(image=images[name])["image"])
+            finally:
+                rain_module.spaced_speeds = capped
+    _save("spray_and_spacing.webp", tiles, 2)
+
+
+def fog_lamps(images: dict[str, np.ndarray], providers: dict[str, SharedDepthProvider]) -> None:
+    """Two roads in fog by day: the traffic's lamps dark, and lit through the fog.
+
+    The same fog both times, a visibility of some 120 m, with
+    ``vehicle_lamp_range`` at 0 and at 1.
+    """
+    tiles = []
+    for name in ("urban_road_day", "reference"):
+        for lamps in (0.0, 1.0):
+            fog = RandomFog(
+                depth_provider=providers[name],
+                p=1.0,
+                beta_range=(0.032, 0.032),
+                scattering_gamma_range=(0.2, 0.2),
+                vehicle_lamp_range=(lamps, lamps),
+            )
+            fog.set_random_seed(5)
+            tiles.append(fog(image=images[name])["image"])
+    _save("fog_lamps.webp", tiles, 2)
+
+
 def night_lamps(images: dict[str, np.ndarray], depth: Any, labels: Any, vehicles: Any) -> None:
     """Three scenes as an infrared night camera sees them: lit evenly, and lit by their lamps.
 
@@ -349,7 +409,7 @@ def retroreflectors(images: dict[str, np.ndarray], depth: Any, labels: Any, vehi
 
 
 def main() -> None:
-    """Make the nine figures."""
+    """Make the eleven figures."""
     depth, labels = DepthAnythingV2Estimator(**networks()), SegmentationLabelEstimator(**networks())
     images = {name: _photograph(name) for name in SHOWN}
     vehicles = OpenVocabularyVehicleEstimator(**networks())
@@ -358,6 +418,8 @@ def main() -> None:
     read_vehicles(images, providers)
     compare(images, providers, "snow")
     compare(images, providers, "rain")
+    spray_and_spacing(images, providers)
+    fog_lamps(images, providers)
     night_lamps(images, depth, labels, vehicles)
     far_field(images, providers)
     night_colour(images, depth, labels, vehicles)

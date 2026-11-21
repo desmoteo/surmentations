@@ -210,6 +210,31 @@ lamps = depth_provider.get_street_lamps(image)   # one row per street lamp's hea
 signs = depth_provider.get_signs(image)          # one row per road sign
 ```
 
+**Read once, across epochs.** A provider shares a reading between the
+transforms of one pipeline call, but a training set comes back every epoch
+and is read again every epoch: with all four readers that is about 170 ms
+a frame on a GPU, more than the transforms then cost. `disk_cache` keeps
+each reading in a file and finds it again, in 8 ms:
+
+```python
+depth_provider = SharedDepthProvider(
+    DepthAnythingV2Estimator(),
+    labels=SegmentationLabelEstimator(),
+    vehicles=OpenVocabularyVehicleEstimator(),
+    disk_cache="readings/",        # or True: ~/.cache/surmentations ($SURMENTATIONS_CACHE)
+    disk_cache_max_gb=50,          # optional: past it, nothing more is written
+)
+depth_provider.disk_cache_info()   # hits, misses, written, refused
+```
+
+A reading is filed under a hash of the frame's own pixels, the estimators
+that made it and their settings, fast or exact mode, and the library's
+version, so a file is never handed back for a frame, a checkpoint or a
+mode it was not made for; one that cannot be read is made again. About
+half a megabyte a frame at 512 px. It is off unless asked for, the
+workers of a `DataLoader` share the directory, and an estimator of your
+own is kept once it has a `signature()` that says what it is.
+
 What is read is read from the frame a pipeline starts with, whichever
 transform asks first, and never from a frame with weather already drawn
 over it.
@@ -366,7 +391,7 @@ and the physics behind it.
 
 | Transform | Start with |
 | --- | --- |
-| `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale` |
+| `RandomFog` | `beta_range` (extinction, 1/m), `visibility_range_scene` (in its place: visibility as a multiple of the scene's depth), `scattering_gamma_range` (0 grey, ~1.3 blue haze, 4 Rayleigh), `depth_scale`, `vehicle_lamp_range` (off by default: the traffic's lamps lit through the fog, each with its halo; needs a vehicle reader) |
 | `RandomRain` | `rain_rate_range_mm_h`, `drop_diameter_range_mm`, `dsd_shape_mu`, `scene_illuminance_range_lux` and `aperture_diameter_range_mm` (together they meter the shutter time), `exposure_time_range` (the shutter's limits), `wetness_probability`, `wetness_darkening_range`, `puddle_coverage_range`, `min_streak_width_px`, `lamp_glint_range` (night: how far past full scale the lamps lighting the rain were), `min_visibility_scene` (keeps the veil from hiding the far end of a long view), `spray_range` (off by default: mist trailed by the vehicles on a soaked road, with scene labels), `traffic_speed_range_kmh` (how fast that traffic is going, which is most of how much it throws up), `vehicle_lamp_range` (off by default: the traffic's head and tail lamps lit, with their glow and their streaks down the road), `distant_rain_range` (how much of its grain the rain beyond the drawn streaks keeps; 0 is the even veil) |
 | `NightRain` | `illuminator_gain_range` (what makes streaks visible), `rain_rate_range_mm_h`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `backscatter_grain_range` (the grain of the unresolved drops' glow; 0 is an even wall), `lamp_cone_range` (how strongly it shows in the light of the scene's lamps, on a frame a night transform lit from them; 0 is not at all) |
 | `NightSnow` | `snowfall_rate_range_mm_h`, `illuminator_gain_range`, `illuminator_range_m`, `backscatter_range`, `exposure_time_range`, `glare_range`, `backscatter_grain_range` (the speckle of the unresolved flakes' glow; 0 is an even wall), `lamp_cone_range` (how strongly it shows in the light of the scene's lamps, on a frame a night transform lit from them; 0 is not at all) |
@@ -415,8 +440,9 @@ level, and gain is one of the levers it used to get there.
 ### Ready-made pipelines
 
 Listing every effect with an independent probability produces frames that
-could not exist — fog and snow at once, a sun flare under an IR night sky.
-Two pipelines that cannot are importable directly:
+could not exist — a sun flare under an IR night sky, hard shadows in the
+rain, a downpour under a roof. Two pipelines that cannot are importable
+directly:
 
 ```python
 from surmentations.presets import surveillance, surveillance_lite
@@ -425,20 +451,40 @@ transform = surveillance(provider, codec=0.0)   # needs CUDA
 transform = surveillance_lite()                 # CPU only, no night
 ```
 
-**`severity` is the dial for how degraded a frame gets** (1-5, default 1) and
-the first thing to change if the output looks too heavy. It defaults low
-because a pipeline stacks two or three effects and per-effect severity
-compounds — level 2 on each of three effects is not an ordinary frame. It matters more than
-it sounds: without it the transforms run on their own constructor defaults,
-which span the whole physically plausible range — `RandomRain` reaches
-200 mm/h, a tropical cloudburst, where severity 1 is 2-12 mm/h. Those wide
-defaults are right for exploring one transform and wrong for stacking three.
+**`severity` is the dial for how degraded the camera's own chain is** (1-5,
+default 1) and the first thing to change if the output looks too heavy. It
+defaults low because a pipeline stacks several effects and per-effect
+severity compounds — level 2 on each of three effects is not an ordinary
+frame.
 
-Measured at 512 px on one core: `surveillance` 47 ms at the median and 219
-at the 90th percentile, `surveillance_lite` 20 and 175 with no GPU. The
-slow frames are the ones the codec fires on, through ffmpeg there; with
-PyAV installed they are not. A typical frame keeps 75-81% of its
-high-frequency detail.
+**The weather is drawn by how often it happens, and at the strength it
+has.** `surveillance` picks one state of the air and the ground per frame
+out of ten: dry, a road still wet after the rain, rain at three strengths,
+fog thin, dense or with drizzle, snow falling, snow lying. Each is drawn
+by the share of time it holds (`rain`, `snow`, `fog`, `wet_road`,
+`snow_lying`) raised to `prior_power`: 1 for frames in the proportions a
+camera sees, which are four fifths dry, and 0.5, the default, to be shown
+more of what is rare. Most rain is light and most fog is thin;
+`weather_severity` draws all of it at one level for a pipeline of storms.
+Hard shadows and a sun flare are drawn only where the air is dry.
+
+The ten states by day, each drawn alone on one scene
+([`docs/pipelines.md`](docs/pipelines.md) has them at night too):
+
+![the ten states of the air and the ground the pipeline draws](https://desmoteo.github.io/surmentations/assets/pipelines/states.webp)
+
+**It looks at the frame first.** A frame taken at night is not made into a
+night again, and one under a roof, which a provider with scene labels can
+tell, gets no weather (`read_source=False` turns this off).
+
+Measured at 512 px on one core with `codec=0.0`: `surveillance` 35 ms at
+the median and 57 at the 90th percentile on a provider with depth alone,
+and a little over twice that on one that also reads labels, geometry and
+vehicles, whose first sight of each frame is another 170 ms on the GPU.
+It was 12 before the weather was drawn on more than half of the frames
+instead of an eighth; `prior_power=1.0` halves it, with four frames in
+five dry. [`docs/pipelines.md`](docs/pipelines.md#cost) has what each
+argument and each kind of frame costs.
 
 The pipelines hold the transforms they were designed with. The sixteen
 added since, from `SpiderWeb` to `HeatShimmer`, are not in them: each needs
@@ -446,19 +492,24 @@ a probability that says how often it happens on *your* cameras, which is a
 fact about a deployment. Add the ones you want with
 [`physical_order`](#composition-order), which knows where each belongs.
 
-Two arguments are worth knowing beside `severity`. `ground_severity` (0-5)
-fixes how wet the road is under rain and how much snow has settled; left
-unset, each frame draws it over the whole range, independently of how hard
-it is raining or snowing. `faults` is the probability of packet-loss damage
-(`TransmissionFaults`), 0.03 by default and 0 when `codec=0.0`, so that
-setting still runs without ffmpeg.
+A few arguments are worth knowing beside `severity`. `ground_severity`
+(0-5) fixes how wet the road is under rain and how much snow has settled;
+left unset, each frame draws it over the whole range, independently of how
+hard it is raining or snowing. `faults` is the probability of packet-loss
+damage (`TransmissionFaults`), 0.03 by default and 0 when `codec=0.0`, so
+that setting still runs without ffmpeg. `wdr` (0.30) and `denoise` (0.8 at
+night, a quarter of it by day) are how often two settings of a camera's
+own processing show, wide dynamic range and the noise reducer: both are 0
+or 1 for one camera, and they are the two costliest stages of its chain.
 
 `surveillance_lite` renders no night at all — nothing in it can relight a
 daylit frame, and tinting one does not approximate night. Its `night`
 fraction only raises the mains-flicker and denoiser artefacts. Use
-`surveillance` if you need night as a domain, or `ir_night=0.0` there if you
-do not. Every probability is a keyword argument, because the defaults
-encode a temperate maritime climate on a mixed camera fleet and will not match
+`surveillance` if you need night as a domain: it has two, a night in colour
+under street lighting (`NightColorMode`) and an infrared one, and for a
+single camera one of `lit_night` and `ir_night` should be 0. Every
+probability is a keyword argument, because the defaults are estimates for a
+lowland site in central Europe on a mixed camera fleet and will not match
 your footage. [`docs/pipelines.md`](docs/pipelines.md) explains what each
 encodes and which to change first.
 
@@ -1033,6 +1084,7 @@ python docs/generate_examples.py          # the severity gallery
 python docs/generate_scene_examples.py    # every effect over sample_scenes/
 python docs/make_scene_understanding_figures.py   # the labels and geometry guide's figures
 python docs/make_road_surface_figures.py          # the road surface guide's figures
+python docs/make_pipeline_figures.py              # the pipelines guide's figures
 python docs/make_banner.py                        # the banner, from the severity gallery
 ```
 
