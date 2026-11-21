@@ -328,8 +328,8 @@ class NightFog(CameraTransform):
         # bright as the light the surfaces around it show. Under the
         # illuminator those surfaces are lit by the camera, and the fog
         # the camera lights is the wall, so the veil would count it twice.
-        level = np.zeros(3, dtype=np.float32)
-        diffuse = np.zeros(3, dtype=np.float32)
+        level: np.ndarray = np.zeros(3, dtype=np.float32)
+        diffuse: np.ndarray = np.zeros(3, dtype=np.float32)
         veil_share = lit_part = 0.0
         lit = wall = None
         if cones is not None:

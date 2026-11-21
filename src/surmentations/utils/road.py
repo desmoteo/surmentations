@@ -1914,10 +1914,13 @@ def _wakes_on_ground(
             )
     if not hung:
         return np.zeros((0, _PUFF_COLUMNS), dtype=np.float64)
-    centres, axes, radii, strengths, rows = (
+    # Under names of their own: the loop's are of one shape each.
+    every_centre, every_axis, every_radius, every_strength, every_row = (
         np.concatenate(column) for column in zip(*hung, strict=True)
     )
-    return _puffs_seen(centres, axes, radii, strengths, rows, focal, (height, width))
+    return _puffs_seen(
+        every_centre, every_axis, every_radius, every_strength, every_row, focal, (height, width)
+    )
 
 
 def _placed_lamps(
