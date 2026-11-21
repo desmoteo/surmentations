@@ -94,7 +94,7 @@ from surmentations.base import CameraTransform, first_frame, require_depth_provi
 from surmentations.depth.normals import depth_work_size, horizon_row, upward_facing
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
-from surmentations.perception.labels import NOT_GROUND, PAVED, SceneClass, class_weight
+from surmentations.perception.labels import GROUND, NOT_GROUND, PAVED, SceneClass, class_weight
 from surmentations.utils.color import illuminant_radiance_linear, veil_radiance_linear
 from surmentations.utils.filters import wide_blur
 from surmentations.utils.ground import (
@@ -124,9 +124,11 @@ from surmentations.utils.precipitation import (
 from surmentations.utils.road import (
     Lanes,
     RoadFrame,
+    ground_view,
     read_road,
     road_mist,
     road_vehicles,
+    spaced_speeds,
     vehicle_lamps,
     vehicle_spray,
     vehicles_as_seen,
@@ -1009,7 +1011,14 @@ class RandomRain(CameraTransform):
             views = self.depth_provider.get_vehicles(scene)
             traffic = road_vehicles(road, named_vehicles, rng, linear_scene, traffic_speed, views)
         if spray > 0.0 and road is not None and film > 0.0 and named_vehicles is not None:
-            plumes = vehicle_spray(road, named_vehicles, rng, linear_scene, traffic, depth_pm)
+            # The wakes are laid on the ground, behind each vehicle as its
+            # own picture shows it turned, and not down the frame.
+            plane = ground_view(depth_pm, np.isin(labels, [int(one) for one in GROUND]), focal)
+            if plane is not None and traffic:
+                traffic = spaced_speeds(road, traffic, plane, (height, width))
+            plumes = vehicle_spray(
+                road, named_vehicles, rng, linear_scene, traffic, depth_pm, plane
+            )
             mist = road_mist(road, named_vehicles, depth_pm, traffic)
             if float(plumes.max()) > 0.0 or float(mist.max()) > 0.0:
                 # Mist is not even: it is torn by the air the vehicles drag,

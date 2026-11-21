@@ -150,17 +150,96 @@ def test_sky_keeps_its_gradient() -> None:
     scene[:48] = np.linspace(200, 150, 48).astype(np.uint8)[:, None, None]
     scene[48:] = rng.integers(30, 120, size=(48, 96, 1), dtype=np.uint8)
 
+    # A haze: a visibility of two kilometres, over a scene three deep.
     common = dict(
-        depth_provider=SharedDepthProvider(_SkyOverGround()),
+        depth_provider=SharedDepthProvider(_SkyOverGround(), depth_range_m=(5.0, 3000.0)),
         p=1.0,
-        beta_range=(0.5, 0.5),
         scattering_gamma_range=(0.0, 0.0),
         atmospheric_light=(220, 220, 220),
         forward_scatter_range=(0.0, 0.0),
     )
-    flat = RandomFog(sky_optical_depth_cap=10.0, **common)(image=scene)["image"]
-    capped = RandomFog(sky_optical_depth_cap=1.0, **common)(image=scene)["image"]
+    haze = {"beta_range": (0.002, 0.002)}
+    flat = RandomFog(sky_optical_depth_cap=10.0, **haze, **common)(image=scene)["image"]
+    capped = RandomFog(sky_optical_depth_cap=1.0, **haze, **common)(image=scene)["image"]
 
     sky_rows = slice(4, 40)
     assert flat[sky_rows].astype(np.float32).std() < 0.5, "uncapped, the sky is all airlight"
     assert capped[sky_rows].astype(np.float32).std() > 2.0
+    # Overhead, that is. A line of sight just over the horizon runs through
+    # kilometres of the same haze, and the sky there is the haze's colour.
+    low, high = capped[44:47].astype(np.float32), capped[4:8].astype(np.float32)
+    assert abs(float(low.mean()) - 220.0) < 3.0 < abs(float(high.mean()) - 220.0)
+
+    # A fog that hides what stands 150 m off hides the sky behind it too,
+    # cap or no cap: held back, the sky stayed darker than the buildings
+    # the fog had already taken, and their outline showed against it.
+    fog = RandomFog(sky_optical_depth_cap=1.0, beta_range=(0.04, 0.04), **common)
+    thick = fog(image=scene)["image"]
+    assert thick[sky_rows].astype(np.float32).std() < 0.5
+    assert abs(float(thick[sky_rows].mean()) - 220.0) < 1.5
+
+
+def test_traffic_in_fog_shows_its_lamps_through_it_with_a_halo_round_each() -> None:
+    """In thick fog a car is two haloes before it is a car. The lamps are
+    lit where a reader found them, dimmed by the fog in front of them, and
+    what that fog scatters out of their light glows round them."""
+    from surmentations.perception import (
+        SceneClass,
+        SceneLabelEstimator,
+        VehicleView,
+        VehicleViewEstimator,
+    )
+
+    height, width = 120, 160
+    labels = np.full((height, width), int(SceneClass.ROAD), dtype=np.uint8)
+    labels[:30] = int(SceneClass.SKY)
+    labels[60:90, 60:100] = int(SceneClass.VEHICLE)
+    places = np.array([(66.0, 80.0, 2.0, 2.0, 0.9), (94.0, 80.0, 2.0, 2.0, 0.9)], np.float32)
+
+    class _Named(SceneLabelEstimator):
+        """The labels, whatever the frame."""
+
+        def estimate(self, image: np.ndarray) -> np.ndarray:
+            """The labels."""
+            return labels
+
+    class _Reader(VehicleViewEstimator):
+        """One car, seen from the front, with its pair of headlamps."""
+
+        def estimate(self, image: np.ndarray, vehicles: np.ndarray) -> list[VehicleView]:
+            """The one car."""
+            return [VehicleView((60, 60, 40, 30), 0.9, 0.0, places)]
+
+    image = np.full((height, width, 3), 70, dtype=np.uint8)
+    image[:30] = 200
+
+    def fogged(lamps: float, read: bool = True) -> np.ndarray:
+        """The frame in one fog, with the traffic's lamps at a strength."""
+        extra = {"vehicles": _Reader()} if read else {}
+        provider = SharedDepthProvider(
+            _LinearDepthEstimator(),
+            depth_range_m=(5.0, 80.0),
+            labels=_Named(),
+            **extra,  # type: ignore[arg-type]
+        )
+        fog = RandomFog(
+            depth_provider=provider,
+            p=1.0,
+            beta_range=(0.03, 0.03),
+            scattering_gamma_range=(0.0, 0.0),
+            forward_scatter_range=(0.0, 0.0),
+            vehicle_lamp_range=(lamps, lamps),
+        )
+        fog.set_random_seed(3)
+        return fog(image=image)["image"].astype(np.float32)
+
+    plain, lit = fogged(0.0), fogged(1.0)
+    gained = (lit - plain).mean(axis=2)
+    # Both lamps, far over what the fog left of the car.
+    for column, row in ((66, 80), (94, 80)):
+        assert gained[row, column] > 60.0
+    # A halo round each that fades with distance from it, and nothing far off.
+    assert gained[80, 70] > gained[80, 72] > 0.5 and gained[80, 80] < 0.5
+    assert float(gained[:40].max()) < 1.0 and float(gained[:, :30].max()) < 1.0
+    # Without a reader there are no lamps to light.
+    assert np.array_equal(fogged(1.0, read=False), fogged(0.0, read=False))

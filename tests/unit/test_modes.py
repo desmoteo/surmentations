@@ -172,7 +172,7 @@ def test_a_blur_longer_one_way_is_reduced_that_way_only() -> None:
 
 def test_normals_read_at_the_depth_map_s_size_find_the_same_ground() -> None:
     """A road receding under a camera, a kerb across it and a box on it, at
-    1200 pixels. Fast mode reads the surface normals at 518 and enlarges
+    1200 pixels. Fast mode reads the surface normals at 384 and enlarges
     the result; what counts as level ground moves at the edges only."""
     height, width = 900, 1200
     rows = np.arange(height, dtype=np.float32).reshape(height, 1)
@@ -188,8 +188,9 @@ def test_normals_read_at_the_depth_map_s_size_find_the_same_ground() -> None:
     ground = {flag: facing[flag] > 0.5 for flag in facing}
     assert 0.2 < ground[False].mean() < 0.9
     assert (ground[True] == ground[False]).mean() > 0.97
-    # A frame of the depth map's own size is read as it is, in either mode.
-    small = np.ascontiguousarray(depth[::2, ::2])
+    # A frame no larger than the detail a depth map holds is read as it
+    # is, in either mode.
+    small = np.ascontiguousarray(depth[::3, ::3])
     mode.set_fast(True)
     in_fast = upward_facing(small)
     mode.set_fast(False)
@@ -211,7 +212,7 @@ def _street(height: int = 900, width: int = 1200) -> tuple[np.ndarray, np.ndarra
 
 
 def test_the_wet_ground_read_at_the_depth_map_s_size_is_the_same_ground() -> None:
-    """Fast mode reads where the road is wet on a 518-pixel copy and
+    """Fast mode reads where the road is wet on a 384-pixel copy and
     enlarges the map. Same road, same horizon, edges a pixel or two off."""
     depth, scene = _street()
     read = {}
@@ -699,7 +700,10 @@ def test_tone_mapping_s_coarser_base_moves_edges_only() -> None:
 def test_a_shadow_s_penumbra_blurred_small_is_within_a_level_or_two() -> None:
     """CastShadows blurs its shadows on a reduced copy in fast mode once the
     penumbra is wide. With no depth to give a surface, the shadows here are
-    applied through a ground plane, as the depth-sharing tests do."""
+    applied through a ground plane, as the depth-sharing tests do. On a
+    frame small enough that the surface itself is read at full size in
+    both modes: it is the blur that is measured here, and the surface read
+    at the depth map's own detail has a test of its own."""
     from surmentations.depth import SharedDepthProvider
     from surmentations.depth.estimator import DepthEstimator
     from surmentations.scene import CastShadows
@@ -715,7 +719,7 @@ def test_a_shadow_s_penumbra_blurred_small_is_within_a_level_or_two() -> None:
     transform = CastShadows(
         depth_provider=SharedDepthProvider(GroundPlane()), p=1.0, penumbra_range=(0.012, 0.02)
     )
-    for difference in _both_modes(transform, _photo_like(480, 640)):
+    for difference in _both_modes(transform, _photo_like(360, 480)):
         assert difference.max() <= 4
         assert difference.mean() < 0.1
 

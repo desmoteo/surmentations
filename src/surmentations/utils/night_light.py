@@ -102,6 +102,18 @@ _EVEN = 0.8
 _EVEN_REACH = 0.04
 # A burning lamp's head: its size as a share of its post's height in the
 # picture, how far over full scale it is, and its glow's size and share.
+# Which way the light is going. A road at a grazing angle throws a beam's
+# light on ahead of the vehicle: a camera the vehicle drives towards sees
+# its pool brighter than one behind it does, which sees this share of it.
+# And what is in the air scatters light on more than back: the share of
+# its scattering that is forward, as the asymmetry of a Henyey-Greenstein
+# phase function. Fog's own is about 0.85; less is taken, for the light
+# scattered more than once, which comes from every side.
+_BEAM_FROM_BEHIND = 0.4
+_SCATTERS_FORWARD = 0.5
+# The points along a line of sight the lit air is summed at, between its
+# two ends as angles seen from the lamp: Gauss-Legendre nodes and weights.
+_ALONG_SIGHT = np.polynomial.legendre.leggauss(8)
 _HEAD_SIZE = 0.01
 _HEAD_PEAK = 30.0
 _HEAD_GLOW = (3.5, 0.012)
@@ -244,18 +256,29 @@ def street_air(
 
     For each pixel, the lamps' light summed along its line of sight from
     the lens to what it shows, in the units of :func:`street_light` times
-    metres. Times an extinction coefficient and a phase function it is the
-    light that fog, rain or snow in that air sends to the lens: the cone
-    of lit air under each lamp.
+    metres. Times an extinction coefficient and the phase function of
+    scattering that is the same in all directions, it is the light that
+    fog, rain or snow in that air sends to the lens: the cone of lit air
+    under each lamp.
 
-    A lamp's light falls as the square of the distance from it, and the
-    integral of that along a straight line has a closed form (Sun et al.,
-    2005): for a line that passes the lamp at a distance ``h``, between
-    the points ``a`` and ``b`` metres along it from its nearest approach,
-    ``(atan(b / h) - atan(a / h)) / h``. It is weighted by how far below
-    the lamp the nearest approach is, as the lamp's light on a surface is:
-    a luminaire throws downwards, and the lit air is a cone under it and
-    not a ball round it.
+    A lamp's light falls as the square of the distance from it. Along a
+    straight line that passes the lamp at a distance ``h``, seen from the
+    lamp as an angle ``phi`` from the nearest approach, that is ``d phi /
+    h`` (Sun et al., 2005), and two things weigh each ``d phi`` of it:
+
+    * **How far below the lamp** that point of the line is, as the lamp's
+      light on a surface is weighed: a luminaire throws downwards, and the
+      lit air is a cone under it and not a ball round it. It used to be
+      taken once, at the nearest approach, for the whole line.
+    * **Which way the light is going there against the way to the lens.**
+      What is in the air scatters light on more than back or aside
+      (:data:`_SCATTERS_FORWARD`): the air between a lamp and the camera,
+      where the light is coming on, sends more of it to the lens than the
+      air beyond the lamp does, and a cone seen from the side less than
+      either was drawn as. The weight is 1 for scattering that is the
+      same all round.
+
+    The sum over ``phi`` is taken at a few points (Gauss-Legendre).
 
     The second map is how far along the line of sight that lit air is, in
     metres, taking each lamp's at its nearest approach: what is in the air
@@ -271,15 +294,24 @@ def street_air(
         lamp = np.array([x, y, z], dtype=np.float32)
         along = ray @ lamp
         passes = np.sqrt(np.maximum(float(lamp @ lamp) - along**2, _NEAREST_PASS_M**2))
-        through = (np.arctan((far - along) / passes) + np.arctan(along / passes)) / passes
-        # The nearest approach, kept to the part of the line that is there.
+        first, last = np.arctan(-along / passes), np.arctan((far - along) / passes)
+        # The nearest approach itself, wherever on the line it falls, and
+        # how the line and the way to the lamp from it lie against up.
+        over_lamp = (float(lamp @ up) - along * (ray @ up)) / passes
+        rising = ray @ up
+        summed = np.zeros(points.shape[:2], dtype=np.float32)
+        gain = _SCATTERS_FORWARD
+        for node, weight in zip(*_ALONG_SIGHT, strict=True):
+            phi = 0.5 * (last + first) + 0.5 * (last - first) * node
+            sine, cosine = np.sin(phi), np.cos(phi)
+            below = np.clip(cosine * over_lamp - sine * rising, 0.0, 1.0)
+            # Light on its way to the lens is scattered through no angle
+            # at all, and its cosine is 1: before the nearest approach.
+            forward = (1.0 - gain**2) / (1.0 + gain**2 + 2.0 * gain * sine) ** 1.5
+            summed += weight * forward * (_LAMP_SPILL + (1.0 - _LAMP_SPILL) * below**2)
+        through = 0.5 * (last - first) * summed / passes
         off = np.clip(along, 0.0, far)
-        nearest = off[..., None] * ray
-        to_lamp = lamp - nearest
-        below = np.clip(
-            (to_lamp @ up) / np.maximum(np.sqrt((to_lamp**2).sum(axis=2)), 1e-3), 0.0, 1.0
-        )
-        lit = np.float32(tall**2) * through * (_LAMP_SPILL + (1.0 - _LAMP_SPILL) * below**2)
+        lit = (np.float32(tall**2) * through).astype(np.float32)
         air += lit
         reach += lit * off
     return air, reach / np.maximum(air, 1e-9)
@@ -504,7 +536,10 @@ def headlamp_light(
     half in fourteen metres; and they light the road and what stands low
     on it, not what is above it: a dipped beam is cut off at the
     horizontal. The beams of a vehicle seen from behind show as the road
-    lit beyond its front. Lengths are in the vehicle's own metres.
+    lit beyond its front, and fainter (:data:`_BEAM_FROM_BEHIND`): a road
+    met at a grazing angle throws light on ahead, at a camera the vehicle
+    is driving towards and away from one behind it. Lengths are in the
+    vehicle's own metres.
 
     **Where the road is** is the ground's plane, for every pixel that
     shows something at least as far off as the plane on its line of sight
@@ -557,6 +592,11 @@ def headlamp_light(
         beam += np.exp(-(((aside + _HEADLAMPS_APART_M / 2) / wide) ** 2))
         beam *= _EACH_LAMP / (1.0 + (forward / _BEAM_HALF_M) ** 2)
         beam *= np.clip(along, 0.0, 1.0) * np.clip((_BEAM_REACH_M - along) / 15.0, 0.0, 1.0)
+        # Seen from ahead of the vehicle the road throws the beam's light
+        # at the lens; seen from behind it, away from it.
+        to_it = front - float(front @ up) * up + middle - float(middle @ up) * up
+        coming = 0.5 * (1.0 - float(heading @ to_it) / max(float(np.linalg.norm(to_it)), 1e-6))
+        beam *= _BEAM_FROM_BEHIND + (1.0 - _BEAM_FROM_BEHIND) * coming
         light += (beam * low * np.clip(1.5 - above / (scale * _BEAM_HIGH_M), 0.0, 1.0)).astype(
             np.float32
         )

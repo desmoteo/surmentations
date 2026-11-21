@@ -73,8 +73,89 @@ def full() -> list[set[str]]:
     return _draws(surveillance(SharedDepthProvider(_GroundPlane())))
 
 
-def test_one_weather_state_at_most(full: list[set[str]]) -> None:
-    assert not [s for s in full if len(_states(s)) > 1]
+NIGHT_MADE = {"NightIrMode", "NightColorMode"}
+
+
+def test_snow_goes_with_nothing_else_and_rain_goes_only_with_fog(full: list[set[str]]) -> None:
+    """One state of the air and the ground per frame. Rain falls through
+    fog, and that is one of the states; nothing else is two at once."""
+    assert not [s for s in full if "snow" in _states(s) and len(_states(s)) > 1]
+    together = [s for s in full if _states(s) == {"rain", "fog"}]
+    assert together, "fog with rain falling through it never drawn"
+    # The road is the rain's and the air is the fog's: no second veil of
+    # streaks under the fog.
+    assert not [s for s in together if "NightRain" in s]
+
+
+def test_the_sun_is_out_only_over_dry_air(full: list[set[str]]) -> None:
+    """Hard shadows and a flare need the sun's own beam. They used to be
+    drawn in three day frames in ten whatever was falling."""
+    sunlit = [s for s in full if s & DIRECT_SUN]
+    assert sunlit, "no frame with the sun in it"
+    assert not [s for s in sunlit if s & {"RandomRain", "RandomFog", "NightRain", "NightFog"}]
+    assert not [s for s in sunlit if s & NIGHT_MADE]
+
+
+def test_the_weather_is_drawn_by_its_shares_raised_to_a_power() -> None:
+    """Matched to how often each state happens at 1, every state alike at
+    0, and between them the rare states more often than they happen."""
+    from surmentations.presets.pipelines import rebalanced, weather_shares
+
+    real = weather_shares()
+    assert sum(real.values()) == pytest.approx(1.0) and real["dry"] > 0.7
+    assert real["rain_light"] > 10.0 * real["rain_heavy"] > 0.0
+    assert real["wet_road"] > real["rain_light"], "a road is wet for longer than it rains"
+    assert rebalanced(real, 1.0) == pytest.approx(real)
+    even = rebalanced(real, 0.0)
+    assert max(even.values()) == pytest.approx(min(even.values()))
+    half = rebalanced(real, 0.5)
+    assert sum(half.values()) == pytest.approx(1.0)
+    assert real["dry"] > half["dry"] > even["dry"]
+    assert real["fog_dense"] < half["fog_dense"] < half["fog_thin"] < half["dry"]
+    # Fog belongs to the night more than to the day.
+    assert weather_shares(hour="night")["fog_thin"] > 2.0 * weather_shares(hour="day")["fog_thin"]
+    with pytest.raises(ValueError, match="prior_power"):
+        rebalanced(real, 1.5)
+    # The states are named in one order, and the arms are held in it.
+    from surmentations.presets import WEATHER_STATES
+
+    assert tuple(real) == WEATHER_STATES
+    state = weather_state(SharedDepthProvider(_GroundPlane()))
+    assert len(state.transforms) == len(WEATHER_STATES)
+    weights = np.array([arm.p for arm in state.transforms])
+    assert weights / weights.sum() == pytest.approx(
+        list(rebalanced(weather_shares(hour="day"), 0.5).values())
+    )
+
+
+def test_most_of_the_weather_is_mild_and_the_ground_outlasts_it() -> None:
+    """A road still wet with nothing falling, snow lying under a clear sky
+    and rain too light to see are most of the bad weather there is, and
+    could not be drawn at all."""
+    transform = surveillance(
+        SharedDepthProvider(_GroundPlane()), day=1.0, lit_night=0.0, ir_night=0.0, codec=0.0
+    )
+    transform.set_random_seed(5)
+    image = np.full((96, 96, 3), 120, dtype=np.uint8)
+    rates, after_rain, lying = [], 0, 0
+    for _ in range(600):
+        with recording() as log:
+            transform(image=image)
+        fired = {record["t"]: record for record in log}
+        if "RandomRain" in fired and "RandomFog" not in fired:
+            rain = fired["RandomRain"]
+            if rain["init"]["max_streaks"] == 0:
+                after_rain += 1
+                assert rain["drew"]["draw_wetness"], "a road left wet that is dry"
+            else:
+                rates.append(rain["drew"]["rain_rate_mm_h"])
+        if "RandomSnow" in fired and fired["RandomSnow"]["init"]["max_flakes"] == 0:
+            lying += 1
+    assert after_rain > 30 and lying > 15
+    rates_drawn = np.array(rates)
+    assert len(rates_drawn) > 40
+    assert np.median(rates_drawn) < 5.0, "most rain is light"
+    assert rates_drawn.max() > 10.0, "and some of it is not"
 
 
 def test_infrared_night_never_carries_sunlight(full: list[set[str]]) -> None:
@@ -87,10 +168,25 @@ def test_water_on_the_glass_is_correlated_not_implied(full: list[set[str]]) -> N
     assert sum("WaterDroplets" in s and not s & WEATHER for s in full) > 0
     assert sum(bool(s & WEATHER) and "WaterDroplets" not in s for s in full) > 0
 
-    rain = [s for s in full if "RandomRain" in s]
-    clear = [s for s in full if not s & WEATHER]
-    p_rain = sum("WaterDroplets" in s for s in rain) / max(len(rain), 1)
-    p_clear = sum("WaterDroplets" in s for s in clear) / max(len(clear), 1)
+    # Where rain is falling, against where nothing is and the road is dry:
+    # a road left wet is `RandomRain` too, and has its own, lower odds.
+    transform = surveillance(
+        SharedDepthProvider(_GroundPlane()),
+        day=1.0, lit_night=0.0, ir_night=0.0, codec=0.0, rain=0.3, prior_power=1.0,
+    )
+    transform.set_random_seed(5)
+    image = np.full((96, 96, 3), 120, dtype=np.uint8)
+    rain, clear = [], []
+    for _ in range(600):
+        with recording() as log:
+            transform(image=image)
+        fired = {record["t"]: record for record in log}
+        if "RandomRain" in fired and fired["RandomRain"]["init"]["max_streaks"] > 0:
+            rain.append("WaterDroplets" in fired)
+        elif not set(fired) & WEATHER:
+            clear.append("WaterDroplets" in fired)
+    assert len(rain) > 80 and len(clear) > 150
+    p_rain, p_clear = float(np.mean(rain)), float(np.mean(clear))
     assert p_rain > 3 * p_clear, f"droplets|rain {p_rain:.2%} vs |clear {p_clear:.2%}"
 
 
@@ -191,10 +287,18 @@ def test_night_rain_replaces_daylight_rain_under_infrared() -> None:
             night_rain.append(fired)
         elif "RandomRain" in fired:
             day_rain.append(fired)
-    assert night_rain, "NightRain never fired; the IR-night branch is not wired up"
-    assert all("NightIrMode" in fired for fired in night_rain), (
-        "NightRain fired on a frame with no infrared conversion, which is the "
-        "one condition that makes it physically meaningful"
+    assert night_rain, "NightRain never fired; the night branches are not wired up"
+    assert all(NIGHT_MADE & set(fired) for fired in night_rain), (
+        "NightRain fired on a frame that was not made into a night, which is "
+        "the one condition that makes it physically meaningful"
+    )
+    assert any("NightIrMode" in fired for fired in night_rain)
+    # In colour there is no lamp at the lens: the rain shows in the
+    # street's light alone.
+    in_colour = [fired for fired in night_rain if "NightColorMode" in fired]
+    assert in_colour
+    assert all(
+        max(fired["NightRain"]["init"]["illuminator_gain_range"]) == 0.0 for fired in in_colour
     )
     assert all("RandomRain" in fired for fired in night_rain), (
         "lamp-lit rain with no veil and no chance of a wet road under it"
@@ -203,7 +307,18 @@ def test_night_rain_replaces_daylight_rain_under_infrared() -> None:
         "a frame got both the daylight and the illuminated rain model's streaks"
     )
     assert any(fired["RandomRain"]["drew"]["draw_wetness"] for fired in night_rain)
-    assert day_rain and all(fired["RandomRain"]["init"]["max_streaks"] > 0 for fired in day_rain)
+    # By day the streaks are `RandomRain`'s own, wherever rain is falling
+    # and no fog hides it; and a night that was made never has them.
+    falling = [
+        fired
+        for fired in day_rain
+        if not NIGHT_MADE & set(fired)
+        and "RandomFog" not in fired
+        and fired["RandomRain"]["init"]["rain_rate_range_mm_h"][1] > 2.0
+    ]
+    assert falling and all(fired["RandomRain"]["init"]["max_streaks"] > 0 for fired in falling)
+    made = [fired for fired in day_rain if NIGHT_MADE & set(fired)]
+    assert all(fired["RandomRain"]["init"]["max_streaks"] == 0 for fired in made)
 
 
 def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
@@ -285,12 +400,26 @@ def test_night_snow_is_lit_by_the_lamp_and_only_under_infrared() -> None:
     and the scene half must not also draw the flakes."""
     drawn = _draws(surveillance(SharedDepthProvider(_GroundPlane()), snow=0.15), samples=600)
     night = [s for s in drawn if "NightSnow" in s]
-    assert night, "NightSnow never fired; the IR-night snow arm is not wired up"
-    assert all({"NightIrMode", "RandomSnow"} <= s for s in night)
+    assert night, "NightSnow never fired; the night snow arms are not wired up"
+    assert all("RandomSnow" in s and s & NIGHT_MADE for s in night)
     assert not any("NightRain" in s or "RandomRain" in s or "RandomFog" in s for s in night)
 
-    day_snow = [s for s in drawn if "RandomSnow" in s and "NightIrMode" not in s]
+    day_snow = [s for s in drawn if "RandomSnow" in s and not s & NIGHT_MADE]
     assert day_snow and not any("NightSnow" in s for s in day_snow)
+
+
+def test_snow_sits_on_the_housing_only_where_there_is_snow() -> None:
+    """While it snows a cap builds on the housing and hangs into the view,
+    and it is still there for a while after. Never without snow."""
+    drawn = _draws(
+        surveillance(SharedDepthProvider(_GroundPlane()), snow=0.2, snow_lying=0.2, codec=0.0),
+        samples=500,
+    )
+    on_housing = [s for s in drawn if "SnowOnHousing" in s]
+    assert on_housing, "snow never on the housing"
+    assert all("RandomSnow" in s for s in on_housing)
+    snowy = [s for s in drawn if "RandomSnow" in s]
+    assert 0.05 < len(on_housing) / len(snowy) < 0.45
 
 
 def test_water_on_the_glass_follows_the_lighting_state() -> None:
@@ -332,7 +461,7 @@ def test_rain_at_night_is_metered_for_street_lighting() -> None:
     def shutters(night: bool) -> np.ndarray:
         transform = A.Compose(
             [weather_state(SharedDepthProvider(_GroundPlane()), rain=0.9, snow=0.0, fog=0.0,
-                           night=night)]
+                           wet_road=0.0, snow_lying=0.0, night=night)]
         )
         transform.set_random_seed(3)
         image = np.full((96, 96, 3), 120, dtype=np.uint8)

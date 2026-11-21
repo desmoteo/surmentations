@@ -52,6 +52,7 @@ from surmentations.atmosphere.night_rain import (
 from surmentations.atmosphere.snow import render_flake_field, snow_fall_speed
 from surmentations.base import CameraTransform, lamp_cones, scene_fov
 from surmentations.diagnostics import record_draw
+from surmentations.utils.noise import value_noise
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.precipitation import (
     far_field_texture,
@@ -65,6 +66,18 @@ from surmentations.utils.precipitation import (
     width_cut_for_budget,
 )
 
+# The near flakes: those whose streak is at least this share of the frame's
+# diagonal long. They are the long bright streaks a slow shutter makes of
+# what falls close to the lamp, and they are right to be long and bright.
+# Two things a real one is not: even along its length, a flake being an
+# irregular thing that turns as it falls and shows the lamp more of itself
+# and less, by this much either way, over this share of the diagonal; and
+# ruled at its edge, a lens a few centimetres out of focus and a little
+# aberrated drawing it soft over this share of the diagonal.
+_NEAR_STREAK = 0.012
+_TUMBLE = 0.45
+_TUMBLE_SCALE = 0.02
+_SOFT_EDGE = 0.0016
 # What a falling particle sends a lens of a lamp's light, against what its
 # share of the air's extinction says. 1: it is taken at its word.
 _CONE_GAIN = 1.0
@@ -405,6 +418,8 @@ class NightSnow(CameraTransform):
                 grain,
                 lit_from_lens=True,
             )
+        # How each near flake turns as it falls: after the draws above.
+        drawn["tumble_seed"] = self.py_random.randint(0, 2**31 - 1)
         # The flakes in the light of the scene's own lamps, where those
         # are known: last of all the draws.
         cone = self.py_random.uniform(*self.lamp_cone_range)
@@ -435,32 +450,55 @@ class NightSnow(CameraTransform):
         backscatter_grain: np.ndarray | None = None,
         cones: np.ndarray | None = None,
         cone_grain: np.ndarray | None = None,
+        tumble_seed: int = 0,
         **params: Any,
     ) -> np.ndarray:
         """Render the lit flakes through a round stop and add them, with glare and backscatter.
 
         A surveillance lens has a fixed circular stop, so a flake swept across
         it is a capsule. The flakes add to the dark scene; the glare is a share
-        of what each returned before the sensor clipped it.
+        of what each returned before the sensor clipped it. The near
+        flakes, the long streaks, are drawn apart from the rest: uneven
+        along their length, as a thing that turns in the lamp's light is,
+        and soft at the edge.
         """
         height, width = img.shape[:2]
         frame_centre = (width / 2.0, height / 2.0)
+        diagonal = float(np.hypot(width, height))
 
-        lit = np.zeros((height, width), dtype=np.float32)
-        render_flake_field(
-            lit,
-            flakes,
-            # A round aperture. RandomSnow draws polygonal bokeh because a
-            # photographic lens has an iris; a surveillance board lens has
-            # a fixed circular stop, and a flake swept across it is a
-            # capsule, not a parallelogram.
-            blades=0,
-            blade_rotation=0.0,
-            rim_gain=1.0,
-            cats_eye=0.0,
-            frame_centre=frame_centre,
-            gain=flakes["brightness"],
-        )
+        def field(chosen: np.ndarray) -> np.ndarray:
+            """The flakes chosen, max-blended into a canvas of their own."""
+            canvas = np.zeros((height, width), dtype=np.float32)
+            if not chosen.any():
+                return canvas
+            some = {name: values[chosen] for name, values in flakes.items()}
+            render_flake_field(
+                canvas,
+                some,
+                # A round aperture. RandomSnow draws polygonal bokeh because
+                # a photographic lens has an iris; a surveillance board lens
+                # has a fixed circular stop, and a flake swept across it is
+                # a capsule, not a parallelogram.
+                blades=0,
+                blade_rotation=0.0,
+                rim_gain=1.0,
+                cats_eye=0.0,
+                frame_centre=frame_centre,
+                gain=some["brightness"],
+            )
+            return canvas
+
+        near = flakes["smear"] >= _NEAR_STREAK * diagonal
+        lit = field(~near)
+        if near.any():
+            streaks = field(near)
+            cells = max(2, round(1.0 / _TUMBLE_SCALE * max(height, width) / diagonal))
+            turning = value_noise(
+                height, width, rng=np.random.default_rng(tumble_seed), octaves=2, base_cells=cells
+            )
+            streaks *= 1.0 + np.float32(_TUMBLE) * (2.0 * turning - 1.0)
+            streaks = cv2.GaussianBlur(streaks, (0, 0), sigmaX=max(0.6, _SOFT_EDGE * diagonal))
+            np.maximum(lit, streaks, out=lit)
 
         if glare > 0.0 and len(flakes["x"]):
             # Veiling glare, on the unclipped light: what spills is a share of

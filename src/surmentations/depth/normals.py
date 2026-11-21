@@ -143,10 +143,15 @@ def _one_sided_tangent(point: _Planes, axis: int, step: int) -> _Planes:
 # behind it exceeds it several times over.
 _SILHOUETTE_RELATIVE_JUMP = 0.2
 
-# The longer side, in pixels, the depth network works at, and how much larger
-# than that a frame has to be before fast mode reads its normals there.
-_DEPTH_WORK_PX = 518
-_REDUCE_ABOVE = 1.5
+# The longer side, in pixels, at which what is read off a depth map is read
+# in fast mode, and how much larger than that a frame has to be before it
+# is. The network works at 518 pixels, and its map holds less than that:
+# taken down to 384 and back, the maps of the sample scenes move by 0.07%
+# of their range on average and by 1 to 2% at one pixel in a hundred, on
+# the edges of things. It was 518 and half as large again, which left a
+# 512-pixel frame, the commonest, read at full size.
+_DEPTH_WORK_PX = 384
+_REDUCE_ABOVE = 1.25
 
 
 def _normals_and_jump(
@@ -216,11 +221,13 @@ def surface_normals(
 def depth_work_size(height: int, width: int) -> tuple[int, int] | None:
     """``(width, height)`` to read a frame's depth at, or ``None`` for as it is.
 
-    The depth network works at about 518 pixels on the longer side and its
-    map is interpolated up to the frame. Anything read off the map alone,
-    the lie of the ground for one, is as well read at that size and enlarged,
-    at a fraction of the pixels. Fast mode does so for frames more than half
-    as large again; exact mode (:mod:`surmentations.mode`) never does.
+    The depth network works at about 518 pixels on the longer side, its
+    map is interpolated up to the frame, and it holds no detail finer than
+    some 384 pixels show. Anything read off the map alone, the lie of the
+    ground for one, is as well read at that size and enlarged, at a
+    fraction of the pixels. Fast mode does so for frames more than a
+    quarter as large again, a 512-pixel frame among them; exact mode
+    (:mod:`surmentations.mode`) never does.
     """
     longest = max(height, width)
     if not mode.fast() or longest <= _REDUCE_ABOVE * _DEPTH_WORK_PX:
@@ -245,11 +252,11 @@ def upward_facing(
     which is the usual mounting for a surveillance camera and rotates world
     "up" away from the image's vertical axis.
 
-    In fast mode (:mod:`surmentations.mode`) a large frame's normals are
-    read at the resolution the depth map was estimated at and the result is
-    enlarged. The depth network works at about 518 pixels and its map is
-    interpolated up from there, so the differences taken between neighbours
-    at 1024 pixels are differences of interpolated values.
+    In fast mode (:mod:`surmentations.mode`) a frame's normals are read
+    at the detail the depth map holds (:func:`depth_work_size`) and the
+    result is enlarged. The depth network works at about 518 pixels and its
+    map is interpolated up from there, so the differences taken between
+    neighbours at 1024 pixels are differences of interpolated values.
     """
     height, width = depth_m.shape[:2]
     size = depth_work_size(height, width)

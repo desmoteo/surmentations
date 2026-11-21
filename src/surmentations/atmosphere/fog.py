@@ -57,9 +57,11 @@ from surmentations.base import (
 )
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import record_draw
+from surmentations.perception.labels import SceneClass
 from surmentations.utils.channels import channel_mean
 from surmentations.utils.color import veil_radiance_linear
 from surmentations.utils.photometry import from_linear_unit, linear_to_srgb, to_linear_unit
+from surmentations.utils.road import vehicle_lamps, vehicles_as_seen
 from surmentations.utils.sky import (
     extinction_for_visibility,
     lift_sky,
@@ -70,6 +72,25 @@ from surmentations.utils.sky import (
 
 # Rec.709 primaries' representative wavelengths, in nm.
 _RGB_WAVELENGTHS = np.array([600.0, 550.0, 450.0], dtype=np.float32)
+
+# How much fog a line of sight straight up runs through, in metres: the
+# depth of a bank of fog. A line of sight to the sky near the horizon runs
+# through far more of it, by one over the sine of how high it looks, which
+# is taken no lower than the second number. The sky is held back from the
+# fog's own colour (``sky_optical_depth_cap``) so that haze leaves it its
+# gradient; that is for the sky overhead, and low down the fog hides the
+# sky as it hides what stands in front of it. And the field of view a
+# frame is taken to have where no provider says.
+_FOG_BEFORE_THE_SKY_M = 150.0
+_LOWEST_LOOK = 0.03
+_ASSUMED_FOV_DEG = 60.0
+# The share of vehicles seen from the front, and from behind, whose lamps
+# are lit in fog by day: nearly all, at either end.
+_LIT_IN_FOG = (0.95, 0.95)
+# The halo round a lamp in fog: how far it reaches, as a share of the
+# frame's diagonal, and how much of the light the fog scattered it shows.
+_HALO_REACH = 0.012
+_HALO_SHARE = 2.5
 
 
 def channel_extinction(beta: float, gamma: float) -> np.ndarray:
@@ -116,7 +137,19 @@ class RandomFog(CameraTransform):
             the blur and leaves fog as a pure blend.
         sky_optical_depth_cap: optical depth ceiling applied to sky-like
             pixels, so the sky desaturates instead of collapsing to a flat
-            airlight colour.
+            airlight colour. That is for the sky overhead: a line of
+            sight to the sky runs through the fog first, 150 m of it
+            straight up and far more near the horizon, and the ceiling is
+            never lower than that.
+        vehicle_lamp_range: how brightly the traffic's lamps are lit, drawn
+            per call; 1 is a dipped headlamp as a camera sees it by day, 0
+            none, which is the default. Traffic in fog drives with its
+            lamps on, and in thick fog a car is two haloes before it is a
+            car: each lamp is seen through the fog in front of it, dimmed
+            by that fog, and what the fog takes out of its light it
+            scatters round it. It needs a provider that reads the
+            vehicles (``vehicles=``): the lamps are lit where the reader
+            found them, on the end of each vehicle it saw.
 
     Targets:
         image
@@ -156,6 +189,11 @@ class RandomFog(CameraTransform):
             AfterValidator(check_range_bounds(0.0, 0.02)),
         ]
         sky_optical_depth_cap: float = Field(ge=0.0, le=10.0)
+        vehicle_lamp_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 4.0)),
+        ]
 
     def __init__(
         self,
@@ -167,6 +205,7 @@ class RandomFog(CameraTransform):
         forward_scatter_range: tuple[float, float] = (0.001, 0.005),
         sky_optical_depth_cap: float = 1.6,
         visibility_range_scene: tuple[float, float] | None = None,
+        vehicle_lamp_range: tuple[float, float] = (0.0, 0.0),
         p: float = 0.5,
     ):
         """Store the ranges; each argument is described in the class docstring.
@@ -184,6 +223,7 @@ class RandomFog(CameraTransform):
         self.depth_scale = depth_scale
         self.forward_scatter_range = forward_scatter_range
         self.sky_optical_depth_cap = sky_optical_depth_cap
+        self.vehicle_lamp_range = vehicle_lamp_range
 
     def get_params_dependent_on_data(
         self, params: dict[str, Any], data: dict[str, Any]
@@ -227,7 +267,28 @@ class RandomFog(CameraTransform):
         # Optical depth per channel, with a ceiling on sky-like pixels so the
         # sky keeps its gradient instead of flattening to pure airlight.
         optical_depth = depth_pm[..., None] * beta_rgb[None, None, :]
-        capped = np.minimum(optical_depth, self.sky_optical_depth_cap)
+        # The ceiling is no lower than the fog between the lens and the
+        # sky is deep, which near the horizon is very deep: the sky used
+        # to stay darker than the buildings in front of it, which the fog
+        # had turned to its own colour, and their outline showed as a pale
+        # flat shape with nothing behind it.
+        horizon = self.depth_provider.horizon_row(scene)
+        if horizon is None:
+            # Where the sky comes lowest in the frame.
+            rows_of_sky = np.flatnonzero((sky > 0.5).any(axis=1))
+            horizon = float(rows_of_sky.max()) if rows_of_sky.size else 0.5 * height
+        camera = self.depth_provider.settle_camera(scene)
+        focal = (
+            0.5 * width / np.tan(np.deg2rad(0.5 * _ASSUMED_FOV_DEG))
+            if camera is None
+            else camera.focal_px
+        )
+        looks_up = np.arctan((horizon - np.arange(height, dtype=np.float32)) / focal)
+        through = _FOG_BEFORE_THE_SKY_M / np.maximum(np.sin(looks_up), _LOWEST_LOOK)
+        ceiling = np.maximum(
+            self.sky_optical_depth_cap, through[:, None, None] * beta_rgb[None, None, :]
+        )
+        capped = np.minimum(optical_depth, ceiling)
         optical_depth = optical_depth * (1.0 - sky[..., None]) + capped * sky[..., None]
 
         transmission = np.exp(-optical_depth).astype(np.float32)
@@ -255,11 +316,35 @@ class RandomFog(CameraTransform):
             # here, like `atmospheric_light`, and decoded in `apply`.
             airlight = linear_to_srgb(veil_radiance_linear(linear_scene, sky))
 
-        return {
+        drawn: dict[str, Any] = {
             "transmission": transmission,
             "airlight": airlight.astype(np.float32),
             "scatter_sigma": self.py_random.uniform(*self.forward_scatter_range) * diagonal,
         }
+        # The traffic's lamps, last of the draws.
+        lamps = self.py_random.uniform(*self.vehicle_lamp_range)
+        lamp_seed = self.py_random.randint(0, 2**31 - 1)
+        labels = self.depth_provider.get_labels(scene)
+        lit = False
+        if lamps > 0.0 and labels is not None:
+            named = labels == int(SceneClass.VEHICLE)
+            traffic = vehicles_as_seen(named, self.depth_provider.get_vehicles(scene))
+            if traffic:
+                light, _glow, cores = vehicle_lamps(
+                    None,
+                    traffic,
+                    np.random.default_rng(lamp_seed),
+                    lamps,
+                    linear_scene,
+                    shape=(height, width),
+                    lit_share=_LIT_IN_FOG,
+                )
+                if float(cores.max()) > 0.0:
+                    drawn["lamp_light"] = light
+                    drawn["halo_sigma"] = _HALO_REACH * diagonal
+                    lit = True
+        record_draw(vehicle_lamps=lamps, lamps_lit=lit)
+        return drawn
 
     def apply(
         self,
@@ -267,12 +352,17 @@ class RandomFog(CameraTransform):
         transmission: np.ndarray,
         airlight: np.ndarray,
         scatter_sigma: float,
+        lamp_light: np.ndarray | None = None,
+        halo_sigma: float = 0.0,
         **params: Any,
     ) -> np.ndarray:
         """Soften distant detail by forward scatter, then veil the frame with airlight.
 
         In linear light: ``linear * t + airlight * (1 - t)``, after a blur
-        whose strength follows the optical depth.
+        whose strength follows the optical depth. The traffic's lamps,
+        where they are lit, are added after the veil: each through the fog
+        in front of it, and round it the halo of what that fog scattered
+        out of its light.
         """
         linear, scale, is_integer = to_linear_unit(img)
         airlight_linear = _srgb_scalar_to_linear(airlight)
@@ -287,6 +377,18 @@ class RandomFog(CameraTransform):
             linear = linear * (1.0 - softness) + blurred * softness
 
         out = linear * transmission + airlight_linear[None, None, :] * (1.0 - transmission)
+        if lamp_light is not None:
+            # A lamp is seen through the fog between it and the lens. What
+            # that fog takes out of its beam it sends on at small angles:
+            # a halo round the lamp, widest and brightest where about half
+            # of the light has been scattered, and gone with the lamp
+            # where the fog is too thick for either.
+            through = channel_mean(transmission)[..., None]
+            scattered = lamp_light * (through * (1.0 - through))
+            wide = cv2.GaussianBlur(scattered, (0, 0), sigmaX=max(halo_sigma, 1.0))
+            near = cv2.GaussianBlur(scattered, (0, 0), sigmaX=max(0.3 * halo_sigma, 0.7))
+            halo = np.asarray(wide, dtype=np.float32) + np.asarray(near, dtype=np.float32)
+            out = out + lamp_light * through + np.float32(_HALO_SHARE) * halo
         return from_linear_unit(out, scale, is_integer, img.dtype)
 
 

@@ -31,11 +31,12 @@ from surmentations.atmosphere.fog import RandomFog
 from surmentations.atmosphere.night_fog import NightFog
 from surmentations.atmosphere.night_rain import NightRain
 from surmentations.atmosphere.night_snow import NightSnow
-from surmentations.atmosphere.rain import RandomRain
+from surmentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
 from surmentations.atmosphere.snow import RandomSnow
 from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
+    NightColorMode,
     NightIrMode,
     RollingShutter,
     SensorNoise,
@@ -45,8 +46,16 @@ from surmentations.camera import (
     WdrToneMapping,
 )
 from surmentations.depth.provider import SharedDepthProvider
-from surmentations.lens import DirtSoil, HousingOccluders, SourceGlare, SunFlare, WaterDroplets
+from surmentations.lens import (
+    DirtSoil,
+    HousingOccluders,
+    SnowOnHousing,
+    SourceGlare,
+    SunFlare,
+    WaterDroplets,
+)
 from surmentations.presets.severity import GROUND_SEVERITY, SEVERITY
+from surmentations.presets.source import BySource
 from surmentations.scene import CastShadows
 
 #: Severity the pipelines build at by default. Level 1 is "a slightly bad
@@ -62,19 +71,12 @@ from surmentations.scene import CastShadows
 #: typical rather than extreme.
 DEFAULT_SEVERITY = 1
 
-#: Severity the *weather* is built at, separately and higher.
-#:
-#: Weather is the only thing in these pipelines a viewer is meant to notice.
-#: It also fires rarely — 12% of frames by default, because that is roughly
-#: how often it rains or fogs in a temperate maritime climate — so a frame
-#: that draws it and then renders an invisible drizzle has wasted the draw.
-#: Measured at 512 px, severity 1 snow puts **19 flakes** in the whole frame
-#: and almost all of its effect comes from the distance veil rather than from
-#: anything the eye reads as snow; severity 2 puts 179 there, and rain goes
-#: from 269 streaks to 1144.
-#:
-#: The camera chain is the opposite case: it is present in nearly every frame,
-#: so it should sit at the bottom of its ladder and compound gently.
+#: The level the weather was once built at for every frame, kept for callers
+#: who ask for it by name (``weather_severity=DEFAULT_WEATHER_SEVERITY``).
+#: Unset, each state of the weather is now drawn at its own strength: most
+#: rain is light and most fog is thin, and a pipeline that drew rain as often
+#: as it rains and always at this level drew a downpour of an hour a year on
+#: six frames in a hundred.
 DEFAULT_WEATHER_SEVERITY = 2
 
 #: Probability of packet-loss damage on a frame, where the pipeline has a
@@ -134,22 +136,18 @@ def _at(factory: Any, name: str, probability: float, severity: int, **extra: Any
     return factory(p=probability, **{**SEVERITY[severity][name], **extra})
 
 
-# Share of the pipelines' rain frames that get a wet road when the ground is
-# left to chance. It was 0.85; see `_ground`.
-_WET_ROAD_SHARE = 0.5
-
-
 def _ground(name: str, ground_severity: int | None) -> dict[str, Any]:
     """Ground-state arguments for the rain or snow transform.
 
-    ``None`` leaves the ground to the transform, which draws it per frame
-    over its whole range: dry to soaked, bare to buried, whatever is falling.
-    Rain's chance of a wet road is raised a little on the way, since by day
-    the road is most of what shows that it is raining at all. Only a little:
-    a wet road is also two to three times the cost of the frame.
+    ``None`` leaves how wet or how deep to the transform, which draws it
+    per frame over its whole range, and says only how often there is
+    anything on the ground at all: rain mostly falls on a road that is wet
+    already, and snow on snow that is lying.
     """
     if ground_severity is None:
-        return {"wetness_probability": _WET_ROAD_SHARE} if name == "RandomRain" else {}
+        if name == "RandomRain":
+            return {"wetness_probability": WET_UNDER_RAIN}
+        return {"accumulation_probability": SNOW_UNDER_SNOW}
     if ground_severity not in GROUND_SEVERITY:
         raise ValueError(
             f"ground_severity must be one of {sorted(GROUND_SEVERITY)} or None, "
@@ -158,22 +156,42 @@ def _ground(name: str, ground_severity: int | None) -> dict[str, Any]:
     return dict(GROUND_SEVERITY[ground_severity][name])
 
 
-def _sensor_noise(*, lit_by_mains: bool, infrared: bool, severity: int) -> list[Any]:
-    """Colour sensor noise, where the camera is in colour.
+# How often each stage of the camera's own chain shows, by the light the
+# frame is in: by day, under street lighting, under the camera's own
+# infrared. See ``docs/pipelines.md`` for what each is an estimate of.
+#
+# Insects and webs gather at a lit lens: a share of ``occluders`` by day and
+# under street lamps, more than it under the infrared ring.
+_OCCLUDERS_BY_LIGHT = {"day": 0.25, "street": 0.4, "infrared": 1.7}
+# Mains banding needs mains light and a short shutter. The camera's own
+# infrared LEDs are not on the mains, and band only what street lamps light.
+_FLICKER_BY_LIGHT = {"day": 0.02, "street": 0.15, "infrared": 0.05}
+# The noise reducer is a setting, and at night it is on.
+_DENOISE_BY_LIGHT = {"day": 0.2, "street": 0.8, "infrared": 0.8}
+# A whole-frame shear needs the mount to move: wind, not traffic.
+_ROLLING_SHUTTER = 0.10
+# An exposure caught mid-correction is an event of a second or two.
+_EXPOSURE_TRANSIENT = 0.05
+# Wide dynamic range is a setting of some cameras.
+_WDR = 0.30
+
+
+def _sensor_noise(*, light: str, own_noise: bool, severity: int) -> list[Any]:
+    """Colour sensor noise, where the transform that made the frame's light has none of its own.
 
     Gain is how a camera copes with less light, so it follows the lighting
     state and not a draw: by day it is low and the noise occasional, under
-    artificial light it is two severity levels up and usual. That is the one
-    place a pipeline moves a transform off its own severity, and it does so
-    because severity *is* gain for this transform. Under the infrared ring
-    there is none of this: `NightIrMode` has its own noise, for a monochrome
-    frame, and a second source would count it twice.
+    artificial light it is two severity levels up and always there. That is
+    the one place a pipeline moves a transform off its own severity, and it
+    does so because severity *is* gain for this transform. A frame made
+    into a night by `NightIrMode` or `NightColorMode` has that transform's
+    own noise, and a second source would count it twice.
     """
-    if infrared:
+    if own_noise:
         return []
-    if lit_by_mains:
-        return [_at(SensorNoise, "SensorNoise", 0.70, min(severity + 2, 5))]
-    return [_at(SensorNoise, "SensorNoise", 0.15, severity)]
+    if light == "day":
+        return [_at(SensorNoise, "SensorNoise", 0.15, severity)]
+    return [_at(SensorNoise, "SensorNoise", 1.0, min(severity + 2, 5))]
 
 
 def _stream(
@@ -185,45 +203,51 @@ def _stream(
     codec: float,
     faults: float,
     severity: int,
+    own_noise: bool | None = None,
 ) -> list[Any]:
     """Glass, sensor, ISP and transmission: independent draws, physical order.
+
+    ``lit_by_mains`` and ``infrared`` say what light the frame is in: day,
+    street lighting, or the camera's own illuminator. ``own_noise`` says
+    the frame was made into a night by a transform that has its own sensor
+    noise; unset, that is taken to be so under infrared and nowhere else.
 
     Written in order by hand rather than through
     :func:`~surmentations.presets.pipeline.physical_order`, which sorts a
     flat list and cannot see inside the containers these pipelines are built
     from. ``tests/unit/test_pipeline_presets.py`` checks the order still holds.
     """
+    light = "infrared" if infrared else "street" if lit_by_mains else "day"
+    if own_noise is None:
+        own_noise = infrared
     stream = [
         # Optics: on the glass, in front of everything the sensor does.
         _at(DirtSoil, "DirtSoil", dirt, severity),
         # An insect on the dome is a dark silhouette unless the camera's own
         # infrared ring is lighting it from a few centimetres away, which only
-        # happens in the IR-night state. The transform's default draws the
-        # glow from the whole 0-1.6 range whatever the lighting — right for
-        # exploring it, and here it put glowing white shapes on four daylit
-        # frames in five, a combination these pipelines exist to rule out.
+        # happens in the IR-night state; and it is there far more often then,
+        # the ring being what draws it.
         _at(
             HousingOccluders,
             "HousingOccluders",
-            occluders,
+            min(1.0, occluders * _OCCLUDERS_BY_LIGHT[light]),
             severity,
             glow_range=_IR_RING_GLOW if infrared else (0.0, 0.0),
         ),
         # Glare from headlights and lamps: only where lights are what the
         # frame is exposed against.
         *([_at(SourceGlare, "SourceGlare", 0.35, severity)] if lit_by_mains else []),
-        # Sensor. Mains banding needs artificial light, so outdoors it belongs
-        # to the night branches; indoors it would apply all day.
-        _at(AcFlicker, "AcFlicker", 0.45 if lit_by_mains else 0.05, severity),
-        _at(RollingShutter, "RollingShutter", 0.50, severity),
-        *_sensor_noise(lit_by_mains=lit_by_mains, infrared=infrared, severity=severity),
+        # Sensor.
+        _at(AcFlicker, "AcFlicker", _FLICKER_BY_LIGHT[light], severity),
+        _at(RollingShutter, "RollingShutter", _ROLLING_SHUTTER, severity),
+        *_sensor_noise(light=light, own_noise=own_noise, severity=severity),
         # ISP.
-        _at(ExposureTransient, "ExposureTransient", 0.10, severity),
-        _at(WdrToneMapping, "WdrToneMapping", 0.12, severity),
+        _at(ExposureTransient, "ExposureTransient", _EXPOSURE_TRANSIENT, severity),
+        _at(WdrToneMapping, "WdrToneMapping", _WDR, severity),
         _at(
             TemporalDenoiseArtifacts,
             "TemporalDenoiseArtifacts",
-            0.30 if lit_by_mains else 0.12,
+            _DENOISE_BY_LIGHT[light],
             severity,
         ),
     ]
@@ -253,256 +277,407 @@ def _fault_rate(faults: float | None, codec: float) -> float:
     return faults
 
 
+# ------------------------------------------------------------------ the weather
+#
+# The states a frame's air and ground can be in, and what each is drawn
+# with. The shares of time are the caller's (``rain``, ``snow``, ``fog``,
+# ``wet_road``, ``snow_lying``); these say how each divides. They are
+# estimates for a lowland site in central Europe, and
+# ``docs/aware_effects_and_pipelines_review.md`` says where each is from.
+
+#: Rain by strength: the share of rain time, and the rate in mm/h. Most
+#: rain is under the first rate `RandomRain` draws: its streaks cannot be
+#: seen, and the frame is a wet road under a grey sky.
+RAIN_STRENGTHS: dict[str, tuple[float, tuple[float, float]]] = {
+    "light": (0.72, (MIN_RAIN_RATE_MM_H, 3.0)),
+    "moderate": (0.255, (MIN_RAIN_RATE_MM_H, 10.0)),
+    "heavy": (0.025, (10.0, 50.0)),
+}
+#: The share of fog that has rain or drizzle falling through it.
+FOG_WITH_RAIN = 0.2
+#: Fog by thickness: the share of the fog without rain that is dense, and
+#: the visibility of thin fog and of dense, in metres.
+DENSE_FOG = 0.25
+FOG_VISIBILITY_M = {"thin": (200.0, 1000.0), "dense": (50.0, 200.0)}
+#: How much likelier fog is by night than over the whole day, and by day:
+#: it forms after dark and clears after sunrise.
+FOG_BY_HOUR = {"day": 0.5, "night": 1.5}
+#: The share of rain that falls on a road already wet, and of falling snow
+#: that falls on snow already lying.
+WET_UNDER_RAIN = 0.9
+SNOW_UNDER_SNOW = 0.8
+#: How likely snow is still on the housing once it has stopped falling,
+#: against how likely it is while it falls: it slides off or melts.
+SNOW_STAYS_ON_HOUSING = 0.5
+#: Snowfall, in mm/h of water: a flurry to a moderate fall. Heavier is rare
+#: enough to be asked for by name (``weather_severity``).
+SNOWFALL_MM_H = (0.2, 2.5)
+#: A road still wet after the rain: from damp to wet, with a little water
+#: standing; and the cloud that may be left over it.
+_AFTER_RAIN = {
+    "wetness_probability": 1.0,
+    "wetness_darkening_range": (0.45, 0.9),
+    "puddle_coverage_range": (0.0, 0.2),
+    "overcast_range": (0.0, 0.7),
+}
+#: Snow lying after the fall: a thin coat to a deep one.
+_AFTER_SNOW = {"accumulation_probability": 1.0, "accumulation_strength_range": (0.3, 1.0)}
+#: The traffic on a wet road by day: its lamps, and its spray. Both need a
+#: provider that reads the vehicles, and draw nothing without one.
+_LAMPS_BY_DAY = (0.6, 1.2)
+_SPRAY = (0.2, 0.8)
+#: The power the shares are raised to by default: the square root, which
+#: over-samples what is rare without making it common.
+DEFAULT_PRIOR_POWER = 0.5
+#: The states of the air and the ground, in the order :func:`weather_shares`
+#: gives them and :func:`weather_state` holds their arms.
+WEATHER_STATES = (
+    "dry",
+    "wet_road",
+    "rain_light",
+    "rain_moderate",
+    "rain_heavy",
+    "fog_thin",
+    "fog_dense",
+    "fog_rain",
+    "snow",
+    "snow_lying",
+)
+
+
+def weather_shares(
+    *,
+    rain: float = 0.065,
+    snow: float = 0.006,
+    fog: float = 0.02,
+    wet_road: float = 0.10,
+    snow_lying: float = 0.03,
+    hour: str | None = None,
+) -> dict[str, float]:
+    """The share of time each state of the air and the ground holds, summing to 1.
+
+    ``rain``, ``snow`` and ``fog`` are the shares of time each is there at
+    all; ``wet_road`` and ``snow_lying`` the shares in which nothing falls
+    and the ground still shows what fell. ``hour`` is ``"day"`` or
+    ``"night"`` to weigh fog by the hour, or ``None`` for the whole day.
+
+    The states are exclusive, and they are not rain, snow and fog. Rain
+    falls through fog; most rain is too light to see; a road is wet for
+    longer than it rains, and snow lies for days after an hour's fall.
+
+    Raises:
+        ValueError: if the shares leave no room for dry air over dry
+            ground.
+    """
+    if hour is not None:
+        # No further than half of what the caller's shares leave dry: fog
+        # asked for on most frames is not pushed past all of them at night.
+        room = max(0.0, 1.0 - (rain + snow + fog + wet_road + snow_lying))
+        fog = min(fog * FOG_BY_HOUR[hour], fog + 0.5 * room)
+    both = FOG_WITH_RAIN * min(fog, rain)
+    shares = {
+        f"rain_{name}": share * (rain - both) for name, (share, _mm) in RAIN_STRENGTHS.items()
+    }
+    shares["fog_thin"] = (1.0 - DENSE_FOG) * (fog - both)
+    shares["fog_dense"] = DENSE_FOG * (fog - both)
+    shares["fog_rain"] = both
+    shares["snow"] = snow
+    shares["wet_road"] = wet_road
+    shares["snow_lying"] = snow_lying
+    total = sum(shares.values())
+    if total >= 1.0:
+        raise ValueError(
+            f"rain, snow, fog, wet_road and snow_lying must leave room for clear weather, "
+            f"got {total:.3f}. These are shares of time, not relative weights."
+        )
+    shares["dry"] = 1.0 - total
+    return {name: shares[name] for name in WEATHER_STATES}
+
+
+def rebalanced(shares: dict[str, float], prior_power: float) -> dict[str, float]:
+    """Shares raised to a power and summed to 1 again.
+
+    At 1 they are what they were: frames in the proportions a camera sees
+    them, nearly all dry. At 0 every state is as likely as every other.
+    Between, what is rare is drawn more often than it happens and still
+    less often than what is common; 0.5 is the square root, the usual
+    choice for classes with a long tail.
+    """
+    if not 0.0 <= prior_power <= 1.0:
+        raise ValueError(f"prior_power must be between 0 and 1, got {prior_power!r}")
+    raised = {name: share**prior_power if share > 0.0 else 0.0 for name, share in shares.items()}
+    total = sum(raised.values())
+    return {name: value / total for name, value in raised.items()}
+
+
 def weather_state(
     depth_provider: SharedDepthProvider,
     *,
-    rain: float = 0.06,
-    snow: float = 0.03,
-    fog: float = 0.03,
+    rain: float = 0.065,
+    snow: float = 0.006,
+    fog: float = 0.02,
+    wet_road: float = 0.10,
+    snow_lying: float = 0.03,
     wet_rain: float = 0.35,
     wet_snow: float = 0.10,
     wet_fog: float = 0.18,
     wet_clear: float = 0.06,
-    severity: int = DEFAULT_WEATHER_SEVERITY,
+    wet_after: float = 0.15,
+    snow_on_housing: float = 0.30,
+    prior_power: float = DEFAULT_PRIOR_POWER,
+    severity: int | None = None,
     droplet_severity: int = DEFAULT_SEVERITY,
     ground_severity: int | None = None,
     night: bool = False,
+    relight: Any = None,
+    infrared: bool = False,
+    sunlit: tuple[Any, ...] = (),
+    sunlit_after: tuple[Any, ...] = (),
+    traffic: bool = True,
 ) -> A.OneOf:
-    """Exactly one atmospheric state per frame, including "clear".
+    """Exactly one state of the air and the ground per frame, including "dry".
 
     Args:
         depth_provider: one shared provider, passed to every depth-conditioned
             transform so depth is estimated once per image.
-        rain, snow, fog: absolute probability of each state. The remainder is
-            clear weather; they must sum to less than 1.
-        wet_rain, wet_snow, wet_fog, wet_clear: ``P(water on the glass | state)``.
-            Rain splashing straight onto an exposed dome is the commonest
-            source, which is why ``wet_rain`` leads; fog has to condense on
-            glass that is colder than the air, which happens but less often.
-            ``wet_clear`` covers dew, residual drops after the rain stops and
-            wind-blown spray, which is why it is not zero.
-        severity: level 1-5 for the weather itself. Defaults to
-            :data:`DEFAULT_WEATHER_SEVERITY`, which is higher than the rest of
-            the pipeline on purpose — see that constant.
+        rain, snow, fog: the share of time each is there, over the whole
+            day. Rain falls through fog a fifth of the time there is fog.
+        wet_road, snow_lying: the share of time nothing falls and the road
+            is still wet, or the snow still lies. Together with ``rain``,
+            ``snow`` and ``fog`` they must sum to less than 1.
+        wet_rain, wet_snow, wet_fog, wet_clear, wet_after:
+            ``P(water on the glass | state)``. Rain splashing straight onto
+            an exposed dome is the commonest source, which is why
+            ``wet_rain`` leads; fog has to condense on glass that is colder
+            than the air. ``wet_after`` is the drops still there on a road
+            that is still wet; ``wet_clear`` covers dew and wind-blown
+            spray, which is why it is not zero.
+        snow_on_housing: ``P(snow on the housing | snow falling)``: a cap
+            hanging into the top of the view, and patches on the glass
+            (`SnowOnHousing`). Half as likely over snow that only lies.
+        prior_power: how far the states are drawn as often as they happen:
+            1 for that, 0 for every state alike, and between them for the
+            rare ones drawn more often than they happen
+            (:func:`rebalanced`). The default is the square root.
+        severity: ``None``, the default, draws each state at its own
+            strength (:data:`RAIN_STRENGTHS`, :data:`FOG_VISIBILITY_M`,
+            :data:`SNOWFALL_MM_H`). A level 1-5 draws all falling weather
+            and all fog at that level of
+            :data:`~surmentations.presets.severity.SEVERITY` instead: a
+            pipeline of storms, for a model that has to be shown them.
         droplet_severity: level for the water on the glass, which follows the
-            **camera chain** rather than the weather. Droplets are an optics
-            -stage effect that rain merely makes likely; at the weather's
-            severity they dominate every frame they appear on, because a drop
-            on the front element is centimetres from the sensor and a raindrop
-            in the air is metres away. Measured at 512 px, severity 2 droplets
-            cost 24% of the frame's high-frequency detail against 15% at
-            severity 1, and they were the most conspicuous thing in the
-            output while the rain they signalled was invisible.
+            **camera chain** rather than the weather: a drop on the front
+            element is centimetres from the sensor and dominates any frame
+            it is on.
         ground_severity: level 0-5 from
             :data:`~surmentations.presets.severity.GROUND_SEVERITY` for
             how wet the road is under rain and how much snow has settled
-            under snow, or ``None`` — the default — to draw it per frame
-            over the whole range. Separate from ``severity`` because it is:
-            the ground follows how long the weather has lasted, so a
-            cloudburst on a dry road and a flurry over deep snow both occur.
-        night: the frame is lit artificially, so the lens is wide open. That
-            matters to the water on the glass, whose sharpness is set by the
-            aperture — at night most of it blurs away into soft patches of
-            lost contrast — and to the rain, whose shutter time is metered
-            for street lighting and so runs long.
+            under snow, or ``None`` — the default — to draw it per frame.
+        night: the frame is lit artificially. With no ``relight`` it is
+            taken as it is, a frame that was a night already: the lens is
+            wide open, rain is metered for street lighting and lit by the
+            lamps in the picture, and fog is `NightFog`.
+        relight: the transform that makes a night of a daylight frame
+            (`NightIrMode` or `NightColorMode`, at ``p=1``). Each state
+            then comes in two parts with it between them: what is in the
+            scene, the wet road and the settled snow, before it, so that
+            the night's lamps light them; and what is in the air after it,
+            lit by those lamps (`NightRain`, `NightSnow`, `NightFog`).
+        infrared: ``relight`` is the camera's own illuminator. What is in
+            the air and on the glass is lit by it from centimetres away;
+            in a night in colour there is no such lamp.
+        sunlit, sunlit_after: transforms that need the sun (cast shadows,
+            a flare), put before and after the state's own in the states
+            that can have it: dry air over a dry road or over lying snow.
+            Never where anything falls or hangs in the air.
+        traffic: by day, light the traffic's lamps in rain and fog and lay
+            its spray on a wet road. Both need a provider that reads the
+            vehicles and draw nothing without one.
 
     Raises:
-        ValueError: if the three weather probabilities sum to 1 or more.
+        ValueError: if the shares sum to 1 or more.
     """
-    total = rain + snow + fog
-    if total >= 1.0:
-        raise ValueError(
-            f"rain + snow + fog must leave room for clear weather, got {total:.3f}. "
-            "These are absolute probabilities, not relative weights."
-        )
-    glass = {"aperture_diameter_range_mm": _OPEN_IRIS_MM} if night else {}
-    # The same camera is looking at the rain: open iris, and a shutter
-    # metered for street lighting rather than for daylight.
-    # And the rain is lit by the lamps, not by a sky: streaks show near a
-    # lamp and nowhere else, a wet road reflects the lamps, and cloud
-    # overhead changes nothing about light that comes from a pole.
-    exposure = (
+    hour = "night" if night else "day"
+    shares = rebalanced(
+        weather_shares(
+            rain=rain, snow=snow, fog=fog, wet_road=wet_road, snow_lying=snow_lying, hour=hour
+        ),
+        prior_power,
+    )
+    relit = relight is not None
+    glass: dict[str, Any] = {"aperture_diameter_range_mm": _OPEN_IRIS_MM} if night else {}
+    if infrared:
+        # Water on the glass sits in the infrared ring's beam, centimetres
+        # from the lamp: under its own illuminator a wet dome glows.
+        glass["illuminator_glow_range"] = _IR_RING_GLOW
+    # Light that comes from a pole is not changed by cloud overhead.
+    lamplit: dict[str, Any] = {"overcast_range": (0.0, 0.0)} if night else {}
+    # A night frame taken as it is: the same camera is looking at the rain,
+    # with a shutter metered for street lighting, and the rain is lit by
+    # the lamps in the picture.
+    as_it_is: dict[str, Any] = (
         {
-            **glass,
+            "aperture_diameter_range_mm": _OPEN_IRIS_MM,
             "scene_illuminance_range_lux": _NIGHT_STREET_LUX,
             "lamp_glint_range": _LAMP_OVER_RANGE,
-            "overcast_range": (0.0, 0.0),
         }
-        if night
+        if night and not relit
         else {}
     )
+    by_day = traffic and not night
 
-    # Cloud changes nothing about light that comes from a pole, for snow as
-    # for rain.
-    lamplit: dict[str, Any] = {"overcast_range": (0.0, 0.0)} if night else {}
-
-    def _droplets(probability: float) -> Any:
+    def droplets(probability: float) -> Any:
         """``WaterDroplets`` at ``probability``, at this pipeline's severity and glass."""
         return _at(WaterDroplets, "WaterDroplets", probability, droplet_severity, **glass)
 
-    return A.OneOf(
-        [
-            A.Sequential(
-                [
-                    # In daylight a streak carries the sky's radiance, so
-                    # against a bright sky it has almost no contrast --
-                    # measured, lengthening the exposure 5x leaves the
-                    # high-frequency energy it adds flat, because alpha =
-                    # D/(vT) spreads the same light further. What actually
-                    # says "rain" in a daylit frame is the wet road, which
-                    # `_ground` makes likely.
-                    _at(
-                        RandomRain, "RandomRain", 1.0, severity,
-                        depth_provider=depth_provider,
-                        **_ground("RandomRain", ground_severity),
-                        **exposure,
-                    ),
-                    _droplets(wet_rain),
-                ],
-                p=rain,
-            ),
-            A.Sequential(
-                [
-                    _at(
-                        RandomSnow, "RandomSnow", 1.0, severity,
-                        depth_provider=depth_provider,
-                        **_ground("RandomSnow", ground_severity),
-                        **lamplit,
-                    ),
-                    _droplets(wet_snow),
-                ],
-                p=snow,
-            ),
-            A.Sequential(
-                [
-                    # At night fog is lit by the lamps in it, not by a sky.
-                    _at(NightFog, "NightFog", 1.0, severity, depth_provider=depth_provider)
-                    if night
-                    else _at(
-                        RandomFog, "RandomFog", 1.0, severity, depth_provider=depth_provider
-                    ),
-                    _droplets(wet_fog),
-                ],
-                p=fog,
-            ),
-            A.Sequential(
-                [_droplets(wet_clear)],
-                p=1.0 - total,
-            ),
-        ],
-        p=1.0,
-    )
-
-
-def _infrared_night(
-    depth_provider: SharedDepthProvider,
-    *,
-    severity: int,
-    weather_severity: int,
-    tail: dict[str, float],
-    rain: float = 0.06,
-    snow: float = 0.03,
-    fog: float = 0.03,
-    wet_rain: float = 0.35,
-    wet_snow: float = 0.10,
-    wet_fog: float = 0.18,
-    wet_clear: float = 0.06,
-    ground_severity: int | None = None,
-) -> A.OneOf:
-    """The IR-night branch, where rain is a different transform.
-
-    Everywhere else the weather is chosen once and applied before the sensor.
-    Here it cannot be, because rain lit by the camera's own illuminator has to
-    follow the reflectance-to-infrared conversion rather than precede it — the
-    streaks are already in infrared terms. Fog still goes before it: it veils
-    the *scene*, and the sensor then sees the veiled scene.
-
-    Rain and snow are each split in two for the same reason. The veil, and
-    the road that is wet or the snow that has settled, belong to the scene
-    and go before the conversion, drawn by `RandomRain` and `RandomSnow`
-    with no streaks and no flakes; what is falling is lit by the lamp and
-    comes after it, as `NightRain` and `NightSnow`. The rain arm used to be
-    `NightRain` alone, over a road as dry as the photograph's: a wet road
-    is darker to an infrared camera than a dry one, its film throwing the
-    lamp's light on down the road and away from the lens. Left to
-    `RandomSnow` alone they went through the conversion with everything else
-    and were lit by the depth of whatever was *behind* them, which made a
-    flake in front of the sky as dark as the sky.
-
-    So this duplicates the shared tail across the four weather states rather
-    than sharing one copy. That costs four sets of constructed objects and no
-    runtime, and it keeps the exclusivity structural: a frame still gets
-    exactly one weather state, and `NightRain` can only fire on the arm that
-    chose rain.
-    """
-    ir = _at(NightIrMode, "NightIrMode", 1.0, severity, depth_provider=depth_provider)
-
-    def _with(*before: Any) -> list[Any]:
-        """The stages given, followed by the camera stages of an infrared night."""
-        return [*before, *_stream(lit_by_mains=True, infrared=True, severity=severity, **tail)]
-
-    def _droplets(probability: float) -> Any:
-        # Water on the glass sits in the infrared ring's beam, centimetres
-        # from the lamp, and the iris is wide open. Both are properties of
-        # this lighting state, not draws: a wet dome under its own
-        # illuminator glows, and by day it cannot.
-        """``WaterDroplets`` lit by the infrared ring, with the iris wide open, as at night."""
+    def capped(probability: float) -> Any:
+        """``SnowOnHousing`` at ``probability``: lit by the infrared ring where there is one."""
         return _at(
-            WaterDroplets, "WaterDroplets", probability, severity,
-            illuminator_glow_range=_IR_RING_GLOW,
-            aperture_diameter_range_mm=_OPEN_IRIS_MM,
+            SnowOnHousing,
+            "SnowOnHousing",
+            probability,
+            droplet_severity,
+            glow_range=_IR_RING_GLOW if infrared else (0.0, 0.0),
         )
 
+    def of(name: str, level: int, **own: Any) -> dict[str, Any]:
+        """A transform's ranges: the state's own, or the level the caller fixed."""
+        if severity is not None:
+            return dict(SEVERITY[severity][name])
+        return {**SEVERITY[level][name], **own}
+
+    def wet(strength: str | None, streaks: bool) -> Any:
+        """`RandomRain` for one strength of rain, or for a road left wet with none falling."""
+        if strength is None:
+            settings: dict[str, Any] = {
+                "rain_rate_range_mm_h": (MIN_RAIN_RATE_MM_H, MIN_RAIN_RATE_MM_H),
+                **_AFTER_RAIN,
+            }
+        else:
+            settings = of("RandomRain", 2, rain_rate_range_mm_h=RAIN_STRENGTHS[strength][1])
+            settings.update(_ground("RandomRain", ground_severity))
+        if not streaks:
+            # No streaks, and no grain of far rain to go with them: the
+            # grain is that of a count of drops, a tenth of the transform's
+            # time, and with nothing falling or with the night's own
+            # transform drawing the rain there is nothing for it to match.
+            settings.update(max_streaks=0, distant_rain_range=(0.0, 0.0))
+        if by_day:
+            settings["spray_range"] = _SPRAY
+            if strength is not None:
+                settings["vehicle_lamp_range"] = _LAMPS_BY_DAY
+        return RandomRain(
+            depth_provider=depth_provider, p=1.0, **{**settings, **lamplit, **as_it_is}
+        )
+
+    def snowing(flakes: bool, lying: bool) -> Any:
+        """`RandomSnow` for snow that is falling, or for snow that only lies."""
+        if lying:
+            settings = {
+                **SEVERITY[1]["RandomSnow"],
+                "snowfall_rate_range_mm_h": (SNOWFALL_MM_H[0], SNOWFALL_MM_H[0]),
+                **_AFTER_SNOW,
+            }
+        else:
+            settings = of("RandomSnow", 1, snowfall_rate_range_mm_h=SNOWFALL_MM_H)
+            settings.update(_ground("RandomSnow", ground_severity))
+        if not flakes:
+            # As for rain without streaks: no speckle of far snow either.
+            settings.update(max_flakes=0, distant_snow_range=(0.0, 0.0))
+        return RandomSnow(depth_provider=depth_provider, p=1.0, **{**settings, **lamplit})
+
+    def fogged(thickness: str) -> Any:
+        """Fog of one thickness: lit by the sky by day, by the lamps in it at night."""
+        visibility = FOG_VISIBILITY_M[thickness]
+        if night:
+            own = {"visibility_range_m": visibility}
+            if infrared:
+                # The wall of light it raises is the illuminator's own.
+                own["illuminator_backscatter_range"] = _IR_FOG_BACKSCATTER
+            return NightFog(depth_provider=depth_provider, p=1.0, **of("NightFog", 1, **own))
+        level = 1 if thickness == "thin" else 3
+        settings = of("RandomFog", level, beta_range=(3.912 / visibility[1], 3.912 / visibility[0]))
+        if by_day:
+            settings["vehicle_lamp_range"] = _LAMPS_BY_DAY
+        return RandomFog(depth_provider=depth_provider, p=1.0, **settings)
+
+    def lit_rain(strength: str) -> Any:
+        """Rain in the light of a night that was made: `NightRain`."""
+        settings = of(
+            "NightRain",
+            2 if strength == "heavy" else 1,
+            rain_rate_range_mm_h=RAIN_STRENGTHS[strength][1],
+        )
+        if not infrared:
+            # No lamp at the lens: the rain shows in the street's light.
+            settings.update(illuminator_gain_range=(0.0, 0.0), backscatter_range=(0.0, 0.0))
+        return NightRain(p=1.0, **settings)
+
+    def lit_snow() -> Any:
+        """Falling snow in the light of a night that was made: `NightSnow`."""
+        settings = of("NightSnow", 1, snowfall_rate_range_mm_h=SNOWFALL_MM_H)
+        if not infrared:
+            settings.update(illuminator_gain_range=(0.05, 0.05), backscatter_range=(0.0, 0.0))
+        return NightSnow(p=1.0, **settings)
+
+    both = max(wet_rain, wet_fog)
+    falling, lain = capped(snow_on_housing), capped(SNOW_STAYS_ON_HOUSING * snow_on_housing)
+    if relit:
+        # A daylight frame made into a night: the scene first, then the
+        # night's light, then what is in the air in that light.
+        arms: dict[str, list[Any]] = {
+            "dry": [relight, droplets(wet_clear)],
+            "wet_road": [wet(None, streaks=False), relight, droplets(wet_after)],
+            **{
+                f"rain_{strength}": [
+                    wet(strength, streaks=False),
+                    relight,
+                    lit_rain(strength),
+                    droplets(wet_rain),
+                ]
+                for strength in RAIN_STRENGTHS
+            },
+            "fog_thin": [relight, fogged("thin"), droplets(wet_fog)],
+            "fog_dense": [relight, fogged("dense"), droplets(wet_fog)],
+            "fog_rain": [wet("light", streaks=False), relight, fogged("thin"), droplets(both)],
+            "snow": [
+                snowing(flakes=False, lying=False),
+                relight,
+                lit_snow(),
+                droplets(wet_snow),
+                falling,
+            ],
+            "snow_lying": [snowing(flakes=False, lying=True), relight, droplets(wet_clear), lain],
+        }
+    else:
+        arms = {
+            "dry": [*sunlit, droplets(wet_clear), *sunlit_after],
+            "wet_road": [wet(None, streaks=False), droplets(wet_after)],
+            **{
+                f"rain_{strength}": [wet(strength, streaks=True), droplets(wet_rain)]
+                for strength in RAIN_STRENGTHS
+            },
+            "fog_thin": [fogged("thin"), droplets(wet_fog)],
+            "fog_dense": [fogged("dense"), droplets(wet_fog)],
+            # The road is the rain's and the air is the fog's: the fog is
+            # drawn over the wet road, and rain this light has no streaks
+            # that fog would leave to be seen.
+            "fog_rain": [wet("light", streaks=False), fogged("thin"), droplets(both)],
+            "snow": [snowing(flakes=True, lying=False), droplets(wet_snow), falling],
+            "snow_lying": [
+                snowing(flakes=False, lying=True),
+                *sunlit,
+                droplets(wet_clear),
+                lain,
+                *sunlit_after,
+            ],
+        }
+    # In the order of `WEATHER_STATES`, less the states with no share.
     return A.OneOf(
         [
-            A.Sequential(
-                _with(
-                    _at(
-                        RandomRain, "RandomRain", 1.0, weather_severity,
-                        # Veil and wet road only; the streaks are NightRain's.
-                        depth_provider=depth_provider, max_streaks=0,
-                        overcast_range=(0.0, 0.0),
-                        **_ground("RandomRain", ground_severity),
-                    ),
-                    ir,
-                    _at(NightRain, "NightRain", 1.0, weather_severity),
-                    _droplets(wet_rain),
-                ),
-                p=rain,
-            ),
-            A.Sequential(
-                _with(
-                    _at(
-                        RandomSnow, "RandomSnow", 1.0, weather_severity,
-                        # Veil and settled snow only; the flakes are NightSnow's.
-                        depth_provider=depth_provider, max_flakes=0,
-                        overcast_range=(0.0, 0.0),
-                        **_ground("RandomSnow", ground_severity),
-                    ),
-                    ir,
-                    _at(NightSnow, "NightSnow", 1.0, weather_severity),
-                    _droplets(wet_snow),
-                ),
-                p=snow,
-            ),
-            A.Sequential(
-                _with(
-                    ir,
-                    # After the conversion, unlike daylight fog: the wall of
-                    # light it raises is the illuminator's own.
-                    _at(
-                        NightFog, "NightFog", 1.0, weather_severity,
-                        depth_provider=depth_provider,
-                        illuminator_backscatter_range=_IR_FOG_BACKSCATTER,
-                    ),
-                    _droplets(wet_fog),
-                ),
-                p=fog,
-            ),
-            A.Sequential(
-                _with(ir, _droplets(wet_clear)),
-                p=max(1.0 - rain - snow - fog, 1e-6),
-            ),
+            A.Sequential(arms[name], p=shares[name])
+            for name in WEATHER_STATES
+            if shares[name] > 0.0
         ],
         p=1.0,
     )
@@ -518,52 +693,69 @@ def surveillance(
     faults: float | None = None,
     dirt: float = 0.25,
     occluders: float = 0.12,
+    shadows: float = 0.30,
+    flare: float = 0.12,
     severity: int = DEFAULT_SEVERITY,
-    weather_severity: int = DEFAULT_WEATHER_SEVERITY,
+    weather_severity: int | None = None,
     ground_severity: int | None = None,
-    **weather: float,
+    prior_power: float = DEFAULT_PRIOR_POWER,
+    read_source: bool = True,
+    **weather: Any,
 ) -> A.Compose:
     """The full pipeline: weather, optics and the camera chain. **Needs CUDA.**
 
-    One lighting state and one weather state per frame, then the camera's own
-    degradations. Costs roughly 112 ms per 512 px frame on a current laptop
-    GPU; see ``docs/pipelines.md`` for the breakdown and
-    ``optimizations.md`` for where the time goes.
+    One lighting state and one state of the air and the ground per frame,
+    then the camera's own degradations. See ``docs/pipelines.md`` for what
+    every number is an estimate of.
 
     Args:
         depth_provider: construct **one**
             :class:`~surmentations.depth.provider.SharedDepthProvider` and
             pass it here, so depth is estimated once per image rather than once
-            per transform.
+            per transform. What it can read of the scene (labels, the
+            camera's mounting, the vehicles) every branch uses.
         day, lit_night, ir_night: relative weights of the three lighting
-            states. ``lit_night`` is a colour frame under street lighting;
-            ``ir_night`` is the camera cut to monochrome with its illuminator
-            on. Neither *relights* the scene — see the caveat in the docs.
+            states. ``lit_night`` is a night in colour under street
+            lighting (`NightColorMode`); ``ir_night`` is the camera cut to
+            monochrome with its illuminator on (`NightIrMode`). Which of
+            the two a camera does is a matter of where it stands, and for
+            one camera one of them should be 0.
         codec: probability of re-encoding. Usually **0** for frames already
             decoded from video, where the artefacts are already in the pixels.
         faults: probability of packet loss damaging the frame — stale,
             smeared or green bands. Unset, it is 0.03, or 0 when ``codec``
             is 0: like the codec stage it needs ffmpeg, and ``codec=0.0``
             has to go on working without one.
-        dirt, occluders: probability of grime and of insects/webs on the
-            housing. Both rise steeply with maintenance interval.
+        dirt, occluders: probability of grime, and of insects and webs on
+            the housing under the infrared ring, which is where they
+            gather; by day and under street lamps a share of it.
+        shadows, flare: probability of hard cast shadows and of a sun
+            flare, in the day frames that can have a sun: dry air, over a
+            dry road or over lying snow.
         severity: level 1-5, from
             :data:`~surmentations.presets.severity.SEVERITY`. **This is
             the knob that decides how degraded a typical frame is**, and the
             first one to change if the output looks too heavy. 1 is barely
             visible, 2 an ordinary bad day, 5 a frame you would file a fault
             report about.
-        weather_severity: level for rain, snow and fog, kept separate and
-            higher — see :data:`DEFAULT_WEATHER_SEVERITY`.
+        weather_severity: ``None``, the default, draws each state of the
+            weather at its own strength: most rain light, most fog thin.
+            A level 1-5 draws all of it at that level instead.
         ground_severity: level 0-5 for how wet the road is under rain and
             how much snow has settled under snow, or ``None`` to draw it per
-            frame over the whole range, which is the default. It is not
-            tied to ``weather_severity``: see :func:`weather_state`.
-        **weather: forwarded to :func:`weather_state`. The defaults put
-            weather on 12% of frames, which is climatological rather than
-            convenient: over 20 sample frames you will typically see one rain
-            and no snow. Raise ``rain``/``snow``/``fog`` if you want weather
-            coverage in training rather than a matched climate.
+            frame, which is the default.
+        prior_power: 1 draws the weather as often as it happens, 0.5, the
+            default, the rare states more often than that
+            (:func:`rebalanced`).
+        read_source: look at each frame before anything is done to it
+            (:func:`~surmentations.presets.source.read_source`). A frame
+            taken at night is not made into a night again, and gets the
+            weather of a night and no sun; a frame taken under a roof, which
+            only a provider with scene labels can tell, gets no weather at
+            all. ``False`` takes every frame for a dry daylight one.
+        **weather: forwarded to :func:`weather_state`: ``rain``, ``snow``,
+            ``fog``, ``wet_road`` and ``snow_lying`` as shares of time, and
+            the odds of water on the glass in each.
 
     Example:
         >>> from surmentations.depth import (
@@ -579,82 +771,96 @@ def surveillance(
         "codec": codec,
         "faults": _fault_rate(faults, codec),
     }
-    return A.Compose(
+    shared: dict[str, Any] = {
+        "severity": weather_severity,
+        "droplet_severity": severity,
+        "ground_severity": ground_severity,
+        "prior_power": prior_power,
+        **weather,
+    }
+    in_colour = _at(NightColorMode, "NightColorMode", 1.0, severity, depth_provider=depth_provider)
+    in_infrared = _at(NightIrMode, "NightIrMode", 1.0, severity, depth_provider=depth_provider)
+    by_day = A.OneOf(
         [
-            A.OneOf(
+            A.Sequential(
                 [
-                    A.Sequential(
-                        [
+                    weather_state(
+                        depth_provider,
+                        night=False,
+                        # Shadows fall on the scene and a flare is in the
+                        # lens: either side of whatever lies on the ground.
+                        sunlit=(
                             _at(
-                                CastShadows, "CastShadows", 0.30, severity,
+                                CastShadows, "CastShadows", shadows, severity,
                                 depth_provider=depth_provider,
                             ),
-                            weather_state(
-                                depth_provider,
-                                severity=weather_severity,
-                                droplet_severity=severity,
-                                night=False,
-                                ground_severity=ground_severity,
-                                **weather,
-                            ),
-                            _at(SunFlare, "SunFlare", 0.12, severity),
-                            *_stream(lit_by_mains=False, infrared=False, severity=severity, **tail),
-                        ],
-                        p=day,
+                        ),
+                        sunlit_after=(_at(SunFlare, "SunFlare", flare, severity),),
+                        **shared,
                     ),
-                    A.Sequential(
-                        [
-                            weather_state(
-                                depth_provider,
-                                severity=weather_severity,
-                                droplet_severity=severity,
-                                night=True,
-                                ground_severity=ground_severity,
-                                **weather,
-                            ),
-                            # Night under street or shop lighting, camera still
-                            # in colour: under-exposed, with the warm cast of
-                            # sodium or low-CRI LED against a daylight AWB.
-                            # Kept mild deliberately. This branch cannot
-                            # relight the scene, so a strong version does not
-                            # read as night — it reads as a sepia filter over
-                            # a daylit frame, sky and all. Measured at
-                            # -1.5 stops / 2900 K it put a 65-level red-blue
-                            # cast on the frame, which dominated everything
-                            # else the pipeline did. Under-exposure carries
-                            # the impression; the tint only needs to hint.
-                            ExposureTransient(
-                                p=1.0,
-                                exposure_error_stops_range=(-0.9, -0.35),
-                                assumed_temperature_range_k=(4900.0, 5400.0),
-                                actual_temperature_range_k=(3900.0, 4600.0),
-                            ),
-                            *_stream(lit_by_mains=True, infrared=False, severity=severity, **tail),
-                        ],
-                        p=lit_night,
-                    ),
-                    A.Sequential(
-                        [
-                            # Rain at night is a different transform and a
-                            # different place in the chain, so this branch
-                            # builds its own weather state rather than
-                            # reusing `weather_state`. See `_infrared_night`.
-                            _infrared_night(
-                                depth_provider,
-                                severity=severity,
-                                weather_severity=weather_severity,
-                                tail=tail,
-                                ground_severity=ground_severity,
-                                **weather,
-                            ),
-                        ],
-                        p=ir_night,
+                    *_stream(
+                        lit_by_mains=False,
+                        infrared=False,
+                        own_noise=False,
+                        severity=severity,
+                        **tail,
                     ),
                 ],
-                p=1.0,
-            )
-        ]
+                p=day,
+            ),
+            A.Sequential(
+                [
+                    # A night in colour, under street lighting: lit from
+                    # its lamps, where the provider knows where they are.
+                    weather_state(depth_provider, night=True, relight=in_colour, **shared),
+                    *_stream(
+                        lit_by_mains=True, infrared=False, own_noise=True, severity=severity, **tail
+                    ),
+                ],
+                p=lit_night,
+            ),
+            A.Sequential(
+                [
+                    weather_state(
+                        depth_provider, night=True, relight=in_infrared, infrared=True, **shared
+                    ),
+                    *_stream(
+                        lit_by_mains=True,
+                        infrared=True,
+                        own_noise=True,
+                        severity=severity,
+                        **tail,
+                    ),
+                ],
+                p=ir_night,
+            ),
+        ],
+        p=1.0,
     )
+    if not read_source:
+        return A.Compose([by_day])
+    # A frame that is a night already is not lit again: it gets a night's
+    # weather, in the light it has. One under a roof gets the camera alone.
+    at_night = A.Sequential(
+        [
+            weather_state(depth_provider, night=True, **shared),
+            *_stream(
+                lit_by_mains=True,
+                infrared=False,
+                own_noise=False,
+                severity=severity,
+                **tail,
+            ),
+        ],
+        p=1.0,
+    )
+    indoors = A.Sequential(
+        _stream(
+            lit_by_mains=True, infrared=False, own_noise=False, severity=severity, **tail
+        ),
+        p=1.0,
+    )
+    return A.Compose([BySource(by_day, at_night, indoors, depth_provider)])
 
 
 def surveillance_lite(
@@ -665,22 +871,19 @@ def surveillance_lite(
     dirt: float = 0.25,
     occluders: float = 0.12,
     droplets: float = 0.10,
+    flare: float = 0.05,
     severity: int = DEFAULT_SEVERITY,
 ) -> A.Compose:
     """Everything that does not need depth. **CPU only, no GPU required.**
 
-    The weather effects, cast shadows and IR night mode all condition on a
+    The weather effects, cast shadows and both night modes condition on a
     monocular depth estimate, which costs a fixed ~46 ms and a CUDA device.
     Dropping them leaves the lens and the camera chain — which is most of what
     actually degrades a surveillance stream, and none of it needs a GPU.
 
-    Measured at 512 px it is about **1.9x cheaper** than :func:`surveillance`
-    (60 ms median against 112 ms) — a useful saving but not a transformative
-    one, because the expensive lens and ISP effects are in both. Its real
-    advantage is that it needs **no GPU at all**, so it runs in a
-    ``DataLoader`` worker on any machine. Use it when you have no GPU to spare
-    in the input pipeline, when your data already contains real weather, or as
-    the cheap majority of a mixed pipeline.
+    Use it when you have no GPU to spare in the input pipeline, when your
+    data already contains real weather, or as the cheap majority of a mixed
+    pipeline.
 
     What it cannot do: no fog, rain or snow, no cast shadows, and **no night**
     at all. The ``night`` fraction only turns the mains-lit artefacts on — the
@@ -698,6 +901,9 @@ def surveillance_lite(
         dirt, occluders: grime and insects on the housing.
         droplets: water on the front element from dew, spray or rain this
             pipeline is not rendering.
+        flare: probability of a sun flare by day. Lower than
+            :func:`surveillance`'s, which draws it only on the frames it
+            knows to be dry: here nothing says whether the sun is out.
         severity: level 1-5, as for :func:`surveillance`.
     """
     tail = {
@@ -713,27 +919,37 @@ def surveillance_lite(
                     A.Sequential(
                         [
                             _at(WaterDroplets, "WaterDroplets", droplets, severity),
-                            _at(SunFlare, "SunFlare", 0.12, severity),
-                            *_stream(lit_by_mains=False, infrared=False, severity=severity, **tail),
+                            _at(SunFlare, "SunFlare", flare, severity),
+                            *_stream(
+                                lit_by_mains=False,
+                                infrared=False,
+                                own_noise=False,
+                                severity=severity,
+                                **tail,
+                            ),
                         ],
                         p=1.0 - night,
                     ),
                     # Deliberately *not* an under-exposed, warm-cast copy of
-                    # the day branch. Without `NightIrMode` there is nothing
-                    # here that can render night, and a colour shift on a
-                    # daylit frame does not approximate one — measured, it put
-                    # a 29-level median red-blue cast across the pipeline and
-                    # dominated every other effect. All "night" means here is
-                    # that the lighting is artificial, which raises the mains
-                    # flicker and the denoiser's workload. Use `surveillance`
-                    # if you need night as a domain.
+                    # the day branch. Nothing here can render night, and a
+                    # colour shift on a daylit frame does not approximate
+                    # one. All "night" means here is that the lighting is
+                    # artificial, which raises the mains flicker and the
+                    # denoiser's workload. Use `surveillance` if you need
+                    # night as a domain.
                     A.Sequential(
                         [
                             _at(
                                 WaterDroplets, "WaterDroplets", droplets, severity,
                                 aperture_diameter_range_mm=_OPEN_IRIS_MM,
                             ),
-                            *_stream(lit_by_mains=True, infrared=False, severity=severity, **tail),
+                            *_stream(
+                                lit_by_mains=True,
+                                infrared=False,
+                                own_noise=False,
+                                severity=severity,
+                                **tail,
+                            ),
                         ],
                         p=night,
                     ),

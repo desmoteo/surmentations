@@ -171,6 +171,26 @@ def test_night_fog_glows_round_the_lamp_and_dims_its_core() -> None:
     assert corner < 30.0, "fog far from any light must stay dark"
 
 
+def test_a_brightly_lit_road_is_not_a_lamp_to_the_fog() -> None:
+    """A lamp was recorded at the sensor's limit and was many times
+    brighter; the road under it was recorded as bright as it was. Counted
+    as lamps, the pixels of a lit road that touched full scale came through
+    thin fog several times over it: a white sheet with a ragged edge."""
+    rng = np.random.default_rng(0)
+    image = _night()
+    # A pool of light on the road, grainy, some of it at full scale.
+    pool = np.clip(rng.normal(238.0, 12.0, size=(70, 120)), 0, 255).astype(np.uint8)
+    image[150:220, 60:180] = pool[..., None]
+    assert float((image[150:220, 60:180] >= 250).mean()) > 0.1
+    fogged = _fog(image, 400.0).astype(np.float32)
+    road = fogged[160:210, 70:170].mean(axis=2)
+    assert float((road >= 250).mean()) < 0.02, "the lit road, blown out by the fog"
+    assert float(road.std()) < 14.0, "a ragged sheet where the road's grain crossed full scale"
+    # The lamp is still a lamp: its light is in the fog round it.
+    clear = image.astype(np.float32)
+    assert float(_ring(fogged, LAMP, 8, 20).mean()) > float(_ring(clear, LAMP, 8, 20).mean()) + 10.0
+
+
 def test_night_fog_is_a_veil_and_not_a_blur() -> None:
     """The failure this replaced: with a halo and no veil, fog was a dimmed
     frame plus a blurred copy of it. Real fog lifts the blacks and leaves
@@ -347,3 +367,48 @@ def test_a_lamp_lays_a_long_streak_down_a_soaked_road() -> None:
 
     damp = road(0.9)
     assert float(damp[far_down, 116:125].mean()) < 1.2 * float(damp[far_down, 30:60].mean())
+
+
+# ------------------------------------------------------------------ night snow
+
+
+def test_a_near_flake_is_a_long_bright_streak_uneven_along_it_and_soft_at_its_edge() -> None:
+    """Close to the lamp and behind a slow shutter a flake is a long bright
+    streak, and it should be. What it was besides, and a real one is not:
+    one level from end to end, and ruled at its edge."""
+    from surmentations.atmosphere.night_snow import NightSnow
+
+    def flake(x: float, smear: float) -> dict[str, list[float]]:
+        return {
+            "x": [x], "y": [120.0], "distance": [0.4], "radius": [4.0], "blur_radius": [1.0],
+            "smear": [smear], "dir_x": [0.0], "dir_y": [1.0], "brightness": [0.6],
+        }
+
+    def drawn(x: float, smear: float, seed: int = 1) -> np.ndarray:
+        flakes = {
+            name: np.array(values, dtype=np.float32) for name, values in flake(x, smear).items()
+        }
+        snow = NightSnow(p=1.0)
+        out = snow.apply(
+            np.zeros((SIZE, SIZE, 3), dtype=np.float32),
+            flakes=flakes,
+            glare=0.0,
+            beam=np.ones((SIZE, SIZE), dtype=np.float32),
+            backscatter=0.0,
+            tumble_seed=seed,
+        )
+        return np.asarray(out[..., 0])
+
+    near = drawn(120.0, 120.0)
+    along = near[75:165, 120]
+    assert float(along.min()) > 0.15, "a streak with a gap in it"
+    assert float(along.max()) > 1.25 * float(along.min()), "one level from end to end"
+    across = near[120, 108:133]
+    part_lit = (across > 0.1 * across.max()) & (across < 0.8 * across.max())
+    assert int(part_lit.sum()) >= 2, "a ruled edge"
+    # As long as it was: the shutter's doing, and nothing here shortens it.
+    lit_rows = np.flatnonzero(near[:, 120] > 0.2 * float(near.max()))
+    assert int(np.ptp(lit_rows)) > 100
+    # Another fall, another turning; and a far flake is left as it was drawn.
+    assert not np.array_equal(near, drawn(120.0, 120.0, seed=2))
+    assert np.array_equal(drawn(120.0, 2.0, seed=1), drawn(120.0, 2.0, seed=2))

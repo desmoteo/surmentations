@@ -66,8 +66,13 @@ from surmentations.utils.channels import channel_sum
 from surmentations.utils.color import TYPICAL_SCENE_ALBEDO
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
 from surmentations.utils.sky import lift_sky, scene_extent_m, sky_to_depth_edge, sky_weight
-from surmentations.utils.sources import light_field, source_mask
+from surmentations.utils.sources import lamp_mask, light_field
 
+# A lamp against a lit surface that reaches full scale: the share of the
+# frame's diagonal its surroundings are averaged over, and the levels of
+# that average, in linear light, from which a bright patch is no lamp at
+# all and under which it wholly is.
+_LAMP_STANDS_ALONE = (0.03, 0.6, 0.35)
 # Koschmieder: visibility is the distance at which contrast falls to 2%.
 _KOSCHMIEDER = 3.912
 
@@ -286,7 +291,21 @@ class NightFog(CameraTransform):
 
         # Lamps counted at what they plausibly were, not at where the
         # sensor clipped: a lamp seen through thin fog is still clipped.
-        clipped = source_mask(linear)[..., None]
+        # Lamps, and not whatever is near full scale: the road under a
+        # lamp is as bright as the sensor records and no brighter, and
+        # counted as a lamp it came through thin fog as a white sheet with
+        # a ragged edge where its grain crossed the level.
+        # And a lamp stands in the dark: where everything round a bright
+        # patch is bright too, it is a lit surface, however compact the
+        # part of it that reaches full scale.
+        around = light_field(linear, _LAMP_STANDS_ALONE[0]).max(axis=2)
+        alone = np.clip(
+            (_LAMP_STANDS_ALONE[1] - around)
+            / (_LAMP_STANDS_ALONE[1] - _LAMP_STANDS_ALONE[2]),
+            0.0,
+            1.0,
+        )
+        clipped = (lamp_mask(linear) * alone)[..., None]
         radiance = linear * (1.0 + (_OVER_RANGE - 1.0) * clipped)
 
         # The halo: what the fog took from each lamp, returned around it.

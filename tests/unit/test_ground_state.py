@@ -139,8 +139,10 @@ def _wet_share(transform: A.BasicTransform, samples: int = 60) -> tuple[float, l
 
 def test_pipelines_take_the_ground_separately_from_the_weather() -> None:
     def state(**kwargs: object) -> A.BasicTransform:
+        """Rain falling on nearly every frame, and no road left wet without it."""
+        weather = {"rain": 0.97, "snow": 0.01, "fog": 0.0, "wet_road": 0.0, "snow_lying": 0.0}
         return A.Compose(
-            [weather_state(_provider(), rain=0.97, snow=0.01, fog=0.01, **kwargs)]  # type: ignore[arg-type]
+            [weather_state(_provider(), **weather, prior_power=1.0, **kwargs)]  # type: ignore[arg-type]
         )
 
     assert _wet_share(state(severity=5, ground_severity=0))[0] == 0.0
@@ -148,10 +150,11 @@ def test_pipelines_take_the_ground_separately_from_the_weather() -> None:
     assert share == 1.0 and max(darkening) <= 0.55
 
     # Left unset, every state of the ground turns up under one weather level,
-    # and the road is wet in about half the rain frames: it was 0.85 until
-    # a wet road turned out to be two to three times the cost of the frame.
+    # and the road is wet under nine rains in ten: rain mostly falls on a
+    # road that is wet already. It was half, to spare the cost of the wet
+    # road, and before that 0.85.
     share, darkening = _wet_share(state(severity=3), samples=150)
-    assert 0.35 < share < 0.65
+    assert 0.8 < share < 0.98
     assert min(darkening) < 0.5 and max(darkening) > 0.8
 
     with pytest.raises(ValueError, match="ground_severity"):

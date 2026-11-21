@@ -18,19 +18,25 @@ from surmentations.depth.provider import SharedDepthProvider
 from surmentations.diagnostics import recording
 from surmentations.perception import SceneClass, SceneLabelEstimator
 from surmentations.utils.road import (
+    GroundView,
     Lanes,
+    RoadFrame,
+    RoadVehicle,
+    ground_view,
     painted_lines,
     read_road,
     road_frame,
     road_lanes,
     road_mist,
     road_vehicles,
+    spaced_speeds,
     spray_amount,
     straighten,
     traffic_directions,
     vehicle_facing,
     vehicle_lamps,
     vehicle_spray,
+    wake_lies,
     wheel_tracks,
 )
 
@@ -1174,3 +1180,242 @@ def test_rain_is_drawn_in_front_of_spray() -> None:
     assert float(flat.max()) < 0.5, "the mist does not hide the scene"
     spread = hidden.max(axis=(0, 1)) - hidden.min(axis=(0, 1))
     assert float(spread.max()) > 4.0, "the mist hid the rain in front of it"
+
+
+# ----------------------------------------------------------- wakes laid on the ground
+
+# A camera eight metres up, looking twenty degrees down, through a lens of
+# 300 pixels: its ground in its own frame, x to the right, y down the
+# picture, z along the lens.
+_FOCAL = 300.0
+_MAST_M = 8.0
+_TILT = np.deg2rad(20.0)
+_UP = np.array([0.0, -np.cos(_TILT), -np.sin(_TILT)])
+_AHEAD = np.array([0.0, -np.sin(_TILT), np.cos(_TILT)])
+_RIGHT = np.array([1.0, 0.0, 0.0])
+_GROUND = GroundView(-_MAST_M * _UP, _UP, _FOCAL)
+
+
+def _seen_at(point: np.ndarray) -> tuple[float, float]:
+    """The column and row the mast's camera sees a point at."""
+    return (
+        _FOCAL * float(point[0] / point[2]) + 0.5 * WIDTH,
+        _FOCAL * float(point[1] / point[2]) + 0.5 * HEIGHT,
+    )
+
+
+def _on_the_ground(aside_m: float, ahead_m: float) -> np.ndarray:
+    """A point of the ground, so far to the right of the mast's foot and so far ahead of it."""
+    return np.asarray(-_MAST_M * _UP + aside_m * _RIGHT + ahead_m * _AHEAD)
+
+
+def _boxed_car(
+    aside_m: float,
+    ahead_m: float,
+    turned_deg: float = 0.0,
+    coming: bool = False,
+    lamps: bool = True,
+    speed_kmh: float = 100.0,
+) -> tuple[RoadVehicle, np.ndarray, np.ndarray]:
+    """A car on the mast's ground as a network would give it, the place of its rear, its heading.
+
+    A box 4.5 m long, 1.8 m wide and 1.5 m tall whose near end is at the
+    place given, turned so many degrees to the right of straight ahead
+    and driving that way, or towards the camera when ``coming``. Its
+    outline is the box as the camera sees it, and its lamps are on the end
+    that is seen.
+    """
+    angle = np.deg2rad(turned_deg)
+    along = np.cos(angle) * _AHEAD + np.sin(angle) * _RIGHT
+    across = np.cross(_UP, along)
+    near = _on_the_ground(aside_m, ahead_m)
+    corners = [
+        near + far * along + side * across + tall * _UP
+        for far in (0.0, 4.5)
+        for side in (-0.9, 0.9)
+        for tall in (0.0, 1.5)
+    ]
+    hull = cv2.convexHull(np.array([_seen_at(corner) for corner in corners], dtype=np.float32))
+    outline = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    cv2.fillConvexPoly(outline, np.rint(hull).astype(np.int32), 1)
+    rows, columns = np.nonzero(outline)
+    found = None
+    if lamps:
+        places = [_seen_at(near + side * across + 0.8 * _UP) for side in (-0.7, 0.7)]
+        found = np.array([(x, y, 1.0, 1.0, 0.9) for x, y in places], dtype=np.float32)
+    foot_column, foot_row = _seen_at(near)
+    foot = (min(int(round(foot_row)), HEIGHT - 1), int(round(foot_column)))
+    away = -1.0 if coming else 1.0
+    heading = -along if coming else along
+    rear = near + 4.5 * along if coming else near
+    vehicle = RoadVehicle(1, rows, columns, foot, 0.1, away, away, speed_kmh, found, True)
+    return vehicle, rear, heading
+
+
+def _sideways_road() -> RoadFrame:
+    """A road over the whole frame whose own direction is said to run across the picture."""
+    frame = road_frame(np.ones((HEIGHT, WIDTH), dtype=bool))
+    assert frame is not None
+    across = np.zeros((HEIGHT, WIDTH, 2), dtype=np.float32)
+    across[..., 0] = 1.0
+    return frame._replace(along=across)
+
+
+def test_the_ground_of_a_scene_is_the_plane_its_depth_lies_on() -> None:
+    rows, columns = np.mgrid[0:HEIGHT, 0:WIDTH]
+    rays = np.stack(
+        [(columns - 0.5 * WIDTH) / _FOCAL, (rows - 0.5 * HEIGHT) / _FOCAL, np.ones_like(rows)],
+        axis=2,
+    )
+    falling = rays @ _UP
+    depth = np.where(falling < -0.02, -_MAST_M / np.minimum(falling, -0.02), 400.0)
+    ground = ground_view(depth.astype(np.float32), falling < -0.05, _FOCAL)
+    assert ground is not None
+    assert float(ground.up @ _UP) > 0.999
+    assert float(ground.middle @ ground.up) == pytest.approx(-_MAST_M, abs=0.2)
+    assert ground_view(depth.astype(np.float32), np.zeros((HEIGHT, WIDTH), bool), _FOCAL) is None
+
+
+def test_a_vehicle_points_the_way_its_own_lamps_show_and_not_the_way_of_the_road() -> None:
+    """A car off to one side that drives straight ahead is seen from behind
+    and from its near side. Its heading is read off that, in metres on the
+    ground, whatever the road's direction in the picture is said to be."""
+    frame = _sideways_road()
+    for aside, ahead, turned in ((6.0, 25.0, 0.0), (-7.0, 30.0, 0.0), (5.0, 28.0, 20.0)):
+        for coming in (False, True):
+            vehicle, rear, heading = _boxed_car(aside, ahead, turned, coming=coming)
+            (lie,) = wake_lies(frame, [vehicle], _GROUND, (HEIGHT, WIDTH))
+            assert lie is not None
+            assert float(lie[1] @ heading) > np.cos(np.deg2rad(10.0)), (aside, turned, coming)
+            assert abs(float(lie[1] @ _UP)) < 1e-6, "a heading off the ground"
+            assert float(np.linalg.norm(lie[0] - rear)) < 1.5
+            assert 0.8 < lie[2] < 1.25
+
+
+def test_a_vehicle_with_no_lamps_found_takes_its_neighbour_s_heading_or_the_line_of_sight() -> None:
+    frame = _sideways_road()
+    read, _rear, heading = _boxed_car(6.0, 25.0)
+    unread, _rear, _heading = _boxed_car(9.5, 31.0, lamps=False)
+    # Beside one that was read: parallel to it, though it is further off
+    # the camera's axis and its own line of sight is turned further.
+    _first, second = wake_lies(frame, [read, unread], _GROUND, (HEIGHT, WIDTH))
+    assert second is not None and float(second[1] @ heading) > np.cos(np.deg2rad(10.0))
+    # Going the other way, it is turned round.
+    oncoming = unread._replace(shows=-1.0, away=-1.0)
+    _first, second = wake_lies(frame, [read, oncoming], _GROUND, (HEIGHT, WIDTH))
+    assert second is not None and float(second[1] @ heading) < -np.cos(np.deg2rad(10.0))
+    # Alone, with its end seen: along the line from the camera, and not
+    # the road's direction, which here runs across the picture.
+    (alone,) = wake_lies(frame, [unread], _GROUND, (HEIGHT, WIDTH))
+    assert alone is not None
+    sight = _on_the_ground(9.5, 31.0) - _on_the_ground(0.0, 0.0)
+    assert float(alone[1] @ sight) / float(np.linalg.norm(sight)) > 0.999
+    # Showing neither end, it has only its road to go by.
+    (by_road,) = wake_lies(frame, [unread._replace(shows=0.0)], _GROUND, (HEIGHT, WIDTH))
+    assert by_road is not None and abs(float(by_road[1] @ _RIGHT)) > 0.9
+
+
+def _wake(vehicle: RoadVehicle, frame: RoadFrame, seed: int, ground: bool = True) -> np.ndarray:
+    """One vehicle's spray, laid on the mast's ground or in the picture."""
+    outline = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    outline[vehicle.rows, vehicle.columns] = True
+    return vehicle_spray(
+        frame,
+        outline,
+        np.random.default_rng(seed),
+        traffic=[vehicle],
+        ground=_GROUND if ground else None,
+    )
+
+
+def test_a_wake_lies_behind_its_vehicle_on_the_ground_and_not_along_the_picture_s_road() -> None:
+    """The fault this is for: a car off to one side, seen from behind, with
+    its spray laid sideways because the road's direction in the picture
+    was wrong there."""
+    frame = _sideways_road()
+    for aside in (6.0, -6.0):
+        vehicle, rear, heading = _boxed_car(aside, 25.0)
+        behind = _seen_at(rear - 7.0 * heading + 0.5 * _UP)
+        foot_row, foot_column = vehicle.foot
+        for seed in range(6):
+            spray = _wake(vehicle, frame, seed)
+            assert float(spray.max()) > 0.3
+            rows, columns = np.nonzero(spray > 0.25 * float(spray.max()))
+            # Below its vehicle in the picture, which is nearer the camera,
+            # and over the point of the road seven metres behind it.
+            assert float(np.mean(rows > foot_row - 4)) > 0.9
+            assert spray[int(behind[1]), int(behind[0])] > 0.2 * float(spray.max())
+            # Not out along the picture's row, where the road was said to run.
+            level = np.abs(rows - foot_row) < 6
+            assert float(np.mean(level & (np.abs(columns - foot_column) > 30))) < 0.02
+            # In the picture alone it goes where the road is said to go.
+            flat = _wake(vehicle, frame, seed, ground=False)
+            _rows, flat_columns = np.nonzero(flat > 0.25 * float(flat.max()))
+            assert float(np.mean(np.abs(flat_columns - foot_column) > 30)) > 0.3
+
+
+def test_a_wake_is_as_long_in_the_picture_as_its_metres_are_at_its_distance() -> None:
+    """Twenty metres of wake is half the frame behind a car near by and a
+    few rows behind one far off."""
+    frame = _sideways_road()
+    lengths = []
+    for ahead in (36.0, 72.0, 144.0):
+        vehicle, rear, heading = _boxed_car(0.0, ahead)
+        spray = np.mean([_wake(vehicle, frame, seed) for seed in range(6)], axis=0)
+        rows = np.nonzero((spray > 0.1 * float(spray.max())).any(axis=1))[0]
+        lengths.append(float(np.ptp(rows)))
+        # No further than its metres: 0.75 s at 100 km/h, and the reach of
+        # its last puff.
+        end = _seen_at(rear - 28.0 * heading)
+        assert float(rows.max()) <= min(end[1], HEIGHT - 1) + 2
+    assert lengths[0] > 2.0 * lengths[1] > 4.0 * lengths[2]
+
+
+def test_a_vehicle_coming_on_trails_its_wake_up_the_road_behind_it() -> None:
+    frame = _sideways_road()
+    vehicle, rear, heading = _boxed_car(3.0, 22.0, coming=True)
+    beyond = _seen_at(rear - 6.0 * heading + 0.8 * _UP)
+    foot_row = vehicle.foot[0]
+    for seed in range(6):
+        spray = _wake(vehicle, frame, seed)
+        assert float(spray[foot_row + 3 :].max(initial=0.0)) < 0.05 * float(spray.max())
+        assert spray[int(beyond[1]), int(beyond[0])] > 0.0
+        # Hidden by the vehicle that threw it, but for its feathered edge.
+        within = cv2.erode(
+            np.isin(np.arange(HEIGHT * WIDTH), vehicle.rows * WIDTH + vehicle.columns)
+            .reshape(HEIGHT, WIDTH)
+            .astype(np.uint8),
+            np.ones((9, 9), np.uint8),
+        )
+        assert float(spray[within > 0].max()) < 0.2 * float(spray.max())
+
+
+def test_traffic_goes_no_faster_than_the_gap_ahead_of_it_allows() -> None:
+    """A frame does not say how fast its traffic goes, but it says how
+    close it is: a column six metres apart is not doing a hundred."""
+    frame = _sideways_road()
+    lead, _rear, _heading = _boxed_car(2.0, 40.5)
+    follower, _rear, _heading = _boxed_car(2.0, 30.0)
+    beside, _rear, _heading = _boxed_car(-2.0, 31.0)
+    oncoming, _rear, _heading = _boxed_car(-6.0, 24.0, coming=True)
+    spaced = spaced_speeds(frame, [lead, follower, beside, oncoming], _GROUND, (HEIGHT, WIDTH))
+    # Six metres behind the car ahead: 21.6 km/h at a second's headway.
+    assert 14.0 < spaced[1].speed_kmh < 30.0
+    # The car ahead moves with it, and the cars in other lanes as they did.
+    assert spaced[0].speed_kmh < 1.3 * spaced[1].speed_kmh
+    assert spaced[2].speed_kmh == beside.speed_kmh
+    assert spaced[3].speed_kmh == oncoming.speed_kmh
+    # With room ahead, the speed that was drawn.
+    far_apart = spaced_speeds(
+        frame, [_boxed_car(2.0, 90.0)[0], follower], _GROUND, (HEIGHT, WIDTH)
+    )
+    assert far_apart[1].speed_kmh == follower.speed_kmh
+    # And a column throws up next to none of the spray it would at speed.
+    outline = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    for vehicle in (lead, follower):
+        outline[vehicle.rows, vehicle.columns] = True
+    kwargs = {"ground": _GROUND}
+    column = [lead, follower]
+    fast = vehicle_spray(frame, outline, np.random.default_rng(0), traffic=column, **kwargs)
+    slow = vehicle_spray(frame, outline, np.random.default_rng(0), traffic=spaced[:2], **kwargs)
+    assert float(slow.sum()) < 0.1 * float(fast.sum())
