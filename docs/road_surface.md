@@ -126,9 +126,9 @@ Cues in yellow, paint in magenta, lane lines in cyan, tracks in orange:
 Two tracks per lane where traffic has worn the settled snow off, with snow
 left between the wheels, between the lanes and along the verges. Nothing
 about them is even, because ruled lines are a pedestrian crossing: each
-lane carries its own share of the traffic, a track strays a little from
-side to side, and it is worn deep in one stretch and nearly gone in the
-next. Far down the road the tracks run together into a greyer road, as they
+lane carries its own share of the traffic, a track drifts a little from
+side to side over tens of metres, as a driver's line does, and it is worn
+deep in one stretch and nearly gone in the next. Far down the road the tracks run together into a greyer road, as they
 do to the eye. The road under them is wet and darker than it was dry.
 
 `wheel_track_range` runs from untouched snow (0) through two ruts a tyre
