@@ -28,7 +28,9 @@ from typing import Any
 import albumentations as A
 
 from surmentations.atmosphere.fog import RandomFog
+from surmentations.atmosphere.heat_shimmer import HeatShimmer
 from surmentations.atmosphere.night_fog import NightFog
+from surmentations.atmosphere.night_insects import NightInsects
 from surmentations.atmosphere.night_rain import NightRain
 from surmentations.atmosphere.night_snow import NightSnow
 from surmentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
@@ -51,6 +53,7 @@ from surmentations.lens import (
     HousingOccluders,
     SnowOnHousing,
     SourceGlare,
+    SpiderWeb,
     SunFlare,
     WaterDroplets,
 )
@@ -335,6 +338,18 @@ _AFTER_SNOW = {"accumulation_probability": 1.0, "accumulation_strength_range": (
 #: provider that reads the vehicles, and draw nothing without one.
 _LAMPS_BY_DAY = (0.6, 1.2)
 _SPRAY = (0.2, 0.8)
+#: How often the infrared ring has insects in its beam, on a night with
+#: nothing falling and no snow; how often a web is spun across the housing,
+#: on an infrared night without snow; and how often the air shimmers over
+#: dry ground in the sun. Each is averaged over the year, at the same site
+#: as the shares of time: insects fly on the warm nights, spiders build from
+#: spring to autumn, and the ground is hot enough on sunny summer days.
+DEFAULT_INSECTS = 0.25
+DEFAULT_WEBS = 0.10
+DEFAULT_SHIMMER = 0.12
+#: Turbulence over sunlit dry ground, as the base-10 logarithm of ``Cn2``
+#: in ``m^-2/3``: a mild afternoon to tarmac at noon.
+SHIMMER_LOG10_CN2 = (-13.5, -12.0)
 #: The power the shares are raised to by default: the square root, which
 #: over-samples what is rare without making it common.
 DEFAULT_PRIOR_POWER = 0.5
@@ -433,6 +448,9 @@ def weather_state(
     wet_clear: float = 0.06,
     wet_after: float = 0.15,
     snow_on_housing: float = 0.30,
+    insects: float = DEFAULT_INSECTS,
+    webs: float = DEFAULT_WEBS,
+    shimmer: float = DEFAULT_SHIMMER,
     prior_power: float = DEFAULT_PRIOR_POWER,
     severity: int | None = None,
     droplet_severity: int = DEFAULT_SEVERITY,
@@ -464,6 +482,25 @@ def weather_state(
         snow_on_housing: ``P(snow on the housing | snow falling)``: a cap
             hanging into the top of the view, and patches on the glass
             (`SnowOnHousing`). Half as likely over snow that only lies.
+        insects: ``P(insects in the illuminator's beam | infrared night)``
+            on a night with nothing falling and no snow (`NightInsects`).
+            A lamp at night collects them on warm nights; in rain and fog
+            they do not fly. Averaged over the year, as there is no season
+            here but the snow: a dry winter night has them at this rate too.
+        webs: ``P(a web across the housing | infrared night)`` in any
+            weather but snow (`SpiderWeb`). Rain and fog bead it, which is
+            what it shows by; with snow the spiders are not out. Insects
+            and a web are lit by the camera's own illuminator from
+            centimetres away, so both are drawn only with ``infrared``: by
+            day and in a night in colour they are too thin and too dim to
+            see. 0 leaves either out.
+        shimmer: ``P(heat shimmer | dry air over a dry road)``, by day
+            (`HeatShimmer`): the sun on dry ground warmer than the air. It
+            moves a point by a pixel only over a path of a kilometre or so
+            seen through a long lens, so over the 3 to 50 m a provider
+            takes a scene to span by default it changes nothing, rightly.
+            Give the provider the depth and the mounting of a long view to
+            see it. 0 leaves it out.
         prior_power: how far the states are drawn as often as they happen:
             1 for that, 0 for every state alike, and between them for the
             rare ones drawn more often than they happen
@@ -477,7 +514,8 @@ def weather_state(
         droplet_severity: level for the water on the glass, which follows the
             **camera chain** rather than the weather: a drop on the front
             element is centimetres from the sensor and dominates any frame
-            it is on.
+            it is on. So does what else is at the housing: snow on it, a
+            web across it, insects in its lamp's beam.
         ground_severity: level 0-5 from
             :data:`~surmentations.presets.severity.GROUND_SEVERITY` for
             how wet the road is under rain and how much snow has settled
@@ -555,6 +593,25 @@ def weather_state(
             return dict(SEVERITY[severity][name])
         return {**SEVERITY[level][name], **own}
 
+    def lamp_lit(factory: Any, name: str, probability: float) -> list[Any]:
+        """What the infrared ring lights in front of the lens, through the night's open iris.
+
+        Nothing without the ring, and nothing at probability zero: left out
+        rather than built and never fired, so that a caller who turns one
+        off has the pipeline's draws as they were without it.
+        """
+        if not infrared or probability <= 0.0:
+            return []
+        return [
+            _at(
+                factory,
+                name,
+                probability,
+                droplet_severity,
+                aperture_diameter_range_mm=_OPEN_IRIS_MM,
+            )
+        ]
+
     def wet(strength: str | None, streaks: bool) -> Any:
         """`RandomRain` for one strength of rain, or for a road left wet with none falling."""
         if strength is None:
@@ -631,24 +688,49 @@ def weather_state(
 
     both = max(wet_rain, wet_fog)
     falling, lain = capped(snow_on_housing), capped(SNOW_STAYS_ON_HOUSING * snow_on_housing)
+    # In the ring's light, nearer the lens than anything in the air and
+    # further from it than the glass: insects fly a metre or two out, where
+    # nothing falls, and a web hangs a hand's width out, in any weather but
+    # snow. Neither is drawn where snow falls or lies: it is not their season.
+    flying = lamp_lit(NightInsects, "NightInsects", insects)
+    web = lamp_lit(SpiderWeb, "SpiderWeb", webs)
+    # The air over dry ground in the sun, between the scene and the lens.
+    shimmering = (
+        [
+            HeatShimmer(
+                depth_provider=depth_provider,
+                p=shimmer,
+                **of("HeatShimmer", 1, log10_cn2_range=SHIMMER_LOG10_CN2),
+            )
+        ]
+        if shimmer > 0.0 and not night
+        else []
+    )
     if relit:
         # A daylight frame made into a night: the scene first, then the
         # night's light, then what is in the air in that light.
         arms: dict[str, list[Any]] = {
-            "dry": [relight, droplets(wet_clear)],
-            "wet_road": [wet(None, streaks=False), relight, droplets(wet_after)],
+            "dry": [relight, *flying, *web, droplets(wet_clear)],
+            "wet_road": [wet(None, streaks=False), relight, *flying, *web, droplets(wet_after)],
             **{
                 f"rain_{strength}": [
                     wet(strength, streaks=False),
                     relight,
                     lit_rain(strength),
+                    *web,
                     droplets(wet_rain),
                 ]
                 for strength in RAIN_STRENGTHS
             },
-            "fog_thin": [relight, fogged("thin"), droplets(wet_fog)],
-            "fog_dense": [relight, fogged("dense"), droplets(wet_fog)],
-            "fog_rain": [wet("light", streaks=False), relight, fogged("thin"), droplets(both)],
+            "fog_thin": [relight, fogged("thin"), *web, droplets(wet_fog)],
+            "fog_dense": [relight, fogged("dense"), *web, droplets(wet_fog)],
+            "fog_rain": [
+                wet("light", streaks=False),
+                relight,
+                fogged("thin"),
+                *web,
+                droplets(both),
+            ],
             "snow": [
                 snowing(flakes=False, lying=False),
                 relight,
@@ -660,7 +742,7 @@ def weather_state(
         }
     else:
         arms = {
-            "dry": [*sunlit, droplets(wet_clear), *sunlit_after],
+            "dry": [*sunlit, *shimmering, droplets(wet_clear), *sunlit_after],
             "wet_road": [wet(None, streaks=False), droplets(wet_after)],
             **{
                 f"rain_{strength}": [wet(strength, streaks=True), droplets(wet_rain)]
@@ -704,6 +786,9 @@ def surveillance(
     occluders: float = 0.12,
     shadows: float = 0.30,
     flare: float = 0.12,
+    shimmer: float = DEFAULT_SHIMMER,
+    insects: float = DEFAULT_INSECTS,
+    webs: float = DEFAULT_WEBS,
     wdr: float = DEFAULT_WDR,
     denoise: float = DEFAULT_DENOISE,
     severity: int = DEFAULT_SEVERITY,
@@ -750,6 +835,14 @@ def surveillance(
         shadows, flare: probability of hard cast shadows and of a sun
             flare, in the day frames that can have a sun: dry air, over a
             dry road or over lying snow.
+        shimmer: probability of heat shimmer, by day over dry air and a
+            dry road only. It shows only on a long view through a long
+            lens; over a street it changes nothing (:func:`weather_state`).
+        insects, webs: probability of insects in the illuminator's beam,
+            on an infrared night with nothing falling, and of a web across
+            the housing, on an infrared night in any weather but snow.
+            Neither is drawn by day or in a night in colour: what shows
+            them is the camera's own lamp.
         severity: level 1-5, from
             :data:`~surmentations.presets.severity.SEVERITY`. **This is
             the knob that decides how degraded a typical frame is**, and the
@@ -796,6 +889,9 @@ def surveillance(
         "droplet_severity": severity,
         "ground_severity": ground_severity,
         "prior_power": prior_power,
+        "insects": insects,
+        "webs": webs,
+        "shimmer": shimmer,
         **weather,
     }
     in_colour = _at(NightColorMode, "NightColorMode", 1.0, severity, depth_provider=depth_provider)

@@ -394,18 +394,20 @@ def test_pipelines_without_a_codec_stage_do_not_need_ffmpeg(
         surveillance_lite(codec=0.0, faults=0.05)
 
 
+def names(transform: A.Compose) -> set[str]:
+    """Every class anywhere in a pipeline's tree, fired or not."""
+    found: set[str] = set()
+
+    def walk(node: object) -> None:
+        found.add(type(node).__name__)
+        for child in getattr(node, "transforms", []):
+            walk(child)
+
+    walk(transform)
+    return found
+
+
 def test_packet_loss_is_on_by_default_only_where_the_codec_stage_is() -> None:
-    def names(transform: A.Compose) -> set[str]:
-        found: set[str] = set()
-
-        def walk(node: object) -> None:
-            found.add(type(node).__name__)
-            for child in getattr(node, "transforms", []):
-                walk(child)
-
-        walk(transform)
-        return found
-
     assert "TransmissionFaults" in names(surveillance_lite())
     assert "TransmissionFaults" not in names(surveillance_lite(codec=0.0))
     assert "TransmissionFaults" not in names(surveillance_lite(faults=0.0))
@@ -462,6 +464,58 @@ def test_snow_sits_on_the_housing_only_where_there_is_snow() -> None:
     assert all("RandomSnow" in s for s in on_housing)
     snowy = [s for s in drawn if "RandomSnow" in s]
     assert 0.05 < len(on_housing) / len(snowy) < 0.45
+
+
+FALLING = {"RandomFog", "NightRain", "NightSnow", "NightFog"}
+
+
+def test_insects_and_webs_are_lit_by_the_ring_and_kept_to_their_season() -> None:
+    """Insects in the beam and a web across the housing show by the
+    camera's own lamp, centimetres away: never by day and never in a night
+    in colour. Insects fly where nothing falls; a web is there in rain and
+    fog, which bead it; and neither goes with snow, which is not their
+    season."""
+    transform = surveillance(
+        SharedDepthProvider(_GroundPlane()),
+        insects=1.0, webs=1.0, codec=0.0,
+        rain=0.2, fog=0.1, snow=0.1, snow_lying=0.1, prior_power=1.0,
+    )  # fmt: skip
+    drawn = _draws(transform, samples=500)
+    flying = [s for s in drawn if "NightInsects" in s]
+    webbed = [s for s in drawn if "SpiderWeb" in s]
+    assert flying and webbed
+    assert all("NightIrMode" in s for s in flying + webbed)
+    assert not [s for s in flying if s & FALLING or "RandomSnow" in s]
+    assert not [s for s in webbed if "RandomSnow" in s]
+    assert any(s & {"NightRain", "NightFog"} for s in webbed), "a web never beaded by rain or fog"
+    # At p=1 each is certain in its own states, so it is missing only
+    # from the others.
+    infrared = [s for s in drawn if "NightIrMode" in s]
+    assert all("NightInsects" in s for s in infrared if not s & FALLING and "RandomSnow" not in s)
+    assert all("SpiderWeb" in s for s in infrared if "RandomSnow" not in s)
+
+
+def test_heat_shimmer_is_drawn_only_over_dry_ground_by_day() -> None:
+    """The air shimmers over ground the sun has made warmer than it: never
+    at night, never under rain, fog or snow, and not over a wet road."""
+    transform = surveillance(
+        SharedDepthProvider(_GroundPlane()), shimmer=1.0, codec=0.0, prior_power=0.5
+    )
+    drawn = _draws(transform, samples=400)
+    shimmering = [s for s in drawn if "HeatShimmer" in s]
+    assert shimmering
+    assert not [s for s in shimmering if s & (NIGHT_MADE | WEATHER)]
+    dry_days = [s for s in drawn if not s & (NIGHT_MADE | WEATHER)]
+    assert all("HeatShimmer" in s for s in dry_days)
+
+
+def test_insects_webs_and_shimmer_at_zero_are_not_in_the_pipeline() -> None:
+    """Left out, not built and never fired: a caller who turns one off has
+    the pipeline's draws as they were before it was added."""
+    provider = SharedDepthProvider(_GroundPlane())
+    three = {"NightInsects", "SpiderWeb", "HeatShimmer"}
+    assert three <= names(surveillance(provider))
+    assert not three & names(surveillance(provider, insects=0.0, webs=0.0, shimmer=0.0))
 
 
 def test_water_on_the_glass_follows_the_lighting_state() -> None:
