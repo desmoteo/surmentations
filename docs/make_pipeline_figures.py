@@ -9,8 +9,9 @@ the picture:
 * two frames that are not dry daylight ones, a night photograph and a car
   park under a roof, taken for what they are not and read for what they
   are;
-* eight things the pipeline draws together: rain with water on the glass,
-  snow with snow on the housing, a wet lens glowing under infrared.
+* ten things the pipeline draws together: rain with water on the glass,
+  snow with snow on the housing, a wet lens glowing under infrared,
+  insects and a web in the infrared ring's light.
 
 Each state is drawn alone, as the arm of
 :func:`~surmentations.presets.weather_state` that holds it, without the
@@ -72,6 +73,9 @@ CALLED = {
     "snow": "snow falling",
     "snow_lying": "snow lying, none falling",
 }
+# None of what the pipeline draws besides the states: insects and a web
+# in the infrared ring's light, and shimmer over sunlit ground.
+NOTHING_ELSE = {"insects": 0.0, "webs": 0.0, "shimmer": 0.0}
 # Nothing on the glass or the housing, for the pictures of the states and
 # of the lighting: what goes with each state has a picture of its own.
 BARE = {
@@ -81,10 +85,11 @@ BARE = {
     "wet_after": 0.0,
     "wet_clear": 0.0,
     "snow_on_housing": 0.0,
+    **NOTHING_ELSE,
 }
 # The camera chain kept out of the pictures of single frames, so that what
 # differs between two tiles is what the caption says.
-QUIET = {"codec": 0.0, "dirt": 0.0, "occluders": 0.0, "prior_power": 1.0}
+QUIET = {"codec": 0.0, "dirt": 0.0, "occluders": 0.0, "prior_power": 1.0, **NOTHING_ELSE}
 
 
 def _named(tile: np.ndarray, text: str) -> np.ndarray:
@@ -183,22 +188,29 @@ def source(depth: Any, labels: Any, vehicles: Any) -> None:
 
 
 def combinations(image: np.ndarray, provider: Any) -> None:
-    """Eight things that go together, each drawn for certain.
+    """Ten things that go together, each drawn for certain.
 
     The states' own arms again, with the odds of what goes with each put
     to 1: water on the glass with rain, with fog and after rain, snow on
     the housing with snow, the sun over lying snow, and under infrared a
-    wet lens in the illuminator's light.
+    wet lens in the illuminator's light, insects in its beam and a web
+    across the housing.
     """
     wet = {"wet_rain": 1.0, "wet_fog": 1.0, "wet_after": 1.0, "wet_snow": 0.0, "wet_clear": 0.0}
-    by_day = weather_state(provider, **wet, snow_on_housing=1.0, ground_severity=4)
-    sunny = weather_state(provider, **_sun(provider), snow_on_housing=0.0, wet_clear=0.0)
+    by_day = weather_state(provider, **wet, snow_on_housing=1.0, ground_severity=4, **NOTHING_ELSE)
+    sunny = weather_state(
+        provider, **_sun(provider), snow_on_housing=0.0, wet_clear=0.0, **NOTHING_ELSE
+    )
+    ring = NightIrMode(depth_provider=provider, p=1.0, **SEVERITY[1]["NightIrMode"])
     infrared = weather_state(
+        provider, night=True, infrared=True, relight=ring, **wet, **NOTHING_ELSE
+    )
+    lamp_lit = weather_state(
         provider,
         night=True,
         infrared=True,
-        relight=NightIrMode(depth_provider=provider, p=1.0, **SEVERITY[1]["NightIrMode"]),
-        **wet,
+        relight=ring,
+        **{**BARE, "insects": 1.0, "webs": 1.0},
     )
     drawn = (
         (by_day, "rain_moderate", 4, "rain, a wet road, water on the glass"),
@@ -209,6 +221,8 @@ def combinations(image: np.ndarray, provider: Any) -> None:
         (sunny, "snow_lying", 7, "snow lying, the sun out"),
         (infrared, "rain_moderate", 4, "infrared night, rain, a wet lens in the lamp"),
         (infrared, "fog_thin", 4, "infrared night, fog, a wet lens in the lamp"),
+        (lamp_lit, "dry", 1, "a warm infrared night: insects in the beam, a web"),
+        (lamp_lit, "fog_thin", 3, "infrared night, fog: a web across the housing"),
     )
     tiles = [
         _named(_one_state(choice, name, seed=seed)(image=image)["image"], text)

@@ -106,12 +106,12 @@ flowchart TD
     LIT --> W
     IR --> W
     ASIS --> TAIL
-    W -->|"dry air"| DRY["dry road, or snow lying:<br/>the only states with a sun<br/>CastShadows, SunFlare by day"]
+    W -->|"dry air"| DRY["dry road, or snow lying:<br/>the only states with a sun<br/>CastShadows, SunFlare by day;<br/>HeatShimmer over a dry road"]
     W -->|"wet road"| WETROAD["nothing falling"]
     W -->|"rain"| RAIN["light, moderate or heavy;<br/>lamps and spray by day"]
     W -->|"fog"| FOG["thin, dense, or with drizzle;<br/>lamps lit by day"]
     W -->|"snow"| SNOW["falling"]
-    DRY --> GLASS["water on the glass,<br/>at the state's own odds"]
+    DRY --> GLASS["water on the glass,<br/>at the state's own odds;<br/>under infrared, insects and a web<br/>in the ring's light"]
     WETROAD --> GLASS
     RAIN --> GLASS
     FOG --> GLASS
@@ -154,7 +154,7 @@ thickness
 
 | State | Share of time | Drawn, by day | Drawn with |
 | --- | --- | --- | --- |
-| Dry air, dry road | 0.783 | 0.444 | nothing; by day, shadows and a flare |
+| Dry air, dry road | 0.783 | 0.444 | nothing; by day, shadows, a flare and heat shimmer |
 | Dry air, road still wet | 0.100 | 0.158 | `RandomRain` with no streaks, at its lowest rate |
 | Light rain, to 3 mm/h | 0.044 | 0.106 | `RandomRain` |
 | Moderate rain, to 10 mm/h | 0.016 | 0.063 | `RandomRain` |
@@ -207,7 +207,7 @@ drawn.
 
 A reduced version of the importable pipeline, to show its shape: two
 lighting states where that has three, one strength of rain and one of fog,
-and no reading of the frame.
+no insects, webs or shimmer, and no reading of the frame.
 
 ```python
 import albumentations as A
@@ -419,17 +419,27 @@ The importable `surveillance`, over 3000 draws, recorded with
 | A sun effect given rain, fog or falling snow | **0** | impossible |
 | A sun effect given dry air by day | 36% | 0.30 and 0.12, independent |
 | A night made of a frame that was one | **0** | impossible |
-| Effects per frame | mean 2.9, variance 2.6 | independent draws |
-| Frames left untouched | 4.8% | |
+| Insects given an infrared night over a dry or wet road | 26% | 25% |
+| A web given an infrared night without snow | 11% | 10% |
+| Heat shimmer given dry air over a dry road by day | 14% | 12% |
+| Insects or a web by day or in a night in colour; insects with rain, fog or snow; a web with snow; shimmer at night or with anything on the ground or in the air | **0** | impossible |
+| Effects per frame | mean 3.2, variance 3.0 | independent draws |
+| Frames left untouched | 3.2% | |
+
+The rows for insects, webs and shimmer, and the last two, were measured
+when the three were added, in November 2026. Without them the pipeline as
+it now stands draws 3.1 effects a frame, variance 2.9, and leaves 3.9% of
+frames untouched.
 
 ## What is drawn together
 
 A state is itself a combination: the air, the ground, and at night the
 light. On top of it each state has its own odds of what goes with it on
-the camera: water on the glass, and with snow, snow on the housing. Eight
-of them, each drawn for certain here:
+the camera: water on the glass; with snow, snow on the housing; and under
+infrared, insects in the beam and a web across the housing. Ten of them,
+each drawn for certain here:
 
-![eight things the pipeline draws together](https://desmoteo.github.io/surmentations/assets/pipelines/combinations.webp)
+![ten things the pipeline draws together](https://desmoteo.github.io/surmentations/assets/pipelines/combinations.webp)
 
 How often each comes up, over 4000 draws of the importable pipeline. The
 first column is the estimate of how often it happens, for the reference
@@ -452,6 +462,10 @@ site; the second is the pipeline drawing the states as often as they happen
 | Snow lying, the sun out | not estimated | 0.3% | 1.8% |
 | Rain falling at night | 3% | 2.9% | 9.4% |
 | Infrared night, rain, a wet lens in the lamp | not estimated | 0.5% | 1.8% |
+| Insects in the infrared ring's beam | 6.5% | 6.0% | 3.5% |
+| A web across the housing, in the ring's light | 2.9% | 3.0% | 2.8% |
+| A web beaded by rain or fog | not estimated | 0.2% | 0.9% |
+| Heat shimmer over a dry road by day | 5.2% | 5.1% | 2.9% |
 | **The sun with rain, fog or falling snow** | never | **0** | **0** |
 | **The sun at night** | never | **0** | **0** |
 | **Snow with rain or fog** | sleet is not drawn | **0** | **0** |
@@ -464,10 +478,57 @@ half a percent is a handful of frames in 4000: the fog rows of the matched
 column are too few to say more than that they are rare.
 
 What the pipeline does not draw together, though it happens: frost on the
-glass on a cold clear night, insects and webs by season, heat shimmer on a
-hot dry day, and a wind that slants the rain and shakes the mount at once.
-The transforms exist (`FrostOnGlass`, `NightInsects`, `SpiderWeb`,
-`HeatShimmer`, `CameraVibration`); none has a place in the pipeline yet.
+glass on a cold clear night, and a wind that slants the rain and shakes the
+mount at once. The transforms exist (`FrostOnGlass`, `CameraVibration`);
+neither has a place in the pipeline yet.
+
+### Insects, webs and heat shimmer
+
+Three more things go with a state, as water on the glass does, each at
+odds of its own:
+
+| | Drawn in | Never with | Argument |
+| --- | --- | --- | --- |
+| Insects in the illuminator's beam (`NightInsects`) | an infrared night, over a dry or a wet road with nothing falling | daylight, a night in colour, rain, fog, snow | `insects`, 0.25 |
+| A web across the housing (`SpiderWeb`) | an infrared night, in any state but snow | daylight, a night in colour, snow falling or lying | `webs`, 0.10 |
+| Heat shimmer (`HeatShimmer`) | by day, dry air over a dry road | night, a wet road, anything falling, fog, snow | `shimmer`, 0.12 |
+
+**Insects and a web show by the camera's own lamp.** A thread of silk is a
+few micrometres across and an insect a few millimetres; lit by the sky,
+neither shows at the distances they are from the lens. The infrared ring
+lights them from centimetres away, against a scene it lights from metres,
+and they become the brightest things in the frame: a beaded streak where
+an insect crossed the beam during the exposure, and a string of glowing
+discs along each thread. A night in colour has no lamp at the lens, so
+neither is drawn there, nor by day. Insects fly where nothing falls; a web
+stays up in rain and fog, which bead it with water and make it brighter.
+Neither is drawn with snow. In each state they come after the night's
+conversion and what is in the air, and before the water on the glass:
+they are nearer the lens than the air and further from it than the glass.
+`HousingOccluders` (`occluders`) is something else, insects sitting on
+the dome itself.
+
+**Heat shimmer needs a long view.** It is the air over ground the sun has
+warmed, which bends each ray a little at every parcel it passes. A point
+moves by a pixel only over a path of a kilometre or so, seen through a
+long lens. Over the 3 to 50 m a provider takes a scene to span by
+default, a point moves by under a twentieth of a pixel, which is
+right, and the frame is unchanged to the eye. For a camera that does look
+a long way, tell the provider: `depth_range_m` for the distances its
+scenes span, and its mounting (`geometry`) for its field of view. Without
+a mounting the transform takes the lens to be a long one, 2 to 12 degrees
+across.
+
+**The odds are estimates averaged over the year.** Insects fly on the
+warm nights, about half of them, and around a lamp on such a night half
+the frames have one in the beam. Orb weavers build from spring to autumn,
+four or five months of the year, and rebuild each night in the same place,
+on perhaps one camera in four that is not cleaned. The ground is hot
+enough for shimmer on sunny afternoons from late spring to early autumn:
+the sun is out four days in ten, in half the year, for the middle of the
+day. The pipeline has no season, only the weather: snow stands for
+winter, and a dry winter night is given insects at the year's average.
+For a site and a season of your own, set the three.
 
 ## Cost
 
@@ -521,6 +582,12 @@ Three things were done to bring it down, in November 2026:
   snow and the ground's noise among them
   ([the eighth round](native_kernels.md#an-eighth-round-what-reads-the-scene)):
   another 9% off, frame for frame.
+
+Insects, webs and heat shimmer add less than a millisecond a frame on
+average. A call costs 3, 7 and 14 ms on one core at 512 px, and they come
+on about 4, 3 and 3 frames in a hundred. Shimmer costs the same on a
+street, where it changes nothing, as on a long view, where it shows: most
+of it is working out how far each pixel's light has come through the air.
 
 The camera's settings are also drawn nearer to how often they are on: wide
 dynamic range on 0.30 of frames (it was 0.12) and the noise reducer on 0.8
@@ -619,6 +686,8 @@ and the pipeline still builds on a machine without the binary.
 | `wet_rain` / `wet_fog` / `wet_snow` / `wet_after` / `wet_clear` | 0.35 / 0.18 / 0.10 / 0.15 / 0.06 | P(water on the glass \| state). A housing's property more than a frame's: 0.7 in rain for an exposed dome, 0.2 for a hooded bullet. |
 | `snow_on_housing` | 0.30 | P(snow on the housing \| snow falling); half of it over snow that only lies. |
 | `shadows` / `flare` | 0.30 / 0.12 | Hard shadows and a sun flare, on the day frames with dry air. |
+| `shimmer` | 0.12 | Heat shimmer by day over dry air and a dry road: the sun on a warm day. It shows only on a long view. |
+| `insects` / `webs` | 0.25 / 0.10 | Insects in the beam on an infrared night with nothing falling, and a web across the housing on an infrared night without snow. Averaged over the year; in summer both are higher. |
 | `codec` | 0.15 | See above — usually 0 for footage already sourced from video. |
 | `dirt` | 0.25 | How much of your fleet is overdue for cleaning. |
 | `occluders` | 0.12 | Insects and webs under the infrared ring; a quarter of it by day. |

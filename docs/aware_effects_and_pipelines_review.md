@@ -14,7 +14,7 @@ order of work was carried out, at your word:
 | What the frame already is (awareness 2) | built: night, and indoors with labels; not "already wet" | `presets/source.py` |
 | P1, P2, P3: weather by its shares and its strengths | built | `weather_shares`, `rebalanced`, `weather_state` |
 | P4, the sun only over dry air | built | `weather_state(sunlit=)` |
-| Section 3.4, what occurs together | water on the glass by state, rain through fog, snow on the housing with snow: built, and measured in `pipelines.md`; frost, insects by season, heat shimmer and wind: not | `weather_state` |
+| Section 3.4, what occurs together | water on the glass by state, rain through fog, snow on the housing with snow: built, and measured in `pipelines.md`; insects and webs under infrared and out of snow, heat shimmer over dry ground by day: built on 22 November; frost and wind: not | `weather_state(insects=, webs=, shimmer=)` |
 | P5, fog by the hour | built | `FOG_BY_HOUR` |
 | P7, the night in colour | built | `NightColorMode` in `surveillance` |
 | P8, lamps and spray in the pipelines | built, by day | `weather_state(traffic=)` |

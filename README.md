@@ -466,7 +466,9 @@ by the share of time it holds (`rain`, `snow`, `fog`, `wet_road`,
 camera sees, which are four fifths dry, and 0.5, the default, to be shown
 more of what is rare. Most rain is light and most fog is thin;
 `weather_severity` draws all of it at one level for a pipeline of storms.
-Hard shadows and a sun flare are drawn only where the air is dry.
+Hard shadows, a sun flare and heat shimmer are drawn only where the air
+is dry; insects in the beam and a web across the housing only in an
+infrared night, which is what lights them, and never with snow.
 
 The ten states by day, each drawn alone on one scene
 ([`docs/pipelines.md`](docs/pipelines.md) has them at night too):
@@ -486,11 +488,14 @@ instead of an eighth; `prior_power=1.0` halves it, with four frames in
 five dry. [`docs/pipelines.md`](docs/pipelines.md#cost) has what each
 argument and each kind of frame costs.
 
-The pipelines hold the transforms they were designed with. The sixteen
-added since, from `SpiderWeb` to `HeatShimmer`, are not in them: each needs
-a probability that says how often it happens on *your* cameras, which is a
-fact about a deployment. Add the ones you want with
-[`physical_order`](#composition-order), which knows where each belongs.
+The pipelines hold the transforms they were designed with, and three of
+the sixteen added since: `NightInsects`, `SpiderWeb` and `HeatShimmer`, at
+`insects=0.25`, `webs=0.10` and `shimmer=0.12`, each only in the states
+that can have it ([`docs/pipelines.md`](docs/pipelines.md#insects-webs-and-heat-shimmer)).
+The other thirteen are not in them: each needs a probability that says how
+often it happens on *your* cameras, which is a fact about a deployment.
+Add the ones you want with [`physical_order`](#composition-order), which
+knows where each belongs.
 
 A few arguments are worth knowing beside `severity`. `ground_severity`
 (0-5) fixes how wet the road is under rain and how much snow has settled;
