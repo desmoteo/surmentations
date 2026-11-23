@@ -389,7 +389,11 @@ lit by those lamps and go after it, as `NightRain` and `NightSnow`, with
 flakes. Fog goes after it too: at night it is lit by the lamps in it. Under
 infrared the lamp is the camera's own, so what is in the air and on the
 glass is lit from centimetres away; in a night in colour there is no such
-lamp, and rain shows only in the street's light.
+lamp, and each drop and flake is lit by the street lamps and headlamps the
+night put in the scene: by where it is, and most of all where it is near
+the line of sight to a lamp, which it throws at the lens (`lamp_glint_range`).
+Rain at night in colour is a swarm of streaks round the lamps, and unseen in
+the dark between; a night with no lamp found in the scene shows none.
 
 Four of the states in each lighting state. Down the middle and the right
 the frame is made a night between the state's two halves: the wet road and
