@@ -51,6 +51,27 @@ identifiable as surveillance footage largely by these:
     focused image, they print straight through any defocused highlight, and
     they mark out the cheap moulded asphericals these lenses use.
 
+A source outside the frame
+--------------------------
+The sun does not have to be in the picture to flare it. A road camera looks
+down, so the sun is more often just past the top edge or a side edge than in
+the frame, and then its core never reaches the sensor. What does reach it is
+the tail of the veiling glare and the ghosts, which lie on the line through
+the image centre whether or not the source itself is imaged. That is the
+commonest flare in daytime surveillance footage: one or two tinted polygons
+on the road, on the far side of the centre from a sun that is nowhere to be
+seen. The CCD smear is the one artefact that needs the source on the sensor,
+since it is charge from the source's own pixels, so it is dropped then.
+
+Ghosts are drawn as added radiance in linear light, after the rest of the
+flare has been converted to it. The rest is built in sRGB-encoded units and
+decoded as a whole, which suits the glare around the source; but decoding
+crushes faint values (a ghost written at 7/255 adds 0.002 of full scale),
+so a ghost drawn that way was visible only where the glare under it lifted
+it, and one from a sun outside the frame, with no glare under it, was not
+visible at all. In linear light a ghost's brightness is its own, wherever
+it falls.
+
 Reference: Hullin et al. 2011, "Physically-Based Real-Time Lens Flare
 Rendering" (Eurographics/SIGGRAPH). This is a stylized, real-time-friendly
 approximation of that model, not a full wave-optics simulation.
@@ -365,6 +386,10 @@ def _stretch_along(patch: np.ndarray, angle: float, factor: float) -> np.ndarray
     """
     if factor <= 1.001:
         return patch
+    # Warped in float32 in either mode. OpenCV interpolates a float64 image
+    # differently from a float32 one, by up to 1.3% of the patch's peak,
+    # which on a bright ghost is four 8-bit levels between the modes.
+    patch = patch.astype(np.float32, copy=False)
     size = patch.shape[0]
     centre = (size / 2.0 - 0.5, size / 2.0 - 0.5)
     cos_a, sin_a = np.cos(angle), np.sin(angle)
@@ -592,10 +617,10 @@ def _add_compact_glow(
     canvas[y0:y1, x0:x1] += glow[..., None] * colour.astype(np.float32)
 
 
-def _paste_additive(
-    canvas: np.ndarray, patch: np.ndarray, color: np.ndarray, cx: float, cy: float
+def _paste_channel(
+    canvas: np.ndarray, patch: np.ndarray, channel: int, cx: float, cy: float
 ) -> None:
-    """Add ``patch * color`` to ``canvas``, centred on ``(cx, cy)``, clipped to the frame."""
+    """Add ``patch`` to one channel of ``canvas``, centred on ``(cx, cy)``, clipped to the frame."""
     size = patch.shape[0]
     half = size / 2.0
     x0, y0 = int(round(cx - half)), int(round(cy - half))
@@ -606,8 +631,117 @@ def _paste_additive(
         return
     src_x0, src_y0 = dst_x0 - x0, dst_y0 - y0
     src_x1, src_y1 = src_x0 + (dst_x1 - dst_x0), src_y0 + (dst_y1 - dst_y0)
-    region = canvas[dst_y0:dst_y1, dst_x0:dst_x1]
-    region += patch[src_y0:src_y1, src_x0:src_x1, None] * color
+    canvas[dst_y0:dst_y1, dst_x0:dst_x1, channel] += patch[src_y0:src_y1, src_x0:src_x1]
+
+
+# A ghost this size, as a fraction of the image diagonal, adds its drawn
+# strength at every pixel of its polygon; a larger one spreads the same light
+# thinner, and a smaller one is not made brighter than this.
+_GHOST_REFERENCE_SIZE = 0.04
+
+# Sunlight's warm white in linear light: the light a ghost's coatings filter.
+_SUNLIGHT_LINEAR = ((np.array([255.0, 244.0, 214.0]) / 255.0 + 0.055) / 1.055) ** 2.4
+
+
+def polygon_area(blades: int) -> float:
+    """Area of the aperture polygon of :func:`polygon_distance`, circumradius 1.
+
+    A circle for fewer than three blades, as there.
+    """
+    if blades < 3:
+        return float(np.pi)
+    return 0.5 * blades * float(np.sin(2.0 * np.pi / blades))
+
+
+def _add_ghosts(
+    linear: np.ndarray,
+    ghosts: list[tuple[float, ...]],
+    intensity: float,
+    blades: int,
+    blade_rotation: float,
+    chroma_shift: float,
+    lateral_ca: float,
+    onion_rings: float,
+    axis_angle: float,
+    half_diag: float,
+) -> None:
+    """Add the ghost chain to ``linear``, a frame already in linear light.
+
+    Each ghost is an image of the aperture, tinted by the residual
+    reflectance of the coatings it bounced off and split chromatically,
+    because that reflectance and the lens's magnification both vary with
+    wavelength: each channel is drawn at a slightly different size and
+    position, which is what fringes a real ghost with colour.
+
+    A ghost carries a fixed amount of light however far it is defocused, so
+    each channel's patch is scaled to hold the same total: the ghost's
+    strength over the area of its polygon. A ring-shaped ghost then has that
+    light at its rim and less inside, a filled one has it evenly, a larger
+    one has it spread thinner and a stretched one is dimmer for its length,
+    all without a rule for each. Brightness falls steeply with f-number
+    (Hullin: I ~ f^-4), and each further pair of bounces costs another
+    factor of the coating's residual reflectance, so the saturated
+    high-order ghosts are also the dim ones.
+
+    Drawn in linear light rather than on the sRGB-encoded canvas the rest
+    of the flare is built on: decoding that canvas crushes faint values, so
+    a ghost drawn on it was visible only where the glare under it lifted it.
+    """
+    cos_axis, sin_axis = float(np.cos(axis_angle)), float(np.sin(axis_angle))
+    for (
+        gx, gy, gsize, design_a, design_b, bounces, incidence,
+        edge_gain, ghost_chroma, elongation, strength,
+    ) in ghosts:
+        size_px = max(8, int(round(gsize * half_diag * 2)))
+        order_falloff = 0.45 ** (int(bounces) // 2 - 1)
+        area_falloff = min(1.0, (_GHOST_REFERENCE_SIZE / max(gsize, 1e-6)) ** 2)
+        level = strength * intensity * order_falloff * area_falloff
+        colour = _SUNLIGHT_LINEAR * ghost_tint(design_a, design_b, incidence, int(bounces)) * level
+        # The ghost's light, per channel, in pixels at full level: its
+        # polygon at the drawn size.
+        area = polygon_area(blades) * (size_px / 2.0) ** 2
+        spread = chroma_shift + ghost_chroma
+        for channel, chroma in enumerate((1.0 + spread, 1.0, 1.0 - spread)):
+            scaled = max(8, int(round(size_px * chroma)))
+            patch = aperture_image(
+                scaled, blades, blade_rotation, edge_gain=edge_gain, onion_rings=onion_rings
+            )
+            patch = _stretch_along(patch, axis_angle, elongation)
+            total = float(patch.sum())
+            if total <= 1e-9:
+                continue
+            # Lateral chromatic aberration: the lens magnifies each
+            # wavelength slightly differently, so an off-axis ghost's channels
+            # land at slightly different *positions* along the flare axis as
+            # well as at different sizes. Scaling alone fringes a rim
+            # symmetrically; the shift is what puts warm colour on one edge
+            # and cool on the other, which is how real ghosts read.
+            shift = (chroma - 1.0) * lateral_ca * size_px
+            _paste_channel(
+                linear,
+                patch * float(area * colour[channel] / total),
+                channel,
+                gx + shift * cos_axis,
+                gy + shift * sin_axis,
+            )
+
+
+def off_frame_source(
+    width: int, height: int, angle: float, reach_px: float
+) -> tuple[float, float]:
+    """A point ``reach_px`` past the frame's edge, along ``angle`` from its centre.
+
+    ``angle`` is in image coordinates, y down, so ``(-pi, 0)`` is the upper
+    half: ``-pi/2`` is straight up past the top edge and either end is level,
+    past a side edge. Drawn uniformly over that range, about two thirds of
+    such sources on a 16:9 frame are above it and a third beside it.
+    """
+    cx, cy = width / 2.0, height / 2.0
+    cos_a, sin_a = float(np.cos(angle)), float(np.sin(angle))
+    to_side = cx / abs(cos_a) if abs(cos_a) > 1e-9 else float("inf")
+    to_top = cy / abs(sin_a) if abs(sin_a) > 1e-9 else float("inf")
+    along = min(to_side, to_top) + reach_px
+    return (cx + along * cos_a, cy + along * sin_a)
 
 
 class SunFlare(CameraTransform):
@@ -615,10 +749,28 @@ class SunFlare(CameraTransform):
 
     Args:
         flare_position: ``(x, y)`` in normalized ``[0, 1]`` image coordinates,
-            or ``None`` to pick a random position (biased toward the upper
-            image, where light sources typically appear) each call.
+            or ``None`` to pick a random position each call: in the upper
+            half of the frame, where light sources typically appear, or
+            outside it with ``off_frame_probability``. A position outside
+            ``[0, 1]`` puts the source outside the frame, so that only its
+            ghosts, the tail of its glare and any streaks reach the picture.
+        off_frame_probability: when the position is random, the chance the
+            source is placed outside the frame, past the top edge or the
+            upper half of a side edge. A camera looking down at a road sees
+            the sun out of frame more often than in it, and the flare it
+            gets then is ghosts alone.
+        off_frame_reach_range: how far past the frame's edge that source
+            sits, along the line from the image centre, as a fraction of
+            the half-diagonal.
         intensity_range: overall brightness multiplier for the whole flare.
         ghost_count_range: number of internal-reflection ghost copies.
+        ghost_strength_range: how much light a ghost of the reference size
+            (4% of the diagonal) adds, in linear light at an intensity of 1,
+            drawn per ghost on a log scale. Each pair of surfaces reflects a
+            different share of the light, so ghosts in one flare differ by
+            an order of magnitude. A larger ghost spreads the same light
+            thinner, as the square of its size, and a ring-shaped one
+            gathers it at the rim.
         halo_radius_range: halo ring radius as a fraction of the image's
             half-diagonal.
         streak_probability: chance of rendering the iris-diffraction
@@ -691,6 +843,12 @@ class SunFlare(CameraTransform):
         range ordered low to high and within the bounds given here.
         """
         flare_position: tuple[float, float] | None
+        off_frame_probability: float = Field(ge=0.0, le=1.0)
+        off_frame_reach_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 1.5)),
+        ]
         intensity_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -700,6 +858,11 @@ class SunFlare(CameraTransform):
             tuple[int, int],
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0, 12)),
+        ]
+        ghost_strength_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1e-4, 2.0)),
         ]
         halo_radius_range: Annotated[
             tuple[float, float],
@@ -780,8 +943,11 @@ class SunFlare(CameraTransform):
     def __init__(
         self,
         flare_position: tuple[float, float] | None = None,
+        off_frame_probability: float = 0.5,
+        off_frame_reach_range: tuple[float, float] = (0.03, 0.5),
         intensity_range: tuple[float, float] = (0.8, 1.9),
         ghost_count_range: tuple[int, int] = (4, 10),
+        ghost_strength_range: tuple[float, float] = (0.08, 0.8),
         halo_radius_range: tuple[float, float] = (0.15, 0.35),
         streak_probability: float = 0.75,
         aperture_blades_range: tuple[int, int] = (5, 9),
@@ -806,8 +972,11 @@ class SunFlare(CameraTransform):
         """Store the ranges; each argument is described in the class docstring."""
         super().__init__(p=p)
         self.flare_position = flare_position
+        self.off_frame_probability = off_frame_probability
+        self.off_frame_reach_range = off_frame_reach_range
         self.intensity_range = intensity_range
         self.ghost_count_range = ghost_count_range
+        self.ghost_strength_range = ghost_strength_range
         self.halo_radius_range = halo_radius_range
         self.streak_probability = streak_probability
         self.aperture_blades_range = aperture_blades_range
@@ -838,17 +1007,32 @@ class SunFlare(CameraTransform):
         size, elongation and chromatic split; the starburst, the dispersion
         ring, and the artefacts of a surveillance housing: scratches, sensor
         smear, infrared leak and a window ghost.
+
+        A random source is placed outside the frame with
+        ``off_frame_probability``; a source off the sensor, however placed,
+        has no smear. Each ghost's strength is drawn last of all, so a flare
+        at a fixed position draws everything else exactly as it did before
+        ghosts had a strength of their own.
         """
         height, width = params["shape"][:2]
+        center = (width / 2.0, height / 2.0)
+        half_diag = float(np.hypot(width, height)) / 2.0
 
         if self.flare_position is not None:
             fx, fy = self.flare_position
+            source = (fx * width, fy * height)
+        elif self.py_random.random() < self.off_frame_probability:
+            source = off_frame_source(
+                width,
+                height,
+                self.py_random.uniform(-np.pi, 0.0),
+                self.py_random.uniform(*self.off_frame_reach_range) * half_diag,
+            )
         else:
             fx = self.py_random.uniform(0.0, 1.0)
             fy = self.py_random.uniform(0.0, 0.5)
-        source = (fx * width, fy * height)
-        center = (width / 2.0, height / 2.0)
-        half_diag = float(np.hypot(width, height)) / 2.0
+            source = (fx * width, fy * height)
+        on_sensor = 0.0 <= source[0] < width and 0.0 <= source[1] < height
 
         intensity = self.py_random.uniform(*self.intensity_range)
         ghost_count = self.py_random.randint(*self.ghost_count_range)
@@ -870,10 +1054,11 @@ class SunFlare(CameraTransform):
             incidence_deg=incidence,
             source_offset_frac=offset / max(float(np.hypot(*center)), 1e-6),
             draw_streaks=draw_streaks,
+            off_frame=not on_sensor,
         )
         ghosts = []
         for _i in range(ghost_count):
-            t = self.py_random.uniform(-0.4, 1.3)
+            t = self.py_random.uniform(-0.9, 1.3)
             gx = center[0] + (source[0] - center[0]) * t
             gy = center[1] + (source[1] - center[1]) * t
             gsize = self.py_random.uniform(0.015, 0.085)
@@ -904,15 +1089,23 @@ class SunFlare(CameraTransform):
             #    point into a line whose orientation depends on the ray
             #    bundle's tilt, so the further along the axis a ghost sits,
             #    the less circular it is.
-            edge_gain = self.py_random.uniform(0.3, 2.6)
-            chroma = self.py_random.uniform(*self.chroma_shift_range) * (1.0 + 0.9 * bounces)
+            #
+            # Most ghosts are the filled kind, a soft-edged polygon whose rim
+            # is only a little brighter than its middle, and a minority are
+            # rings: more than half are drawn with a rim at most about twice
+            # the fill, and one in five with one over four times it. The colour split
+            # is a fringe a few percent of the ghost wide, growing with the
+            # bounce count; split much further, the three channels separate
+            # into three outlines, which no ghost shows.
+            edge_gain = 0.05 + 2.5 * self.py_random.random() ** 4
+            chroma = self.py_random.uniform(*self.chroma_shift_range) * (1.0 + 0.25 * bounces)
             elongation = 1.0 + self.py_random.uniform(0.0, 0.55) * abs(t)
             ghosts.append(
                 (gx, gy, gsize, design_a, design_b, bounces, incidence,
                  edge_gain, chroma, elongation)
             )
 
-        return {
+        drawn: dict[str, Any] = {
             "source": source,
             "center": center,
             "intensity": intensity,
@@ -973,6 +1166,18 @@ class SunFlare(CameraTransform):
                 else None
             ),
         }
+        # Smear is charge from the source's own saturated pixels, so a source
+        # the sensor does not image has none.
+        if not on_sensor:
+            drawn["smear_strength"] = 0.0
+        # How much light each ghost carries, on a log scale since the pairs
+        # of surfaces that form them differ by orders of magnitude. Drawn
+        # last: see the docstring.
+        low, high = (float(np.log(bound)) for bound in self.ghost_strength_range)
+        drawn["ghosts"] = [
+            (*ghost, float(np.exp(self.py_random.uniform(low, high)))) for ghost in ghosts
+        ]
+        return drawn
 
     def apply(
         self,
@@ -981,9 +1186,7 @@ class SunFlare(CameraTransform):
         center: tuple[float, float],
         intensity: float,
         halo_radius: float,
-        ghosts: list[
-            tuple[float, float, float, float, float, int, float, float, float, float]
-        ],
+        ghosts: list[tuple[float, ...]],
         draw_streaks: bool,
         streak_angle: float,
         blade_rotation: float,
@@ -1004,9 +1207,10 @@ class SunFlare(CameraTransform):
     ) -> np.ndarray:
         """Accumulate the flare's light on a canvas and add it to the frame in linear light.
 
-        Veiling glare, halo, dispersion ring, ghosts, starburst, scratches,
-        infrared glow, window ghost and sensor smear, in that order; the
-        canvas is clipped and added as radiance, not painted over.
+        Veiling glare, halo, dispersion ring, starburst, scratches, infrared
+        glow, window ghost and sensor smear, in that order; the canvas is
+        clipped and added as radiance, not painted over. The ghosts are added
+        after it, in linear light.
         """
         height, width = img.shape[:2]
         # Fast mode keeps the flare's colours float32, and with them every
@@ -1097,60 +1301,12 @@ class SunFlare(CameraTransform):
             # canvas is accumulated on the same 0-255 scale as `warm_white`.
             canvas += profile[index] * (ring_intensity * float(warm_white.max()))
 
-        # 3. Ghost chain along the source-center line. Each ghost is an image
-        #    of the aperture, tinted by the residual reflectance of the lens
-        #    coatings it bounced off, and split chromatically because that
-        #    reflectance varies with wavelength: the three channels are drawn
-        #    at slightly different scales, which is what gives real ghosts
-        #    their coloured fringes.
-        # Ghost brightness falls steeply with f-number (Hullin: I ~ f^-4) and
-        # each bounce loses all but a couple of percent of the light, so
-        # ghosts sit well below the source itself.
-        ghost_intensity = 0.28
-        # A ghost carries a fixed amount of light however far it is
-        # defocused, so its surface brightness goes as 1/area. Giving every
-        # ghost the same per-pixel intensity — the previous behaviour — makes
-        # the large ones far too bright and is what turns them into flat
-        # pasted discs; in a real flare the big ghosts are the faint ones.
-        reference_size = 0.04
-        axis_angle = float(np.arctan2(source[1] - center[1], source[0] - center[0]))
-        for (
-            gx, gy, gsize, design_a, design_b, bounces, incidence,
-            edge_gain, ghost_chroma, elongation,
-        ) in ghosts:
-            size_px = max(8, int(round(gsize * half_diag * 2)))
-            colour = warm_white * ghost_tint(design_a, design_b, incidence, bounces)
-            # Each extra pair of bounces costs another factor of the coating's
-            # residual reflectance, so the saturated high-order ghosts are
-            # also the dim ones.
-            order_falloff = 0.45 ** (bounces // 2 - 1)
-            area_falloff = (reference_size / max(gsize, 1e-6)) ** 2
-            brightness = ghost_intensity * order_falloff * min(1.0, area_falloff)
-            spread = chroma_shift + ghost_chroma
-            for channel, chroma in enumerate((1.0 + spread, 1.0, 1.0 - spread)):
-                scaled = max(8, int(round(size_px * chroma)))
-                patch = aperture_image(
-                    scaled, blades, blade_rotation, edge_gain=edge_gain, onion_rings=onion_rings
-                )
-                patch = _stretch_along(patch, axis_angle, elongation)
-
-                # Lateral chromatic aberration: the lens focuses each
-                # wavelength at a slightly different magnification, so an
-                # off-axis ghost's channels land at slightly different
-                # *positions* along the flare axis as well as at different
-                # sizes. Scaling alone only fringes a ghost's rim
-                # symmetrically; the positional shift is what puts warm
-                # colour on one edge and cool on the other, which is how real
-                # ghosts read.
-                shift = (chroma - 1.0) * lateral_ca * size_px
-                offset_x = gx + shift * np.cos(axis_angle)
-                offset_y = gy + shift * np.sin(axis_angle)
-
-                channel_colour = np.zeros(3, dtype=np.float32)
-                # Each channel is pasted separately, so scale by 1/3 to keep the
-                # ghost's total brightness independent of the chromatic split.
-                channel_colour[channel] = colour[channel] * brightness / 3.0
-                _paste_additive(canvas, patch, channel_colour, offset_x, offset_y)
+        # 3. The ghost chain is added last, in linear light, once the rest of
+        #    the canvas has been decoded: see `_add_ghosts`.
+        ghost_args = (
+            ghosts, intensity, blades, blade_rotation, chroma_shift, lateral_ca, onion_rings,
+            float(np.arctan2(source[1] - center[1], source[0] - center[0])), half_diag,
+        )
 
         # 4. Iris-diffraction starburst through the source.
         if draw_streaks:
@@ -1216,6 +1372,7 @@ class SunFlare(CameraTransform):
             linear, scale, is_integer = to_linear_unit(img)
             flare_linear = srgb_to_linear(canvas)
             flare_linear += linear
+            _add_ghosts(flare_linear, *ghost_args)
             return from_linear_unit(flare_linear, scale, is_integer, img.dtype)
         canvas *= intensity
 
@@ -1226,5 +1383,7 @@ class SunFlare(CameraTransform):
         # instead of light flooding the lens.
         linear, scale, is_integer = to_linear_unit(img)
         flare_linear = srgb_to_linear(np.clip(canvas / 255.0, 0.0, 1.0))
-        return from_linear_unit(linear + flare_linear, scale, is_integer, img.dtype)
+        lit = linear + flare_linear
+        _add_ghosts(lit, *ghost_args)
+        return from_linear_unit(lit, scale, is_integer, img.dtype)
 

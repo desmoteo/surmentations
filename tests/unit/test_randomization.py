@@ -69,6 +69,7 @@ ALLOWED_SCALARS = {
     "sensor_smear_probability",
     "ir_leak_probability",
     "window_ghost_probability",
+    "off_frame_probability",
     "spider_probability",
     "timestamp_probability",
     "label_probability",

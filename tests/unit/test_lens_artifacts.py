@@ -495,6 +495,88 @@ def test_ccd_smear_is_a_full_height_column_not_a_glow() -> None:
     assert near_source == pytest.approx(far_edge, rel=0.25)
 
 
+def test_a_random_off_frame_sun_sits_past_the_top_or_a_side_edge() -> None:
+    """A road camera looks down, so a sun out of frame is above it or beside
+    its upper half, and no further past the edge than the reach drawn."""
+    height, width = 240, 320
+    half_diag = math.hypot(width, height) / 2.0
+    t = SunFlare(p=1.0, off_frame_probability=1.0, off_frame_reach_range=(0.05, 0.4))
+    above = beside = 0
+    for seed in range(60):
+        t.set_random_seed(seed)
+        x, y = t.get_params_dependent_on_data({"shape": (height, width, 3)}, {})["source"]
+        assert not (0.0 <= x < width and 0.0 <= y < height)
+        assert y <= height / 2.0 + 1e-6
+        past = math.hypot(max(0.0, -x, x - width), max(0.0, -y, y - height))
+        assert 0.0 < past <= 0.4 * half_diag + 1e-6
+        above += y < 0.0
+        beside += not 0.0 <= x < width
+    assert above > 20 and beside > 10, (above, beside)
+
+
+def test_a_sun_off_the_sensor_has_no_smear() -> None:
+    """Smear is charge from the source's own saturated pixels, so a sun the
+    sensor does not image draws no column, even with its x inside the frame."""
+    for position, smeared in (((0.5, 0.25), True), ((0.5, -0.2), False), ((1.2, 0.3), False)):
+        t = SunFlare(p=1.0, flare_position=position, sensor_smear_probability=1.0)
+        t.set_random_seed(0)
+        params = t.get_params_dependent_on_data({"shape": (240, 320, 3)}, {})
+        assert (params["smear_strength"] > 0.0) == smeared, position
+
+
+def test_ghosts_of_a_sun_outside_the_frame_show() -> None:
+    """With the sun out of frame its ghosts are the whole flare. Drawn on the
+    sRGB-encoded canvas they were decoded to a level or two of light; in
+    linear light a ghost is as bright as its own strength makes it."""
+    grey = np.full((240, 320, 3), 85, dtype=np.uint8)
+    ghosts_only = dict(
+        flare_position=(1.15, -0.3),
+        streak_probability=0.0,
+        dispersion_ring_probability=0.0,
+        scratch_count_range=(0, 0),
+        ir_leak_probability=0.0,
+        window_ghost_probability=0.0,
+        intensity_range=(1.0, 1.0),
+        ghost_strength_range=(0.3, 0.3),
+    )
+    lifted = []
+    for seed in range(8):
+        frames = []
+        for count in ((6, 6), (0, 0)):
+            t = SunFlare(p=1.0, ghost_count_range=count, **ghosts_only)
+            t.set_random_seed(seed)
+            frames.append(t(image=grey)["image"].astype(np.int16))
+        lifted.append(int((frames[0] - frames[1]).max()))
+    assert min(lifted) >= 15, lifted
+
+
+@pytest.mark.parametrize(
+    ("edge_gain", "elongation"),
+    [(0.1, 1.0), (2.5, 1.0), (0.1, 1.4)],
+    ids=["filled", "ring", "stretched"],
+)
+def test_a_ghost_adds_the_same_light_whatever_its_shape(
+    edge_gain: float, elongation: float
+) -> None:
+    """A ghost carries a fixed amount of light: its level over its polygon.
+    A ring gathers it at the rim and a stretched ghost spreads it along its
+    length, but neither adds or loses any."""
+    from surmentations.lens.sun_flare import _SUNLIGHT_LINEAR, _add_ghosts, polygon_area
+
+    canvas = np.zeros((400, 400, 3))
+    size, strength, half_diag = 0.05, 0.5, 500.0
+    ghost = (200.0, 200.0, size, 520.0, 560.0, 2, 10.0, edge_gain, 0.0, elongation, strength)
+    _add_ghosts(canvas, [ghost], 1.0, 6, 0.0, 0.0, 0.0, 0.0, 0.0, half_diag)
+
+    size_px = round(size * half_diag * 2)
+    level = strength * (0.04 / size) ** 2
+    expected = (
+        polygon_area(6) * (size_px / 2) ** 2 * level * _SUNLIGHT_LINEAR
+        * ghost_tint(520.0, 560.0, 10.0, 2)
+    )
+    np.testing.assert_allclose(canvas.sum(axis=(0, 1)), expected, rtol=1e-4)
+
+
 def test_ir_leak_blooms_magenta() -> None:
     """Silicon stays sensitive past 700 nm, where all three Bayer dyes leak but
     green leaks least — so IR bloom reads magenta-red, never green."""

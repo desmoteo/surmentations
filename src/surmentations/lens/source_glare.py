@@ -58,6 +58,11 @@ class SourceGlare(CameraTransform):
             Larger clipped regions flare more, as the square root of their
             area, within a factor of two either way.
         ghost_count_range: as for ``SunFlare``.
+        ghost_strength_range: as for ``SunFlare``, and like the intensity a
+            fraction of its default: a lamp's ghosts are drawn against a
+            frame exposed for the dark, where a ghost as strong as the sun's
+            would outshine the street. Real ones are faint polygons, seen
+            mostly against the sky and dark walls.
         halo_radius_range: as for ``SunFlare``.
         aperture_blades_range: as for ``SunFlare``.
         streak_probability: as for ``SunFlare``.
@@ -88,6 +93,11 @@ class SourceGlare(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0, 20)),
         ]
+        ghost_strength_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(1e-4, 2.0)),
+        ]
         halo_radius_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -105,6 +115,7 @@ class SourceGlare(CameraTransform):
         max_sources_range: tuple[int, int] = (1, 3),
         intensity_range: tuple[float, float] = (0.08, 0.35),
         ghost_count_range: tuple[int, int] = (2, 6),
+        ghost_strength_range: tuple[float, float] = (0.02, 0.15),
         halo_radius_range: tuple[float, float] = (0.04, 0.1),
         aperture_blades_range: tuple[int, int] = (5, 9),
         streak_probability: float = 0.75,
@@ -120,6 +131,7 @@ class SourceGlare(CameraTransform):
         self.max_sources_range = max_sources_range
         self.intensity_range = intensity_range
         self.ghost_count_range = ghost_count_range
+        self.ghost_strength_range = ghost_strength_range
         self.halo_radius_range = halo_radius_range
         self.aperture_blades_range = aperture_blades_range
         self.streak_probability = streak_probability
@@ -128,6 +140,7 @@ class SourceGlare(CameraTransform):
         self._flare = SunFlare(
             p=1.0,
             ghost_count_range=ghost_count_range,
+            ghost_strength_range=ghost_strength_range,
             halo_radius_range=halo_radius_range,
             aperture_blades_range=aperture_blades_range,
             streak_probability=streak_probability,
