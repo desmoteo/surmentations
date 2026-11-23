@@ -592,11 +592,21 @@ ring, give them their glow or illuminator gain and place them after
 ### Seeding
 
 Randomness goes through each transform's own RNG, so pipeline-level seeding
-reaches these transforms exactly as it does built-in ones:
+reaches these transforms exactly as it does built-in ones. Build the
+pipeline with this library's `Compose`, `OneOf` and `Sequential`, which
+the ready-made pipelines use:
 
 ```python
-transform = A.Compose([...], seed=42)
+from surmentations.base import Compose
+
+transform = Compose([...], seed=42)
 ```
+
+Albumentations' own containers hand the one seed to every child, and each
+child builds its generators from it, so siblings draw the same numbers:
+two transforms at `p=0.3` fire together or not at all, for ever. These
+containers give each child a seed of its own, drawn from the seed and its
+place, so the same seed still gives the same pictures.
 
 ---
 
