@@ -32,20 +32,28 @@ Conventions used throughout this library (matching Albumentations 2.x):
   ``BasicTransform`` auto-derives it by introspecting ``__init__`` across the
   MRO, which is sufficient for every transform in this library.
 - Randomness must go through the transform's own RNG so pipeline-level
-  seeding (``A.Compose(..., seed=...)``) reaches these transforms exactly
+  seeding (``Compose(..., seed=...)``) reaches these transforms exactly
   like built-in ones: use ``self.py_random.uniform(...)`` etc. for scalar
   draws and ``self.random_generator.integers/.uniform/...`` (a
   ``numpy.random.Generator``) for array draws. Never call ``np.random``
   or ``random`` directly.
+- A pipeline is built of this module's :class:`Compose`, :class:`OneOf`
+  and :class:`Sequential`, not Albumentations' own: those hand one seed to
+  every child, and siblings seeded alike draw alike (:func:`seed_apart`).
 """
 
 from __future__ import annotations
 
+import random
 from typing import Any, ClassVar
 
 import cv2
 import numpy as np
-from albumentations.core.transforms_interface import ImageOnlyTransform
+from albumentations.core.composition import BaseCompose
+from albumentations.core.composition import Compose as _Compose
+from albumentations.core.composition import OneOf as _OneOf
+from albumentations.core.composition import Sequential as _Sequential
+from albumentations.core.transforms_interface import BasicTransform, ImageOnlyTransform
 
 from surmentations.depth.provider import carry_depth, lit_air, settled_fov
 from surmentations.diagnostics import instrument
@@ -195,6 +203,60 @@ def lamp_cones(data: dict[str, Any], extinction_per_m: float) -> np.ndarray | No
     sent = np.float32(extinction_per_m * AIR_PHASE) * through
     glow: np.ndarray = full[..., :3] * sent[..., None]
     return glow
+
+
+def child_seed(seed: int | None, index: int) -> int | None:
+    """The seed the ``index``-th child of a compose seeded with ``seed`` gets: its own.
+
+    Drawn from the two together, so that it is the same every time for the
+    same place in the same pipeline, and differs from every sibling's.
+    """
+    if seed is None:
+        return None
+    return int(np.random.SeedSequence([seed % 2**32, index]).generate_state(1)[0])
+
+
+def seed_apart(compose: BaseCompose, seed: int | None) -> None:
+    """Seed ``compose`` with ``seed`` and each of its children with a seed of its own.
+
+    Albumentations' ``BaseCompose.set_random_seed`` hands the one seed to
+    every child, and each builds its generators from it, so siblings draw
+    the same numbers: two transforms at ``p=0.3`` under one seeded
+    ``Compose`` fire together or not at all, for ever, and the first draw
+    of every transform in the pipeline comes out the same. This gives each
+    child :func:`child_seed` of the seed and its place instead, and a child
+    that is a compose of this module's does the same for its own.
+    """
+    compose.seed = seed
+    compose.random_generator = np.random.default_rng(seed)
+    compose.py_random = random.Random(seed)
+    for index, transform in enumerate(compose.transforms):
+        if isinstance(transform, (BasicTransform, BaseCompose)):
+            transform.set_random_seed(child_seed(seed, index))
+
+
+class Compose(_Compose):
+    """``albumentations.Compose`` whose children are seeded apart (:func:`seed_apart`)."""
+
+    def set_random_seed(self, seed: int | None) -> None:
+        """Seed this compose, and each child with a seed of its own."""
+        seed_apart(self, seed)
+
+
+class OneOf(_OneOf):
+    """``albumentations.OneOf`` whose children are seeded apart (:func:`seed_apart`)."""
+
+    def set_random_seed(self, seed: int | None) -> None:
+        """Seed this compose, and each child with a seed of its own."""
+        seed_apart(self, seed)
+
+
+class Sequential(_Sequential):
+    """``albumentations.Sequential`` whose children are seeded apart (:func:`seed_apart`)."""
+
+    def set_random_seed(self, seed: int | None) -> None:
+        """Seed this compose, and each child with a seed of its own."""
+        seed_apart(self, seed)
 
 
 def scene_fov(data: dict[str, Any], horizontal_fov_deg: float) -> float:

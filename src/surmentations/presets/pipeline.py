@@ -132,7 +132,7 @@ def physical_order(transforms: list[Any]) -> list[Any]:
     control of probabilities, seeding and everything else Albumentations
     offers::
 
-        A.Compose(physical_order([
+        Compose(physical_order([
             VideoCodecArtifacts(p=0.4),
             RandomRain(depth_provider=provider, p=0.3),
             DirtSoil(p=0.2),

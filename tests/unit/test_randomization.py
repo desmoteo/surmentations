@@ -9,6 +9,10 @@ that failed to generalise.
 So these are guards on the property rather than on any one value: two seeds
 must give materially different parameters and materially different pixels, and
 the physical knobs must be ranges rather than scalars.
+
+And the transforms of one seeded pipeline must draw apart from each other:
+Albumentations' containers hand the one seed to every child, and siblings
+seeded alike fire together or not at all.
 """
 
 from __future__ import annotations
@@ -248,3 +252,49 @@ def test_effect_strength_varies_across_seeds(name: str) -> None:
         f"{name}: effect strength is nearly constant across seeds "
         f"(relative spread {spread:.4f}, values {[round(s, 2) for s in strengths]})"
     )
+
+
+def _fired_together(seed: int, calls: int = 120) -> np.ndarray:
+    """Which of two siblings at ``p=0.5`` fired on each call of a pipeline seeded with ``seed``."""
+    from surmentations.base import Compose
+    from surmentations.diagnostics import recording
+
+    image = np.full((48, 48, 3), 128, dtype=np.uint8)
+    pipeline = Compose([SensorNoise(p=0.5), AcFlicker(p=0.5)], seed=seed)
+    rows = []
+    for _ in range(calls):
+        with recording() as log:
+            pipeline(image=image)
+        names = {record["t"] for record in log}
+        rows.append(("SensorNoise" in names, "AcFlicker" in names))
+    return np.array(rows)
+
+
+def test_siblings_under_a_seeded_compose_draw_apart() -> None:
+    """Two transforms at p=0.5 under one seeded Compose each fire half the time,
+    and not on the same calls: Albumentations' own container gives both the
+    one seed, and they fire together or not at all, for ever."""
+    rows = _fired_together(7)
+    assert 0.3 < rows[:, 0].mean() < 0.7 and 0.3 < rows[:, 1].mean() < 0.7
+    apart = float((rows[:, 0] != rows[:, 1]).mean())
+    assert apart > 0.25, f"siblings fired alike on all but {apart:.0%} of calls: one seed for both"
+
+
+def test_the_same_seed_gives_the_same_draws_when_seeded_apart() -> None:
+    """Seeding apart is from the seed and each child's place, so it repeats."""
+    assert np.array_equal(_fired_together(7, calls=40), _fired_together(7, calls=40))
+    assert not np.array_equal(_fired_together(7, calls=40), _fired_together(8, calls=40))
+
+
+def test_the_pipeline_s_containers_seed_their_children_apart() -> None:
+    """Every container the ready-made pipelines are built of seeds apart, down the tree."""
+    from surmentations.base import OneOf, Sequential, child_seed
+
+    first, second = SensorNoise(p=0.5), AcFlicker(p=0.5)
+    inner = Sequential([first, second], p=1.0)
+    outer = OneOf([inner, SensorNoise(p=0.5)], p=1.0)
+    outer.set_random_seed(11)
+    assert inner.seed == child_seed(11, 0)
+    assert first.seed == child_seed(child_seed(11, 0), 0)
+    assert second.seed == child_seed(child_seed(11, 0), 1)
+    assert first.seed != second.seed != outer.transforms[1].seed

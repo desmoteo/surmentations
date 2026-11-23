@@ -21,6 +21,7 @@ from typing import Any, NamedTuple
 import numpy as np
 from albumentations.core.composition import BaseCompose, TransformsSeqType
 
+from surmentations.base import seed_apart
 from surmentations.depth.provider import SharedDepthProvider
 from surmentations.perception.labels import SceneClass
 from surmentations.utils.photometry import luminance, to_linear_unit
@@ -113,6 +114,10 @@ class BySource(BaseCompose):
         branches: TransformsSeqType = [by_day, at_night, indoors]
         super().__init__(transforms=branches, p=p)
         self.depth_provider = depth_provider
+
+    def set_random_seed(self, seed: int | None) -> None:
+        """Seed the three branches apart (:func:`~surmentations.base.seed_apart`)."""
+        seed_apart(self, seed)
 
     def __call__(self, *args: Any, force_apply: bool = False, **data: Any) -> dict[str, Any]:
         """Send the frame down the branch for what it is."""

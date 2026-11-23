@@ -35,6 +35,7 @@ from surmentations.atmosphere.night_rain import NightRain
 from surmentations.atmosphere.night_snow import NightSnow
 from surmentations.atmosphere.rain import MIN_RAIN_RATE_MM_H, RandomRain
 from surmentations.atmosphere.snow import RandomSnow
+from surmentations.base import Compose, OneOf, Sequential
 from surmentations.camera import (
     AcFlicker,
     ExposureTransient,
@@ -764,9 +765,9 @@ def weather_state(
             ],
         }
     # In the order of `WEATHER_STATES`, less the states with no share.
-    return A.OneOf(
+    return OneOf(
         [
-            A.Sequential(arms[name], p=shares[name])
+            Sequential(arms[name], p=shares[name])
             for name in WEATHER_STATES
             if shares[name] > 0.0
         ],
@@ -896,9 +897,9 @@ def surveillance(
     }
     in_colour = _at(NightColorMode, "NightColorMode", 1.0, severity, depth_provider=depth_provider)
     in_infrared = _at(NightIrMode, "NightIrMode", 1.0, severity, depth_provider=depth_provider)
-    by_day = A.OneOf(
+    by_day = OneOf(
         [
-            A.Sequential(
+            Sequential(
                 [
                     weather_state(
                         depth_provider,
@@ -924,7 +925,7 @@ def surveillance(
                 ],
                 p=day,
             ),
-            A.Sequential(
+            Sequential(
                 [
                     # A night in colour, under street lighting: lit from
                     # its lamps, where the provider knows where they are.
@@ -935,7 +936,7 @@ def surveillance(
                 ],
                 p=lit_night,
             ),
-            A.Sequential(
+            Sequential(
                 [
                     weather_state(
                         depth_provider, night=True, relight=in_infrared, infrared=True, **shared
@@ -954,10 +955,10 @@ def surveillance(
         p=1.0,
     )
     if not read_source:
-        return A.Compose([by_day])
+        return Compose([by_day])
     # A frame that is a night already is not lit again: it gets a night's
     # weather, in the light it has. One under a roof gets the camera alone.
-    at_night = A.Sequential(
+    at_night = Sequential(
         [
             weather_state(depth_provider, night=True, **shared),
             *_stream(
@@ -970,13 +971,13 @@ def surveillance(
         ],
         p=1.0,
     )
-    indoors = A.Sequential(
+    indoors = Sequential(
         _stream(
             lit_by_mains=True, infrared=False, own_noise=False, severity=severity, **tail
         ),
         p=1.0,
     )
-    return A.Compose([BySource(by_day, at_night, indoors, depth_provider)])
+    return Compose([BySource(by_day, at_night, indoors, depth_provider)])
 
 
 def surveillance_lite(
@@ -1037,11 +1038,11 @@ def surveillance_lite(
         "wdr": wdr,
         "denoise": denoise,
     }
-    return A.Compose(
+    return Compose(
         [
-            A.OneOf(
+            OneOf(
                 [
-                    A.Sequential(
+                    Sequential(
                         [
                             _at(WaterDroplets, "WaterDroplets", droplets, severity),
                             _at(SunFlare, "SunFlare", flare, severity),
@@ -1062,7 +1063,7 @@ def surveillance_lite(
                     # artificial, which raises the mains flicker and the
                     # denoiser's workload. Use `surveillance` if you need
                     # night as a domain.
-                    A.Sequential(
+                    Sequential(
                         [
                             _at(
                                 WaterDroplets, "WaterDroplets", droplets, severity,
