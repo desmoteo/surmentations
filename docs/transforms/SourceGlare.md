@@ -54,6 +54,7 @@ others, can do nothing with `p=1`.
 | `max_sources_range` | `(1, 3)` | how many of the frame's lights flare, largest first, drawn per call. Each costs one `SunFlare` render. |
 | `intensity_range` | `(0.08, 0.35)` | flare strength for a source of the reference size, in `SunFlare`'s units, drawn per call. It stands for how far past full scale the lights really were, which is not recorded. A lamp is orders of magnitude dimmer than the sun those units were set for, so useful values are a fraction of `SunFlare`'s. Larger clipped regions flare more, as the square root of their area, within a factor of two either way. |
 | `ghost_count_range` | `(2, 6)` | as for `SunFlare`. |
+| `ghost_strength_range` | `(0.02, 0.15)` | as for `SunFlare`, and like the intensity a fraction of its default: a lamp's ghosts are drawn against a frame exposed for the dark, where a ghost as strong as the sun's would outshine the street. Real ones are faint polygons, seen mostly against the sky and dark walls. |
 | `halo_radius_range` | `(0.04, 0.1)` | as for `SunFlare`. |
 | `aperture_blades_range` | `(5, 9)` | as for `SunFlare`. |
 | `streak_probability` | `0.75` | as for `SunFlare`. |

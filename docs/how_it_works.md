@@ -650,6 +650,18 @@ The dispersion ring integrates over 48 wavelengths rather than tinting three
 rings, because sampling it at R, G and B gives three discrete coloured rings
 instead of a continuous spectrum.
 
+The sun need not be in the frame. Half the random flares put it past the top
+edge or beside the upper half of the frame, as a camera looking down at a road
+mostly sees it, and then the flare is its ghosts alone: tinted polygons on
+the road, opposite a sun that is nowhere in the picture. That only works
+because ghosts are added in linear light, after the rest of the flare is
+decoded. Drawn on the sRGB-encoded canvas with the glare, a ghost was
+decoded to a level or two of light wherever no glare lay under it, so a sun
+out of frame left nothing visible. A ghost carries a fixed amount of light,
+spread over its polygon, so a large one is faint and a ring has it at the
+rim. The CCD smear is dropped for a sun off the sensor: it is charge from
+the source's own pixels.
+
 ---
 
 ## 6. Sensor, ISP and transmission

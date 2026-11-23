@@ -79,6 +79,27 @@ identifiable as surveillance footage largely by these:
     focused image, they print straight through any defocused highlight, and
     they mark out the cheap moulded asphericals these lenses use.
 
+### A source outside the frame
+
+The sun does not have to be in the picture to flare it. A road camera looks
+down, so the sun is more often just past the top edge or a side edge than in
+the frame, and then its core never reaches the sensor. What does reach it is
+the tail of the veiling glare and the ghosts, which lie on the line through
+the image centre whether or not the source itself is imaged. That is the
+commonest flare in daytime surveillance footage: one or two tinted polygons
+on the road, on the far side of the centre from a sun that is nowhere to be
+seen. The CCD smear is the one artefact that needs the source on the sensor,
+since it is charge from the source's own pixels, so it is dropped then.
+
+Ghosts are drawn as added radiance in linear light, after the rest of the
+flare has been converted to it. The rest is built in sRGB-encoded units and
+decoded as a whole, which suits the glare around the source; but decoding
+crushes faint values (a ghost written at 7/255 adds 0.002 of full scale),
+so a ghost drawn that way was visible only where the glare under it lifted
+it, and one from a sun outside the frame, with no glare under it, was not
+visible at all. In linear light a ghost's brightness is its own, wherever
+it falls.
+
 Reference: Hullin et al. 2011, "Physically-Based Real-Time Lens Flare
 Rendering" (Eurographics/SIGGRAPH). This is a stylized, real-time-friendly
 approximation of that model, not a full wave-optics simulation.
@@ -87,9 +108,12 @@ approximation of that model, not a full wave-optics simulation.
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
-| `flare_position` | `None` | `(x, y)` in normalized `[0, 1]` image coordinates, or `None` to pick a random position (biased toward the upper image, where light sources typically appear) each call. |
+| `flare_position` | `None` | `(x, y)` in normalized `[0, 1]` image coordinates, or `None` to pick a random position each call: in the upper half of the frame, where light sources typically appear, or outside it with `off_frame_probability`. A position outside `[0, 1]` puts the source outside the frame, so that only its ghosts, the tail of its glare and any streaks reach the picture. |
+| `off_frame_probability` | `0.5` | when the position is random, the chance the source is placed outside the frame, past the top edge or the upper half of a side edge. A camera looking down at a road sees the sun out of frame more often than in it, and the flare it gets then is ghosts alone. |
+| `off_frame_reach_range` | `(0.03, 0.5)` | how far past the frame's edge that source sits, along the line from the image centre, as a fraction of the half-diagonal. |
 | `intensity_range` | `(0.8, 1.9)` | overall brightness multiplier for the whole flare. |
 | `ghost_count_range` | `(4, 10)` | number of internal-reflection ghost copies. |
+| `ghost_strength_range` | `(0.08, 0.8)` | how much light a ghost of the reference size (4% of the diagonal) adds, in linear light at an intensity of 1, drawn per ghost on a log scale. Each pair of surfaces reflects a different share of the light, so ghosts in one flare differ by an order of magnitude. A larger ghost spreads the same light thinner, as the square of its size, and a ring-shaped one gathers it at the rim. |
 | `halo_radius_range` | `(0.15, 0.35)` | halo ring radius as a fraction of the image's half-diagonal. |
 | `streak_probability` | `0.75` | chance of rendering the iris-diffraction starburst. |
 | `aperture_blades_range` | `(5, 9)` | number of aperture blades, drawn per call. Sets both the ghosts' polygonal shape and the starburst's spike count (N spikes for an even count, 2N for an odd one). |
