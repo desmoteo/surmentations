@@ -60,6 +60,7 @@ from surmentations import _native, mode
 from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
 from surmentations.camera.night_lighting import (
     SceneLighting,
+    lamps_of,
     light_scene,
     lit_air_of,
     note_lit_air,
@@ -875,6 +876,7 @@ class NightIrMode(CameraTransform):
         # afterwards. Colourless: this camera sees no colour.
         white = np.ones(3, dtype=np.float32)
         drawn["air"] = lit_air_of(lighting, white, white)
+        drawn["lamps"] = lamps_of(lighting, white, white)
         drawn["exposed"] = [1.0]
 
         # What is made to send light back where it came from, under a lamp

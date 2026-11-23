@@ -155,19 +155,22 @@ def _fingerprint(image: np.ndarray) -> tuple[Any, ...]:
 class _Alias:
     """One array known to show a scene."""
 
-    __slots__ = ("fingerprint", "lit_air", "ref")
+    __slots__ = ("fingerprint", "lamps", "lit_air", "ref")
 
-    def __init__(self, image: np.ndarray, lit_air: np.ndarray | None = None) -> None:
+    def __init__(
+        self, image: np.ndarray, lit_air: np.ndarray | None = None, lamps: Any = None
+    ) -> None:
         """Hold ``image`` weakly, with a fingerprint of its contents.
 
         ``lit_air`` is what is known of the light in the air of this one
-        picture of the scene (:meth:`SharedDepthProvider.set_lit_air`): it
-        is the picture's and not the scene's, since the same scene by day
-        has none.
+        picture of the scene, and ``lamps`` of the lamps that throw it
+        (:meth:`SharedDepthProvider.set_lit_air`): they are the picture's
+        and not the scene's, since the same scene by day has none.
         """
         self.ref = weakref.ref(image)
         self.fingerprint = _fingerprint(image)
         self.lit_air = lit_air
+        self.lamps = lamps
 
     def is_alive(self) -> bool:
         """Whether the array this alias stands for still exists."""
@@ -681,8 +684,10 @@ class SharedDepthProvider:
         with self._lock:
             return self._scene_for(image).signs
 
-    def set_lit_air(self, image: np.ndarray, air: np.ndarray | None) -> bool:
-        """Note the light that hangs in the air of one picture of a scene.
+    def set_lit_air(
+        self, image: np.ndarray, air: np.ndarray | None, lamps: Any = None
+    ) -> bool:
+        """Note the light in the air of one picture of a scene, and the lamps that throw it.
 
         ``air`` is ``(h, w, 4)`` float32, on any grid of the frame's shape.
         In its first three planes, for each line of sight, the light its
@@ -700,6 +705,12 @@ class SharedDepthProvider:
         and it follows the frame through them. It belongs to the picture
         and not to the scene: the same scene by day has none.
 
+        ``lamps`` are the same lamps placed in space
+        (:class:`~surmentations.camera.night_lighting.SceneLamps`), for a
+        transform that puts something in the air and must light each
+        piece of it by where it is (:func:`lit_lamps`); ``None`` where
+        nothing was placed.
+
         Returns whether ``image`` is a frame this provider knows.
         """
         with self._lock:
@@ -708,6 +719,7 @@ class SharedDepthProvider:
             if alias is None:
                 return False
             alias.lit_air = air
+            alias.lamps = lamps
             return True
 
     def get_labels(self, image: np.ndarray) -> np.ndarray | None:
@@ -1061,6 +1073,22 @@ def lit_air(image: np.ndarray) -> np.ndarray | None:
             alias = None if scene is None else scene.alias_of(image)
             if alias is not None and alias.lit_air is not None:
                 return alias.lit_air
+    return None
+
+
+def lit_lamps(image: np.ndarray) -> Any:
+    """The lamps of ``image`` in space, as whichever live provider knows them; else ``None``.
+
+    What :meth:`SharedDepthProvider.set_lit_air` noted as ``lamps`` for
+    this picture or for the one it was made from: a
+    :class:`~surmentations.camera.night_lighting.SceneLamps`.
+    """
+    for provider in list(_LIVE_PROVIDERS):
+        with provider._lock:
+            scene = provider._find(image)
+            alias = None if scene is None else scene.alias_of(image)
+            if alias is not None and alias.lamps is not None:
+                return alias.lamps
     return None
 
 

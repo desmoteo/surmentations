@@ -48,9 +48,11 @@ from surmentations.atmosphere.night_rain import (
     _REFERENCE_DISTANCE_M,
     _beam_profile,
     _frustum_volume,
+    lamp_field,
 )
+from surmentations.atmosphere.rain import _DROP_GLINT_SHARE
 from surmentations.atmosphere.snow import render_flake_field, snow_fall_speed
-from surmentations.base import CameraTransform, lamp_cones, scene_fov
+from surmentations.base import AIR_PHASE, CameraTransform, lamp_cones, scene_fov, scene_lamps
 from surmentations.diagnostics import record_draw
 from surmentations.utils.noise import value_noise
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -81,6 +83,39 @@ _SOFT_EDGE = 0.0016
 # What a falling particle sends a lens of a lamp's light, against what its
 # share of the air's extinction says. 1: it is taken at its word.
 _CONE_GAIN = 1.0
+
+
+def _lamp_flakes(
+    flakes: dict[str, np.ndarray], lamps: Any, width: int, height: int
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Each flake's brightness in each kind of lamp's light, with the colour to draw it in.
+
+    A flake is put in space on its line of sight at its distance, and the
+    lamps say what light falls on it
+    (:meth:`~surmentations.camera.night_lighting.SceneLamps.irradiance`);
+    it returns :data:`~surmentations.base.AIR_PHASE` of that, as the
+    drops of `NightRain` and the unresolved flakes of the cones do.
+    """
+    focal = max(float(lamps.focal_px), 1e-3)
+    distance = flakes["distance"]
+    points = np.stack(
+        [
+            (flakes["x"] - 0.5 * width) / focal * distance,
+            (flakes["y"] - 0.5 * height) / focal * distance,
+            distance,
+        ],
+        axis=1,
+    )
+    layers: list[tuple[np.ndarray, np.ndarray]] = []
+    for light, colour in zip(
+        lamps.irradiance(points), (lamps.street_colour, lamps.head_colour), strict=True
+    ):
+        if light is None or float(light.max()) <= 1e-6:
+            continue
+        layers.append(
+            ((light * np.float32(AIR_PHASE)).astype(np.float32), np.asarray(colour, np.float32))
+        )
+    return layers
 
 
 class NightSnow(CameraTransform):
@@ -118,6 +153,14 @@ class NightSnow(CameraTransform):
             ahead of each headlamp, and dark elsewhere, which is how
             snow at night is mostly seen. See
             :func:`~surmentations.base.lamp_cones`.
+        lamp_glint_range: how many times full scale the lamps in the frame
+            are taken to be when they light the flakes in front of them,
+            drawn per call; 0, the default, is not at all. As for
+            :class:`~surmentations.atmosphere.night_rain.NightRain`: the
+            flakes near the line of sight to a lamp in the picture are lit
+            by it, and snow at night is seen round the lamps. The lamps are
+            those the night's transform lit, as a provider keeps them; on
+            any other frame it does nothing.
         backscatter_grain_range: how much of its grain that glow keeps, drawn
             per call. At 0 it is an even wall of light, as it was. At 1 it
             varies as a count of flakes does: what comes back from the air
@@ -201,6 +244,11 @@ class NightSnow(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 4.0)),
         ]
+        lamp_glint_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 40.0)),
+        ]
         backscatter_grain_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -266,6 +314,7 @@ class NightSnow(CameraTransform):
         backscatter_range: tuple[float, float] = (0.03, 0.2),
         backscatter_grain_range: tuple[float, float] = (0.7, 1.2),
         lamp_cone_range: tuple[float, float] = (0.6, 1.4),
+        lamp_glint_range: tuple[float, float] = (0.0, 0.0),
         exposure_time_range: tuple[float, float] = (0.020, 0.040),
         fall_speed_scale_range: tuple[float, float] = (0.7, 1.8),
         fall_angle_range: tuple[float, float] = (-12.0, 12.0),
@@ -290,6 +339,7 @@ class NightSnow(CameraTransform):
         self.backscatter_range = backscatter_range
         self.backscatter_grain_range = backscatter_grain_range
         self.lamp_cone_range = lamp_cone_range
+        self.lamp_glint_range = lamp_glint_range
         self.exposure_time_range = exposure_time_range
         self.fall_speed_scale_range = fall_speed_scale_range
         self.fall_angle_range = fall_angle_range
@@ -402,6 +452,24 @@ class NightSnow(CameraTransform):
             "beam": _beam_profile(height, width, falloff),
             "backscatter": backscatter,
         }
+        # The flakes in the light of the scene's own lamps, each by where
+        # it is, as the drops of NightRain are. No draw is made here.
+        lamps = scene_lamps(data)
+        if lamps is not None and count:
+            drawn["lamp_flakes"] = _lamp_flakes(drawn["flakes"], lamps, width, height)
+            record_draw(
+                # The flakes the lamps light to at least a tenth of the most lit.
+                lamp_lit_flakes=int(
+                    sum(
+                        int((brightness >= 0.1 * brightness.max()).sum())
+                        for brightness, _ in drawn["lamp_flakes"]
+                        if brightness.size
+                    )
+                ),
+                lamp_lit_peak=float(
+                    max((float(b.max()) for b, _ in drawn["lamp_flakes"]), default=0.0)
+                ),
+            )
         # The grain of the glow, last of all the draws.
         grain = self.py_random.uniform(*self.backscatter_grain_range)
         grain_seed = self.py_random.randint(0, 2**31 - 1)
@@ -438,6 +506,13 @@ class NightSnow(CameraTransform):
                     1.0,
                     lit_from_lens=True,
                 )
+        # The flakes in front of the lamps in the picture: after every other
+        # draw, so that those are the same with it and without.
+        glint = self.py_random.uniform(*self.lamp_glint_range)
+        places = lamps.in_picture() if lamps is not None else []
+        if glint > 0.0 and count and places:
+            drawn["glint"] = glint
+            drawn["glint_lamps"] = places
         return drawn
 
     def apply(
@@ -451,6 +526,9 @@ class NightSnow(CameraTransform):
         cones: np.ndarray | None = None,
         cone_grain: np.ndarray | None = None,
         tumble_seed: int = 0,
+        lamp_flakes: list[tuple[np.ndarray, np.ndarray]] | None = None,
+        glint: float = 0.0,
+        glint_lamps: list[tuple[float, float, np.ndarray]] | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Render the lit flakes through a round stop and add them, with glare and backscatter.
@@ -460,14 +538,17 @@ class NightSnow(CameraTransform):
         of what each returned before the sensor clipped it. The near
         flakes, the long streaks, are drawn apart from the rest: uneven
         along their length, as a thing that turns in the lamp's light is,
-        and soft at the edge.
+        and soft at the edge. The same flakes in the scene's lamps' light
+        (``lamp_flakes``, a brightness per flake and a colour for each kind
+        of lamp) add in that colour.
         """
         height, width = img.shape[:2]
         frame_centre = (width / 2.0, height / 2.0)
         diagonal = float(np.hypot(width, height))
+        near = flakes["smear"] >= _NEAR_STREAK * diagonal
 
-        def field(chosen: np.ndarray) -> np.ndarray:
-            """The flakes chosen, max-blended into a canvas of their own."""
+        def field(chosen: np.ndarray, brightness: np.ndarray) -> np.ndarray:
+            """The flakes chosen, at ``brightness`` each, max-blended into a canvas of their own."""
             canvas = np.zeros((height, width), dtype=np.float32)
             if not chosen.any():
                 return canvas
@@ -484,21 +565,31 @@ class NightSnow(CameraTransform):
                 rim_gain=1.0,
                 cats_eye=0.0,
                 frame_centre=frame_centre,
-                gain=some["brightness"],
+                gain=brightness[chosen],
             )
             return canvas
 
-        near = flakes["smear"] >= _NEAR_STREAK * diagonal
-        lit = field(~near)
-        if near.any():
-            streaks = field(near)
-            cells = max(2, round(1.0 / _TUMBLE_SCALE * max(height, width) / diagonal))
-            turning = value_noise(
-                height, width, rng=np.random.default_rng(tumble_seed), octaves=2, base_cells=cells
-            )
-            streaks *= 1.0 + np.float32(_TUMBLE) * (2.0 * turning - 1.0)
-            streaks = cv2.GaussianBlur(streaks, (0, 0), sigmaX=max(0.6, _SOFT_EDGE * diagonal))
-            np.maximum(lit, streaks, out=lit)
+        def lit_by(brightness: np.ndarray) -> np.ndarray:
+            """Every flake at ``brightness``, the near ones as the streaks they are."""
+            lit = field(~near, brightness)
+            if near.any():
+                streaks = field(near, brightness)
+                cells = max(2, round(1.0 / _TUMBLE_SCALE * max(height, width) / diagonal))
+                turning = value_noise(
+                    height,
+                    width,
+                    rng=np.random.default_rng(tumble_seed),
+                    octaves=2,
+                    base_cells=cells,
+                )
+                streaks *= 1.0 + np.float32(_TUMBLE) * (2.0 * turning - 1.0)
+                streaks = cv2.GaussianBlur(
+                    streaks, (0, 0), sigmaX=max(0.6, _SOFT_EDGE * diagonal)
+                )
+                np.maximum(lit, streaks, out=lit)
+            return lit
+
+        lit = lit_by(flakes["brightness"])
 
         if glare > 0.0 and len(flakes["x"]):
             # Veiling glare, on the unclipped light: what spills is a share of
@@ -512,6 +603,15 @@ class NightSnow(CameraTransform):
         # flake scattering the lamp's light back adds to whatever is behind
         # it, and at night there is very little behind it to hide.
         out = linear + (lit * beam)[..., None]
+        for brightness, colour in lamp_flakes or ():
+            out = out + lit_by(brightness)[..., None] * colour.reshape(1, 1, 3)
+        if glint > 0.0 and glint_lamps:
+            # In front of the lamps in the picture: each flake's cover, at a
+            # brightness of 1, by the light the lamps throw near their line
+            # of sight.
+            lamps = lamp_field(height, width, glint_lamps)
+            cover = np.minimum(lit_by(np.ones_like(flakes["brightness"])), 1.0)
+            out = out + cover[..., None] * (np.float32(glint * _DROP_GLINT_SHARE) * lamps)
         if backscatter > 0.0:
             # The flakes the beam lights but the lens cannot resolve. Flat in
             # depth, because the 1/z^2 irradiance and the z^2 growth of the

@@ -107,6 +107,10 @@ class SceneLighting(NamedTuple):
       sight each is, in metres, on the same grid.
     * ``vehicles_read``, ``vehicles_lit``, ``street_lamps``: how many of
       each were found and used.
+    * ``heads``, ``sources``, ``middle``, ``up``, ``focal_px``, ``shape``,
+      ``street_level``, ``beam_level``: where the lamps are in space and
+      how strong, as :func:`lamps_of` keeps them for what is put in the
+      air afterwards. ``None``, empty or 0 where nothing was thrown.
     """
 
     street: np.ndarray | None = None
@@ -124,6 +128,14 @@ class SceneLighting(NamedTuple):
     vehicles_read: int = 0
     vehicles_lit: int = 0
     street_lamps: int = 0
+    heads: np.ndarray | None = None
+    sources: tuple[BeamSource, ...] = ()
+    middle: np.ndarray | None = None
+    up: np.ndarray | None = None
+    focal_px: float = 0.0
+    shape: tuple[int, int] = (0, 0)
+    street_level: float = 0.0
+    beam_level: float = 0.0
 
     @property
     def lit(self) -> bool:
@@ -308,6 +320,7 @@ def light_scene(
         return full
 
     street = head_light = head_glow = road = air_street = air_street_far = None
+    placed = None
     if len(posts):
         placed = lamps_in_space(posts, focal, (height, width), middle, up)
         street = enlarged(np.float32(street_lamp) * street_light(points, up, placed))
@@ -320,6 +333,7 @@ def light_scene(
             (labels == int(SceneClass.ROAD)).astype(np.float32), (0, 0), sigmaX=1.5
         )
     beams = in_beam = air_beams = air_beams_far = None
+    sources: list[BeamSource] = []
     if lit:
         sources = [_beam_source(vehicle, places) for vehicle, places in lit]
         stood = np.isin(small, [int(one) for one in _STANDING])
@@ -350,6 +364,108 @@ def light_scene(
         vehicles_read=len(seen),
         vehicles_lit=len(lit),
         street_lamps=int(len(posts)),
+        heads=placed,
+        sources=tuple(sources),
+        middle=np.asarray(middle, dtype=np.float32),
+        up=np.asarray(up, dtype=np.float32),
+        focal_px=float(focal),
+        shape=(height, width),
+        street_level=float(street_lamp) if len(posts) else 0.0,
+        beam_level=float(_BEAM_LEVEL * vehicle_lamp) if lit else 0.0,
+    )
+
+
+class SceneLamps(NamedTuple):
+    """The lamps of a night frame in space, for what is put in the air in front of the camera.
+
+    What :func:`light_scene` placed, kept for a transform that puts drops
+    or flakes in the air afterwards (`NightRain`, `NightSnow`): each one
+    is lit by how far it is from each lamp, as the ground is, and shows
+    under a lamp or in a beam and not in the dark between them. The
+    coordinates are the camera's (:func:`~surmentations.utils.night_light.scene_points`),
+    in metres; the levels are in unit exposures, the strength asked for on
+    the ground under a lamp; ``exposed`` is what the camera's exposure
+    made of a unit, so that :meth:`irradiance` is in the frame's own
+    linear units.
+    """
+
+    heads: np.ndarray | None
+    street_level: float
+    street_colour: np.ndarray
+    sources: tuple[BeamSource, ...]
+    beam_level: float
+    head_colour: np.ndarray
+    middle: np.ndarray
+    up: np.ndarray
+    focal_px: float
+    shape: tuple[int, int]
+    exposed: float = 1.0
+
+    def irradiance(self, points: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """The street lamps' light and the headlamps' on each of ``points``, ``(n, 3)``.
+
+        Two ``(n,)`` arrays in the frame's linear units, what a white matt
+        surface at the point would show, or ``None`` for a kind of lamp
+        there is none of. The points are taken where they are, in the air:
+        the beams' rule that a line of sight ends on the road does not
+        apply to a drop in front of it.
+        """
+        grid = np.ascontiguousarray(points, dtype=np.float32).reshape(1, -1, 3)
+        street = beams = None
+        if self.heads is not None and len(self.heads) and self.street_level > 0.0:
+            street = street_light(grid, self.up, self.heads)[0] * np.float32(
+                self.street_level * self.exposed
+            )
+        if self.sources and self.beam_level > 0.0:
+            in_the_air = np.ones(grid.shape[:2], dtype=bool)
+            beams = headlamp_light(
+                grid, self.middle, self.up, self.focal_px, self.shape, self.sources, in_the_air
+            )[0] * np.float32(self.beam_level * self.exposed)
+        return street, beams
+
+
+    def in_picture(self) -> list[tuple[float, float, np.ndarray]]:
+        """Where each lamp burning towards the camera is in the picture, with its colour.
+
+        The street lamps' heads, projected through the camera, and the
+        headlamps of the vehicles seen from the front, where a pair was
+        found: ``(column, row, colour)``, the colour linear RGB at most 1.
+        For what lights the drops and flakes in front of a lamp.
+        """
+        height, width = self.shape
+        focal = max(float(self.focal_px), 1e-3)
+        places: list[tuple[float, float, np.ndarray]] = []
+        if self.heads is not None and self.street_level > 0.0:
+            for x, y, z, _tall in np.asarray(self.heads, dtype=np.float32).reshape(-1, 4):
+                if z > 0.1:
+                    column, row = focal * x / z + 0.5 * width, focal * y / z + 0.5 * height
+                    places.append((column, row, self.street_colour))
+        if self.beam_level > 0.0:
+            for source in self.sources:
+                if not source.from_behind:
+                    places.extend((col, row, self.head_colour) for col, row in source.lamps)
+        return places
+
+
+def lamps_of(
+    lighting: SceneLighting, street_colour: np.ndarray, head_colour: np.ndarray
+) -> SceneLamps | None:
+    """The lamps :func:`light_scene` placed, as a provider keeps them; ``None`` with none."""
+    if lighting.up is None or lighting.middle is None:
+        return None
+    if not (lighting.heads is not None and len(lighting.heads)) and not lighting.sources:
+        return None
+    return SceneLamps(
+        lighting.heads,
+        lighting.street_level,
+        np.asarray(street_colour, dtype=np.float32).reshape(3),
+        lighting.sources,
+        lighting.beam_level,
+        np.asarray(head_colour, dtype=np.float32).reshape(3),
+        lighting.middle,
+        lighting.up,
+        lighting.focal_px,
+        lighting.shape,
     )
 
 
@@ -387,10 +503,11 @@ def note_lit_air(
     """Tell a provider what light hangs in the air of the frame a night transform returned.
 
     ``params`` are the transform's own for the call, with the light on the
-    air under ``"air"`` (:func:`lit_air_of`), and the exposure the transform
-    settled on in the one-element list under ``"exposed"``: the two are
-    known at different moments of a call, and their product is what the
-    frame's own units make of the air's light. ``result`` is what the
+    air under ``"air"`` (:func:`lit_air_of`), the lamps in space under
+    ``"lamps"`` (:func:`lamps_of`), and the exposure the transform
+    settled on in the one-element list under ``"exposed"``: these are
+    known at different moments of a call, and the product is what the
+    frame's own units make of the lamps' light. ``result`` is what the
     transform returned; its frame is the one the note is for
     (:meth:`~surmentations.depth.provider.SharedDepthProvider.set_lit_air`).
     """
@@ -402,4 +519,7 @@ def note_lit_air(
     if air is not None and exposed:
         lit = air.astype(np.float32, copy=True)
         lit[..., :3] *= np.float32(exposed[0])
-    provider.set_lit_air(frame, lit)
+    lamps = params.get("lamps")
+    if lamps is not None and exposed:
+        lamps = lamps._replace(exposed=float(exposed[0]))
+    provider.set_lit_air(frame, lit, lamps)

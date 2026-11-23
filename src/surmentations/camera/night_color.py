@@ -54,6 +54,7 @@ from surmentations import _native, mode
 from surmentations.base import CameraTransform, first_frame, require_depth_provider, scene_of
 from surmentations.camera.night_lighting import (
     SceneLighting,
+    lamps_of,
     light_scene,
     lit_air_of,
     note_lit_air,
@@ -283,6 +284,7 @@ class NightColorMode(CameraTransform):
             "read_noise": self.py_random.uniform(*self.read_noise_range),
             "noise_seed": self.py_random.randint(0, 2**31 - 1),
             "air": air,
+            "lamps": lamps_of(lighting, street_colour, head_colour),
             "exposed": [1.0],
         }
 

@@ -55,7 +55,7 @@ from albumentations.core.composition import OneOf as _OneOf
 from albumentations.core.composition import Sequential as _Sequential
 from albumentations.core.transforms_interface import BasicTransform, ImageOnlyTransform
 
-from surmentations.depth.provider import carry_depth, lit_air, settled_fov
+from surmentations.depth.provider import carry_depth, lit_air, lit_lamps, settled_fov
 from surmentations.diagnostics import instrument
 
 RangeF = tuple[float, float]
@@ -203,6 +203,19 @@ def lamp_cones(data: dict[str, Any], extinction_per_m: float) -> np.ndarray | No
     sent = np.float32(extinction_per_m * AIR_PHASE) * through
     glow: np.ndarray = full[..., :3] * sent[..., None]
     return glow
+
+
+def scene_lamps(data: dict[str, Any]) -> Any:
+    """The lamps of a night frame, placed in space, or ``None`` for a frame nobody lit.
+
+    A :class:`~surmentations.camera.night_lighting.SceneLamps`, as the
+    transform that made a night of the frame noted it
+    (:func:`~surmentations.depth.provider.lit_lamps`): it gives the light
+    the lamps throw on any point of the air in front of the camera, for a
+    transform that puts drops or flakes there and must light each by where
+    it is.
+    """
+    return lit_lamps(scene_of(data))
 
 
 def child_seed(seed: int | None, index: int) -> int | None:

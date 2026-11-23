@@ -676,15 +676,25 @@ def weather_state(
             rain_rate_range_mm_h=RAIN_STRENGTHS[strength][1],
         )
         if not infrared:
-            # No lamp at the lens: the rain shows in the street's light.
-            settings.update(illuminator_gain_range=(0.0, 0.0), backscatter_range=(0.0, 0.0))
+            # No lamp at the lens: each drop shows in the light of the
+            # street lamps and headlamps the night put in the scene, and
+            # most of all in front of the lamps in the picture.
+            settings.update(
+                illuminator_gain_range=(0.0, 0.0),
+                backscatter_range=(0.0, 0.0),
+                lamp_glint_range=_LAMP_OVER_RANGE,
+            )
         return NightRain(p=1.0, **settings)
 
     def lit_snow() -> Any:
         """Falling snow in the light of a night that was made: `NightSnow`."""
         settings = of("NightSnow", 1, snowfall_rate_range_mm_h=SNOWFALL_MM_H)
         if not infrared:
-            settings.update(illuminator_gain_range=(0.05, 0.05), backscatter_range=(0.0, 0.0))
+            settings.update(
+                illuminator_gain_range=(0.05, 0.05),
+                backscatter_range=(0.0, 0.0),
+                lamp_glint_range=_LAMP_OVER_RANGE,
+            )
         return NightSnow(p=1.0, **settings)
 
     both = max(wet_rain, wet_fog)

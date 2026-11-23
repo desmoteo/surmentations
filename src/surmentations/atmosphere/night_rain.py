@@ -51,8 +51,12 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema
 from pydantic import AfterValidator, Field
 
 from surmentations import mode
-from surmentations.atmosphere.rain import render_streak_layer
-from surmentations.base import CameraTransform, lamp_cones, scene_fov
+from surmentations.atmosphere.rain import (
+    _DROP_GLINT_SHARE,
+    _LAMP_GLINT_REACH,
+    render_streak_layer,
+)
+from surmentations.base import AIR_PHASE, CameraTransform, lamp_cones, scene_fov, scene_lamps
 from surmentations.diagnostics import record_draw
 from surmentations.utils.grids import pixel_grid
 from surmentations.utils.photometry import from_linear_unit, to_linear_unit
@@ -121,6 +125,20 @@ class NightRain(CameraTransform):
             ahead of each headlamp, and dark elsewhere, which is how
             rain at night is mostly seen. See
             :func:`~surmentations.base.lamp_cones`.
+        lamp_glint_range: how many times full scale the lamps in the frame
+            are taken to be when they light the drops in front of them,
+            drawn per call; 0, the default, is not at all. A drop sends a
+            lamp's light on mostly forward, so one near the line of sight to
+            a lamp in the picture throws it at the lens and is the
+            brightest thing near it: rain at night is seen as a swarm of
+            bright streaks round the lamps. The lamps are those the transform
+            that made a night of the frame lit, the street lamps and the
+            headlamps, as a provider keeps them
+            (:meth:`~surmentations.camera.night_lighting.SceneLamps.in_picture`):
+            the bright things of a frame made a night of a day are as often
+            a white shirt as a lamp. On any other frame it does nothing;
+            :class:`~surmentations.atmosphere.rain.RandomRain` reads the
+            lamps off a night photograph instead.
         backscatter_grain_range: how much of its grain that glow keeps, drawn
             per call. At 0 it is an even wall of light, as it was. At 1 it
             varies as a count of drops does: what comes back from the air
@@ -193,6 +211,11 @@ class NightRain(CameraTransform):
             AfterValidator(nondecreasing),
             AfterValidator(check_range_bounds(0.0, 4.0)),
         ]
+        lamp_glint_range: Annotated[
+            tuple[float, float],
+            AfterValidator(nondecreasing),
+            AfterValidator(check_range_bounds(0.0, 40.0)),
+        ]
         backscatter_grain_range: Annotated[
             tuple[float, float],
             AfterValidator(nondecreasing),
@@ -235,6 +258,7 @@ class NightRain(CameraTransform):
         backscatter_range: tuple[float, float] = (0.02, 0.14),
         backscatter_grain_range: tuple[float, float] = (0.7, 1.2),
         lamp_cone_range: tuple[float, float] = (0.6, 1.4),
+        lamp_glint_range: tuple[float, float] = (0.0, 0.0),
         horizontal_fov_range_deg: tuple[float, float] = (48.0, 78.0),
         aperture_diameter_range_mm: tuple[float, float] = (0.9, 2.6),
         focus_distance_range_m: tuple[float, float] = (8.0, 40.0),
@@ -256,6 +280,7 @@ class NightRain(CameraTransform):
         self.backscatter_range = backscatter_range
         self.backscatter_grain_range = backscatter_grain_range
         self.lamp_cone_range = lamp_cone_range
+        self.lamp_glint_range = lamp_glint_range
         self.horizontal_fov_range_deg = horizontal_fov_range_deg
         self.aperture_diameter_range_mm = aperture_diameter_range_mm
         self.focus_distance_range_m = focus_distance_range_m
@@ -369,6 +394,29 @@ class NightRain(CameraTransform):
             "backscatter": backscatter,
             "angle": float(np.rad2deg(angle_rad)),
         }
+        # The drops in the light of the scene's own lamps, each by where it
+        # is: a drop under a street lamp or in a headlamp's beam is lit as
+        # the road there is, and shows; one in the dark between them does
+        # not. Nothing is drawn from the generators here, so the draws
+        # above are the same with lamps and without.
+        lamps = scene_lamps(data)
+        if lamps is not None and count:
+            drawn["lamp_streaks"] = _lamp_streaks(
+                drawn["streaks"], lamps, geometric_alpha, width, height
+            )
+            record_draw(
+                # The drops the lamps light to at least a tenth of the most lit.
+                lamp_lit_streaks=int(
+                    sum(
+                        int((lit["alpha"] >= 0.1 * lit["alpha"].max()).sum())
+                        for lit, _ in drawn["lamp_streaks"]
+                        if lit["alpha"].size
+                    )
+                ),
+                lamp_lit_peak=float(
+                    max((float(colour.max()) for _, colour in drawn["lamp_streaks"]), default=0.0)
+                ),
+            )
         # The grain of the glow, last of all the draws.
         grain = self.py_random.uniform(*self.backscatter_grain_range)
         grain_seed = self.py_random.randint(0, 2**31 - 1)
@@ -405,6 +453,17 @@ class NightRain(CameraTransform):
                     1.0,
                     lit_from_lens=True,
                 )
+        # The drops in front of the lamps in the picture: after every other
+        # draw, so that those are the same with it and without.
+        glint = self.py_random.uniform(*self.lamp_glint_range)
+        places = lamps.in_picture() if lamps is not None else []
+        if glint > 0.0 and count and places:
+            drawn["glint"] = glint
+            drawn["glint_lamps"] = places
+            drawn["glint_streaks"] = {
+                **drawn["streaks"],
+                "alpha": np.clip(geometric_alpha, 0.0, 1.0).astype(np.float32),
+            }
         return drawn
 
     def apply(
@@ -417,12 +476,18 @@ class NightRain(CameraTransform):
         backscatter_grain: np.ndarray | None = None,
         cones: np.ndarray | None = None,
         cone_grain: np.ndarray | None = None,
+        lamp_streaks: list[tuple[dict[str, np.ndarray], np.ndarray]] | None = None,
+        glint: float = 0.0,
+        glint_streaks: dict[str, np.ndarray] | None = None,
+        glint_lamps: list[tuple[float, float, np.ndarray]] | None = None,
         **params: Any,
     ) -> np.ndarray:
         """Add the lit streaks and the beam's backscatter to the frame.
 
         The streaks are emissive against a dark scene, so they add rather than
-        cover; the unresolved drops add a veil that is flat in depth.
+        cover; the unresolved drops add a veil that is flat in depth. The
+        same streaks in the scene's lamps' light (``lamp_streaks``) add in
+        each lamp's colour.
         """
         linear, scale, is_integer = to_linear_unit(img)
 
@@ -435,6 +500,20 @@ class NightRain(CameraTransform):
         # back does not hide what is behind it; at these opacities there is
         # nothing behind it to hide.
         out = linear + lit[..., None]
+
+        for lit_streaks, colour in lamp_streaks or ():
+            occupancy = render_streak_layer(img.shape[0], img.shape[1], lit_streaks)
+            occupancy = cv2.GaussianBlur(occupancy, (0, 0), sigmaX=0.35)
+            out = out + (-np.expm1(-occupancy))[..., None] * colour.reshape(1, 1, 3)
+
+        if glint > 0.0 and glint_streaks is not None and glint_lamps:
+            # In front of the lamps in the picture: each streak's coverage by
+            # the light the lamps throw on drops near their line of sight.
+            lamps = lamp_field(img.shape[0], img.shape[1], glint_lamps)
+            occupancy = render_streak_layer(img.shape[0], img.shape[1], glint_streaks)
+            occupancy = cv2.GaussianBlur(occupancy, (0, 0), sigmaX=0.35)
+            coverage = -np.expm1(-occupancy)
+            out = out + coverage[..., None] * (np.float32(glint * _DROP_GLINT_SHARE) * lamps)
 
         if backscatter > 0.0:
             # The unresolved drops the beam lights, scattering straight back.
@@ -453,6 +532,73 @@ class NightRain(CameraTransform):
             grain = backscatter_grain if backscatter_grain is not None else cone_grain
             out = out + (cones if grain is None else cones * grain[..., None])
         return from_linear_unit(np.clip(out, 0.0, None), scale, is_integer, img.dtype)
+
+
+def lamp_field(
+    height: int, width: int, places: list[tuple[float, float, np.ndarray]]
+) -> np.ndarray:
+    """The light lamps at ``places`` throw on drops near their line of sight, ``(H, W, 3)``.
+
+    As :class:`~surmentations.atmosphere.rain.RandomRain` has it for the
+    lamps of a night photograph: 1 at a lamp, in its colour, falling off
+    exponentially with the distance from it in the picture, over
+    :data:`~surmentations.atmosphere.rain._LAMP_GLINT_REACH` of the
+    diagonal. ``places`` are ``(column, row, colour)``.
+    """
+    field = np.zeros((height, width, 3), dtype=np.float32)
+    diagonal = float(np.hypot(height, width))
+    ys = np.arange(height, dtype=np.float32).reshape(-1, 1)
+    xs = np.arange(width, dtype=np.float32).reshape(1, -1)
+    for column, row, colour in places:
+        distance = np.hypot(xs - np.float32(column), ys - np.float32(row)) / diagonal
+        field += np.exp(-distance / _LAMP_GLINT_REACH)[..., None] * np.asarray(
+            colour, dtype=np.float32
+        ).reshape(1, 1, 3)
+    return field
+
+
+def _lamp_streaks(
+    streaks: dict[str, np.ndarray],
+    lamps: Any,
+    geometric_alpha: np.ndarray,
+    width: int,
+    height: int,
+) -> list[tuple[dict[str, np.ndarray], np.ndarray]]:
+    """The streak field once per kind of lamp, each with the linear colour to draw it at.
+
+    Each drop is put in space on its line of sight at its distance, and the
+    lamps say how much light falls on it
+    (:meth:`~surmentations.camera.night_lighting.SceneLamps.irradiance`).
+    A drop returns :data:`~surmentations.base.AIR_PHASE` of that, as the
+    unresolved drops of the cones do. In the field each streak's opacity
+    is its geometric one times its light relative to the most lit drop's,
+    and the field is drawn at that drop's light, so that one drop under
+    the lamp is as bright as the lamp makes it and one in the dark is
+    not there.
+    """
+    focal = max(float(lamps.focal_px), 1e-3)
+    distance = streaks["distance"]
+    points = np.stack(
+        [
+            (streaks["x"] - 0.5 * width) / focal * distance,
+            (streaks["y"] - 0.5 * height) / focal * distance,
+            distance,
+        ],
+        axis=1,
+    )
+    layers: list[tuple[dict[str, np.ndarray], np.ndarray]] = []
+    for light, colour in zip(
+        lamps.irradiance(points), (lamps.street_colour, lamps.head_colour), strict=True
+    ):
+        if light is None:
+            continue
+        peak = float(light.max())
+        if peak <= 1e-6:
+            continue
+        lit = dict(streaks)
+        lit["alpha"] = np.clip(geometric_alpha * light / peak, 0.0, 1.0).astype(np.float32)
+        layers.append((lit, np.asarray(colour, dtype=np.float32) * np.float32(peak * AIR_PHASE)))
+    return layers
 
 
 def _beam_profile(height: int, width: int, falloff: float) -> np.ndarray:

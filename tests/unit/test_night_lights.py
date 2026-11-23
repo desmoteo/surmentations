@@ -412,3 +412,141 @@ def test_a_near_flake_is_a_long_bright_streak_uneven_along_it_and_soft_at_its_ed
     # Another fall, another turning; and a far flake is left as it was drawn.
     assert not np.array_equal(near, drawn(120.0, 120.0, seed=2))
     assert np.array_equal(drawn(120.0, 2.0, seed=1), drawn(120.0, 2.0, seed=2))
+
+
+# ------------------------------------------------------- lamps on the rain
+
+
+def _rain_under(
+    lamps: object | None, image: np.ndarray, provider: SharedDepthProvider
+) -> np.ndarray:
+    """What NightRain adds, in levels, with no lamp at the lens and ``lamps`` in the scene."""
+    from surmentations.atmosphere.night_rain import NightRain
+
+    assert provider.set_lit_air(image, None, lamps)
+    transform = NightRain(
+        p=1.0,
+        rain_rate_range_mm_h=(10.0, 10.0),
+        illuminator_gain_range=(0.0, 0.0),
+        backscatter_range=(0.0, 0.0),
+        lamp_cone_range=(0.0, 0.0),
+        horizontal_fov_range_deg=(60.0, 60.0),
+    )
+    transform.set_random_seed(3)
+    return (transform(image=image)["image"].astype(np.float32) - image).mean(axis=2)
+
+
+def test_rain_at_a_colour_night_is_lit_by_the_street_lamp_and_not_in_the_dark() -> None:
+    """A night in colour has no lamp at the lens; the drops are lit by the
+    lamps the night put in the scene, each by where it is. They used to be
+    drawn at a gain of zero, and a third of the pipeline's night rain
+    changed no pixel."""
+    from surmentations.camera.night_lighting import SceneLamps
+    from surmentations.utils.precipitation import focal_length_px
+
+    image = np.full((SIZE, SIZE, 3), 10, dtype=np.uint8)
+    provider = _provider()
+    provider.get_depth(image)
+    # The camera on the lamp's own post, 6.5 m over the ground and looking
+    # level; the head 8 m up, half a metre ahead and a metre and a half to
+    # the right, so the drops on the right of the frame are the nearer to
+    # it. (Streaks fall down the frame from where their drop is, so above
+    # and below are not compared.)
+    lamps = SceneLamps(
+        heads=np.array([[1.5, -1.5, 0.5, 8.0]], dtype=np.float32),
+        street_level=1.0,
+        street_colour=np.array([1.0, 0.8, 0.5], dtype=np.float32),
+        sources=(),
+        beam_level=0.0,
+        head_colour=np.ones(3, dtype=np.float32),
+        middle=np.array([0.0, 6.5, 10.0], dtype=np.float32),
+        up=np.array([0.0, -1.0, 0.0], dtype=np.float32),
+        focal_px=focal_length_px(SIZE, SIZE, 60.0),
+        shape=(SIZE, SIZE),
+        exposed=0.3,
+    )
+    nothing = _rain_under(None, image, provider)
+    assert nothing.max() < 1.0, f"streaks lit with no lamp anywhere: +{nothing.max():.1f} levels"
+
+    added = _rain_under(lamps, image, provider)
+    # A drop half a metre from the lens, a pixel wide and a hundred long, is
+    # faint even in a lamp's full light: alpha is w^2/L. Ten levels or so.
+    assert added.max() > 8.0, f"no streak lit under the lamp: +{added.max():.1f} levels at most"
+    assert float((added > 2.0).mean()) > 0.002
+    # The same drops with the lamp moved to the left: each side of the frame
+    # is lit more with the lamp on its own side. Paired, because where the
+    # drops happen to fall decides more of a side's mean than the lamp does.
+    mirrored = _rain_under(lamps._replace(heads=lamps.heads * [[-1, 1, 1, 1]]), image, provider)
+    third = SIZE // 3
+    right = float(added[:, -third:].sum()) / max(float(mirrored[:, -third:].sum()), 1e-6)
+    left = float(mirrored[:, :third].sum()) / max(float(added[:, :third].sum()), 1e-6)
+    assert right > 1.2 and left > 1.2, f"lamp's side lit {right:.2f}x and {left:.2f}x the other"
+
+    with recording() as log:
+        _rain_under(lamps, image, provider)
+    drew = log[-1]["drew"]
+    assert drew["lamp_lit_streaks"] > 0 and drew["lamp_lit_peak"] > 0.0
+
+
+def test_rain_in_a_made_night_shows_in_front_of_the_lamps_in_the_picture() -> None:
+    """With no lamp at the lens, the drops near the line of sight to a lamp
+    the night lit throw its light at the lens, as RandomRain's do on a night
+    photograph, and nothing else does: not a white thing the night left
+    bright, which is not a lamp. Without it, rain in a night in colour
+    changed no pixel on most frames."""
+    from surmentations.atmosphere.night_rain import NightRain
+    from surmentations.camera.night_lighting import SceneLamps
+    from surmentations.utils.precipitation import focal_length_px
+
+    size, lamp, shirt = 480, (120, 160), (360, 360)
+    image = np.full((size, size, 3), 12, dtype=np.uint8)
+    cv2.circle(image, lamp, 6, (255, 235, 190), -1)
+    # A white thing as bright as the lamp, which the night did not light.
+    cv2.circle(image, shirt, 6, (255, 255, 255), -1)
+    focal = focal_length_px(size, size, 60.0)
+    lamps = SceneLamps(
+        heads=np.array(
+            [[(lamp[0] - size / 2) * 10.0 / focal, (lamp[1] - size / 2) * 10.0 / focal, 10.0, 6.0]],
+            dtype=np.float32,
+        ),
+        street_level=1.0,
+        street_colour=np.array([1.0, 0.9, 0.7], dtype=np.float32),
+        sources=(),
+        beam_level=0.0,
+        head_colour=np.ones(3, dtype=np.float32),
+        middle=np.array([0.0, 6.0, 10.0], dtype=np.float32),
+        up=np.array([0.0, -1.0, 0.0], dtype=np.float32),
+        focal_px=focal,
+        shape=(size, size),
+    )
+    provider = _provider()
+    provider.get_depth(image)
+
+    def added(glint: float, known: object | None) -> np.ndarray:
+        assert provider.set_lit_air(image, None, known)
+        transform = NightRain(
+            p=1.0,
+            rain_rate_range_mm_h=(10.0, 10.0),
+            illuminator_gain_range=(0.0, 0.0),
+            backscatter_range=(0.0, 0.0),
+            lamp_cone_range=(0.0, 0.0),
+            lamp_glint_range=(glint, glint),
+            horizontal_fov_range_deg=(60.0, 60.0),
+        )
+        total = np.zeros((size, size), dtype=np.float32)
+        for seed in range(4):
+            transform.set_random_seed(seed)
+            total += (transform(image=image)["image"].astype(np.float32) - image).mean(axis=2)
+        return total / 4.0
+
+    def ring(field: np.ndarray, centre: tuple[int, int]) -> float:
+        yy, xx = np.mgrid[0:size, 0:size]
+        distance = np.hypot(xx - centre[0], yy - centre[1])
+        return float(field[(distance > 10) & (distance < 40)].mean())
+
+    lit = added(8.0, lamps)
+    assert ring(lit, lamp) > 3.0, f"no streaks lit beside the lamp: +{ring(lit, lamp):.2f} levels"
+    assert ring(lit, shirt) < 0.5, "streaks lit round a white thing the night did not light"
+    assert float(lit[:100, -100:].mean()) < 0.5, "streaks lit in the dark, far from any lamp"
+    assert float(added(8.0, None).max()) < 1.0, "a frame with no lamps known has no glint"
+    assert float(added(0.0, lamps).max()) < 1.0, "with no glint the rain adds nothing here"
