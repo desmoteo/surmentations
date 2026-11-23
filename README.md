@@ -202,6 +202,11 @@ geometry = InstallationGeometry(horizontal_fov_deg=92.0, pitch_deg=24.0, height_
 # photograph it was reduced from: a lamp or a plate is a few pixels otherwise.
 depth_provider.remember(image, original=photograph)
 
+# Or, in a training loader, run the pipeline at the size the network sees,
+# with every reading taken from the one kept on disk for the photograph:
+# nothing is estimated on the reduced frame, and no network runs.
+depth_provider.resized(image, original=photograph)
+
 # What the provider read off a frame:
 labels = depth_provider.get_labels(image)        # (H, W) uint8 of SceneClass
 camera = depth_provider.settle_camera(image)     # field of view, pitch, roll, height
