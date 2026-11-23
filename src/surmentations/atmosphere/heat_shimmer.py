@@ -66,6 +66,12 @@ _LAYERS = 5
 _FWHM = 2.355
 
 
+# Below these the picture is not moved or blurred enough to draw: a fiftieth
+# of a pixel's tilt, a fifth of a pixel's blur.
+_LEAST_TILT_PX = 0.02
+_LEAST_SIGMA_PX = 0.2
+
+
 def tilt_sigma_rad(distance_m: np.ndarray | float, cn2: float, aperture_m: float) -> np.ndarray:
     """Standard deviation of the angle a point at a distance is displaced by, in radians."""
     distance = np.maximum(np.asarray(distance_m, dtype=np.float64), 0.0)
@@ -225,10 +231,16 @@ class HeatShimmer(CameraTransform):
             self.depth_provider.get_depth(scene), far_m=self.depth_scale
         )
         tilt_px = (tilt_sigma_rad(depth_m, cn2, aperture_m) * focal).astype(np.float32)
-        shift = np.stack(
-            [smooth_field(rng, height, width, cell) * tilt_px for _ in range(2)], axis=2
-        )
         sigma = (blur_fwhm_rad(depth_m, cn2, aperture_m) * focal / _FWHM).astype(np.float32)
+        if float(tilt_px.max()) < _LEAST_TILT_PX and float(sigma.max()) < _LEAST_SIGMA_PX:
+            # A wide lens over a scene within 50 m: the air moves the picture
+            # by a hundredth of a pixel, which `apply` would not draw. The
+            # fields it would not use are not made.
+            shift = np.zeros((height, width, 2), dtype=np.float32)
+        else:
+            shift = np.stack(
+                [smooth_field(rng, height, width, cell) * tilt_px for _ in range(2)], axis=2
+            )
 
         record_draw(
             cn2=cn2,
