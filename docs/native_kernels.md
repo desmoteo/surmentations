@@ -304,6 +304,12 @@ all three. What remains is listed under [Not done](#not-done).
   -fno-thread-jumps -funroll-loops`. No fused multiply-add and no
   `-ffast-math`, so every tier and compiler rounds as numpy does. What
   other flags were measured is [below](#compiler-flags-and-the-types-left-in-the-c-measured).
+- **Always `-O3`.** It is also the last flag of every compile and link
+  command, after `$CC`'s own and any extra ones: GCC and Clang take the
+  last `-O` they are given, so nothing can build the kernels at a lower
+  level. On Linux `-frecord-gcc-switches` keeps the command lines in the
+  library, and a test reads them back: `readelf -p .GCC.command.line
+  src/surmentations/_native/_smkernels.so`.
 - **Optional.** [`hatch_build.py`](../hatch_build.py) compiles it when a
   wheel or an editable install is made, and goes on without it if there is
   no C compiler. `python hatch_build.py` builds it in place in a checkout.
