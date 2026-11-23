@@ -5,24 +5,25 @@ Skipped without TensorRT, ONNX or a CUDA device, which is every CI runner.
 
 from __future__ import annotations
 
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
+import torch
 
 from surmentations import engines
+
+# A mark and not a skip of the module, which the docs build imports.
+requires_tensorrt = pytest.mark.skipif(
+    find_spec("tensorrt") is None or find_spec("onnx") is None or not torch.cuda.is_available(),
+    reason="the TensorRT backend needs TensorRT, ONNX and a CUDA device",
+)
 
 
 def test_an_unknown_backend_is_refused() -> None:
     with pytest.raises(ValueError, match="backend"):
         engines.check_backend("openvino")
     assert engines.check_backend("torch") == "torch"
-
-
-torch = pytest.importorskip("torch")
-pytest.importorskip("tensorrt")
-pytest.importorskip("onnx")
-if not torch.cuda.is_available():
-    pytest.skip("the TensorRT backend needs a CUDA device", allow_module_level=True)
 
 
 class _Small(torch.nn.Module):
@@ -61,6 +62,7 @@ def _compiled(half: bool, dynamic: dict | None = None) -> engines.TensorRTEngine
     )
 
 
+@requires_tensorrt
 @pytest.mark.parametrize("half", [False, True])
 def test_an_engine_computes_what_its_module_does(cache: Path, half: bool) -> None:
     engine = _compiled(half)
@@ -73,6 +75,7 @@ def test_an_engine_computes_what_its_module_does(cache: Path, half: bool) -> Non
     assert float((got - expected).abs().max()) < tolerance
 
 
+@requires_tensorrt
 def test_an_engine_is_built_once_and_loaded_after(cache: Path) -> None:
     first = _compiled(half=True)
     built = first.path.stat().st_mtime_ns
@@ -82,6 +85,7 @@ def test_an_engine_is_built_once_and_loaded_after(cache: Path) -> None:
     assert _compiled(half=False).path != first.path, "the precision is part of the name"
 
 
+@requires_tensorrt
 def test_a_dynamic_side_in_steps_takes_every_size_in_its_bounds(cache: Path) -> None:
     """A side that changes, in multiples of eight: the engine gives each size
     its own output, not the size it was exported at."""
@@ -97,6 +101,7 @@ def test_a_dynamic_side_in_steps_takes_every_size_in_its_bounds(cache: Path) -> 
             assert float((got - module(pixels)).abs().max()) < 1e-3
 
 
+@requires_tensorrt
 def test_a_square_first_input_does_not_tie_the_sides_together(cache: Path) -> None:
     """Built from a square input, an engine with two sides that change still
     takes them apart: an export traced at the input's own sizes took the
