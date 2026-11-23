@@ -327,6 +327,13 @@ class FrostOnGlass(CameraTransform):
             "glow": self.py_random.uniform(*self.illuminator_glow_range),
         }
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What the frost replaces by a wide blur: the share of the light it scatters."""
+        del before, after
+        return {"hidden": params["scattered"]}
+
     def apply(
         self,
         img: np.ndarray,

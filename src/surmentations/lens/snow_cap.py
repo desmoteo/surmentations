@@ -221,6 +221,13 @@ class SnowOnHousing(CameraTransform):
             "glow": self.py_random.uniform(*self.glow_range),
         }
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What the cap of snow hides: where it covers the glass."""
+        del before, after
+        return {"hidden": params["cover"]}
+
     def apply(
         self,
         img: np.ndarray,

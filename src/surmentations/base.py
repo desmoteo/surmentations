@@ -153,7 +153,31 @@ class CameraTransform(ImageOnlyTransform):
                 source, derived = kwargs.get(key), result.get(key)
                 if isinstance(source, np.ndarray) and isinstance(derived, np.ndarray):
                     carry_depth(source, derived)
+        # And what this call took from the picture's legibility, for a
+        # `LabelLegibility` at the end of the pipeline, while one exists.
+        from surmentations import legibility
+
+        if legibility.tracking():
+            source, derived = kwargs.get("image"), result.get("image")
+            if isinstance(source, np.ndarray) and isinstance(derived, np.ndarray):
+                legibility.note(self, params, source, derived)
         return result
+
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What this call took from the picture's legibility, as planes; ``None`` if nothing known.
+
+        For :class:`~surmentations.legibility.LabelLegibility`. A transform
+        that replaces pixels returns ``{"hidden": share}``; one that blurs
+        the scene ``{"blur": sigma_px}``; each ``(h, w)`` or
+        ``(h, w, channels)`` on any grid of the frame's shape, or a scalar.
+        ``params`` are the call's own, ``before`` and ``after`` the frame
+        given and the frame returned. What no transform reports, a veil, the
+        dark, noise, a smear, the filter measures.
+        """
+        del params, before, after
+        return None
 
 
 def scene_of(data: dict[str, Any]) -> np.ndarray:

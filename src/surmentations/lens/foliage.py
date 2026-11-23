@@ -493,6 +493,13 @@ class FoliageIntrusion(CameraTransform):
         )
         return {"cover": cover, "reflectance": reflectance, "lamp": lamp}
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What the leaves hide: their cover of the frame."""
+        del before, after
+        return {"hidden": params["cover"]}
+
     def apply(
         self,
         img: np.ndarray,

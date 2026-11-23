@@ -268,6 +268,13 @@ class HousingOccluders(CameraTransform):
             "glow": self.py_random.uniform(*self.glow_range),
         }
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What the occluder hides: its silhouette, by its opacity."""
+        del before, after
+        return {"hidden": params["occluder"] * params["opacity"]}
+
     def apply(
         self,
         img: np.ndarray,

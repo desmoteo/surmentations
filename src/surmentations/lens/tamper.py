@@ -270,6 +270,13 @@ class LensTamper(CameraTransform):
             "glow": self.py_random.uniform(*self.glow_range),
         }
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What the tampering hides: its cover, under which there is no image."""
+        del before, after
+        return {"hidden": params["cover"]}
+
     def apply(
         self,
         img: np.ndarray,

@@ -97,6 +97,8 @@ _STAGE_ORDER: dict[str, int] = {
     "AnalogVideoArtifacts": 11,
     # What the link then loses of the encoded stream.
     "TransmissionFaults": 12,
+    # Last of all: judges the labels on the finished picture.
+    "LabelLegibility": 13,
 }
 
 # Anything unknown sorts here — after the optics, before the ISP. A neutral

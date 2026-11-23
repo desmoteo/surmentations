@@ -198,6 +198,13 @@ class FocusShift(CameraTransform):
         )
         return {"diameter": diameter}
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """The blur the defocus adds: a disc's spread is a quarter of its diameter."""
+        del before, after
+        return {"blur": np.asarray(params["diameter"], dtype=np.float32) / 4.0}
+
     def apply(self, img: np.ndarray, diameter: np.ndarray | float, **params: Any) -> np.ndarray:
         """Blur the frame by the aperture's disc, at each pixel's own size."""
         linear, scale, is_integer = to_linear_unit(img)

@@ -375,6 +375,19 @@ class OnScreenOverlay(CameraTransform):
             return np.rint(canvas * 255.0).astype(img.dtype)
         return canvas.astype(img.dtype)
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """What the privacy masks hide, to the pixel; the lettering is not counted."""
+        del after
+        masks = params.get("masks") or []
+        if not masks:
+            return None
+        hidden = np.zeros(before.shape[:2], dtype=np.float32)
+        for (left, top, right, bottom), _fill, _block in masks:
+            hidden[top:bottom, left:right] = 1.0
+        return {"hidden": hidden}
+
     def apply_to_bboxes(
         self,
         bboxes: np.ndarray,

@@ -253,11 +253,18 @@ class HeatShimmer(CameraTransform):
         )
         return {"shift": shift, "sigma": sigma}
 
+    def legibility_planes(
+        self, params: dict[str, Any], before: np.ndarray, after: np.ndarray
+    ) -> dict[str, Any] | None:
+        """The blur the air adds, per pixel."""
+        del before, after
+        return {"blur": params["sigma"]}
+
     def apply(
         self, img: np.ndarray, shift: np.ndarray, sigma: np.ndarray, **params: Any
     ) -> np.ndarray:
         """Blur each pixel by the air in front of it, then move the picture by the air's tilt."""
-        if float(np.abs(shift).max()) < 0.02 and float(sigma.max()) < 0.2:
+        if float(np.abs(shift).max()) < _LEAST_TILT_PX and float(sigma.max()) < _LEAST_SIGMA_PX:
             return img
         linear, scale, is_integer = to_linear_unit(img)
         linear = blur_by_sigma(linear, sigma)
