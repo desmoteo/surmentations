@@ -49,12 +49,14 @@ References:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from types import SimpleNamespace
 from typing import Any, NamedTuple
 
 import cv2
 import numpy as np
 
 from surmentations import mode
+from surmentations.engines import check_backend, compiled
 
 # What the detector is asked for, in this order: the first is a front's and
 # the second a rear's.
@@ -599,6 +601,41 @@ class VehicleViewEstimator(ABC):
         return None
 
 
+def _image_side(model: Any, half: bool = False) -> Any:
+    """An OWLv2 detector's image side as a module: picture and queries in, logits and boxes out.
+
+    ``Owlv2ForObjectDetection.forward`` reads the prompts' text on every
+    call; here their embeddings come in ready, and only the picture is
+    looked at. Every prompt is a real one, so there is no mask of them.
+    With ``half`` the vision encoder, nearly all of the cost, runs under
+    autocast and the two small heads in single precision: the class head
+    divides a half-precision embedding by a single-precision norm, which
+    torch's exporter types wrongly under autocast.
+    """
+    import torch
+
+    class _ImageSide(torch.nn.Module):
+        """The detector, given the queries' embeddings."""
+
+        def __init__(self) -> None:
+            """Hold the detector."""
+            super().__init__()
+            self.model = model
+
+        def forward(self, pixel_values: Any, query_embeds: Any) -> tuple[Any, Any]:
+            """The logits of each query at each patch, and each patch's box."""
+            with torch.autocast(pixel_values.device.type, dtype=torch.float16, enabled=half):
+                feature_map, _ = self.model.image_embedder(pixel_values=pixel_values)
+            feature_map = feature_map.float()
+            batch, rows, columns, width = feature_map.shape
+            features = feature_map.reshape(batch, rows * columns, width)
+            logits, _ = self.model.class_predictor(features, query_embeds)
+            boxes = self.model.box_predictor(features, feature_map)
+            return logits, boxes
+
+    return _ImageSide().eval()
+
+
 class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
     """Vehicle views from an open-vocabulary detector asked for lamps, the shipped default.
 
@@ -634,6 +671,10 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
             mode (:mod:`surmentations.mode`): half in fast mode, full in
             exact mode. Half is four times as fast and moves a lamp by a
             tenth of a pixel.
+        backend: ``"torch"``, or ``"tensorrt"`` for the network's image
+            side compiled with TensorRT (:mod:`surmentations.engines`): built
+            the first time, kept on disk, and with a signature of its own.
+            The prompts' text is read once for each set of them, by torch.
     """
 
     def __init__(
@@ -645,6 +686,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         min_pixels: int = 150,
         min_score: float = 0.05,
         half_precision: bool | None = None,
+        backend: str = "torch",
     ) -> None:
         """Load the checkpoint onto the GPU; see the class docstring for the arguments.
 
@@ -668,6 +710,9 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         self.min_pixels = int(min_pixels)
         self.min_score = float(min_score)
         self.half_precision = half_precision
+        self.backend = check_backend(backend)
+        self._engines: dict[bool, Any] = {}
+        self._queries: dict[tuple[tuple[str, ...], bool], Any] = {}
         self.device = torch.device(device)
         self._processor = AutoProcessor.from_pretrained(model_name)
         self._model = (
@@ -705,11 +750,14 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         pixels = torch.from_numpy(picture).to(self.device).permute(2, 0, 1).float().unsqueeze(0)
         pixels = (pixels / 255.0 - self._mean) / self._std
         half = mode.fast() if self.half_precision is None else self.half_precision
-        with (
-            torch.inference_mode(),
-            torch.autocast(self.device.type, dtype=torch.float16, enabled=half),
-        ):
-            output = self._model(pixel_values=pixels, **self._words[prompts])
+        if self.backend == "torch":
+            with (
+                torch.inference_mode(),
+                torch.autocast(self.device.type, dtype=torch.float16, enabled=half),
+            ):
+                output = self._model(pixel_values=pixels, **self._words[prompts])
+        else:
+            output = self._through_engine(pixels, prompts, half)
         found = self._processor.post_process_grounded_object_detection(
             output, threshold=least, target_sizes=[(side, side)]
         )[0]
@@ -717,6 +765,40 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         kinds = found["labels"].cpu().numpy().reshape(-1, 1).astype(np.float32)
         scores = found["scores"].float().cpu().numpy().reshape(-1, 1)
         return np.hstack([boxes, kinds, scores]).astype(np.float32)
+
+    def _through_engine(self, pixels: Any, prompts: tuple[str, ...], half: bool) -> Any:
+        """What the network makes of ``pixels`` asked ``prompts``, its image side on TensorRT.
+
+        The prompts' embeddings depend on nothing but the prompts: they are
+        read once for each set, by torch in the same precision, on the first
+        picture asked them, and handed to the engine with every picture
+        after. What comes back has the two fields the processor's
+        post-processing reads.
+        """
+        import torch
+
+        queries = self._queries.get((prompts, half))
+        if queries is None:
+            with (
+                torch.inference_mode(),
+                torch.autocast(self.device.type, dtype=torch.float16, enabled=half),
+            ):
+                full = self._model(pixel_values=pixels, **self._words[prompts])
+            queries = self._queries[(prompts, half)] = full.text_embeds.float()
+        engine = self._engines.get(half)
+        if engine is None:
+            engine = self._engines[half] = compiled(
+                _image_side(self._model, half),
+                {"pixel_values": pixels, "query_embeds": queries},
+                ["logits", "pred_boxes"],
+                name="vehicles",
+                identity={"estimator": type(self).__name__, "model": self.model_name},
+                half=half,
+                dynamic={"query_embeds": {1: (1, 8, 32)}},
+                own_autocast=True,
+            )
+        out = engine(pixel_values=pixels, query_embeds=queries)
+        return SimpleNamespace(logits=out["logits"].float(), pred_boxes=out["pred_boxes"].float())
 
     def _whole_frame(self, image: np.ndarray) -> np.ndarray:
         """What stands in a whole 8-bit frame: its vehicles and its street lamps, as found.
@@ -740,6 +822,7 @@ class OpenVocabularyVehicleEstimator(VehicleViewEstimator):
         return (
             f"{type(self).__name__}|{self.model_name}|{self.grid}|{self.max_vehicles}"
             f"|{self.min_pixels}|{self.min_score!r}|{self.half_precision}|{self.device.type}"
+            + ("" if self.backend == "torch" else f"|{self.backend}")
         )
 
     def street_signs(self, image: np.ndarray) -> np.ndarray:

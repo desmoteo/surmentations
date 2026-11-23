@@ -54,6 +54,11 @@ dependencies = [
 # TransmissionFaults, in place of two ffmpeg processes a frame. Its wheels
 # carry their own FFmpeg, built with GPL components (libx264, libx265).
 codec = ["av>=12"]
+# The estimators' networks compiled for the GPU (backend="tensorrt"): ONNX
+# (Apache-2.0) and onnxscript (MIT) to export them, TensorRT to build and run
+# them. TensorRT is NVIDIA's, under NVIDIA's own licence, and is installed by
+# whoever asks for this; nothing here redistributes it.
+tensorrt = ["onnx>=1.17", "onnxscript>=0.4", "tensorrt-cu12>=10.8"]
 # The code reference site in docs/site, generated from the source: autodoc for
 # Python, Hawkmoth through libclang for C. pytest because the site documents
 # the tests too, and autodoc has to import them to read them.

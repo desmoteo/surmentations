@@ -16,10 +16,17 @@ from typing import Any
 import numpy as np
 
 from surmentations import mode
+from surmentations.engines import check_backend, compiled
 
 # PIL's code for bicubic resampling, which is what the processor's
 # `resample` holds.
 _BICUBIC = 3
+# The sizes the depth network's engine takes, each side, in pixels: least,
+# usual and most, multiples of its 14-pixel patch. A frame the processor
+# sizes outside them, wider than about two to one, runs in torch.
+_ENGINE_SIDE = (126, 518, 1036)
+_ENGINE_USUAL_LONG = 700
+_PATCH = 14
 
 _NO_CUDA_MESSAGE = (
     "{cls} requires a CUDA GPU: depth-conditioned effects (fog/rain/snow) run "
@@ -103,6 +110,12 @@ class DepthAnythingV2Estimator(DepthEstimator):
     ``(1 + offset) / offset``, so 0.03 spans roughly a 34x range, which suits
     outdoor/driving scenes. Raise it for enclosed scenes with little depth
     range, lower it for long open vistas.
+
+    ``backend`` is ``"torch"``, or ``"tensorrt"`` for the network compiled
+    with TensorRT (:mod:`surmentations.engines`): built the first time, kept
+    on disk, and with a signature of its own. The engine takes sides from
+    126 to 1036 pixels; a frame the processor sizes outside them, wider than
+    about two to one, is read by torch.
     """
 
     def __init__(
@@ -111,6 +124,7 @@ class DepthAnythingV2Estimator(DepthEstimator):
         device: str = "cuda",
         disparity_offset: float = 0.03,
         half_precision: bool | None = None,
+        backend: str = "torch",
     ) -> None:
         # Imported here, like transformers below. Every transform's base class
         # imports this package for the depth provider, so a module-level
@@ -132,6 +146,8 @@ class DepthAnythingV2Estimator(DepthEstimator):
         self.model_name = model_name
         self.disparity_offset = disparity_offset
         self.half_precision = half_precision
+        self.backend = check_backend(backend)
+        self._engines: dict[bool, Any] = {}
 
         # Imported lazily: transformers is a heavy import and only needed once
         # a depth-conditioned transform is actually constructed.
@@ -147,11 +163,41 @@ class DepthAnythingV2Estimator(DepthEstimator):
         self._direct = self._direct_matches_processor()
 
     def signature(self) -> str | None:
-        """The checkpoint, the offset, the precision asked for and the kind of device."""
+        """The checkpoint, the offset, the precision asked for and the kind of device.
+
+        And the backend, where it is not torch.
+        """
         return (
             f"{type(self).__name__}|{self.model_name}|{self.disparity_offset!r}"
             f"|{self.half_precision}|{self.device.type}"
+            + ("" if self.backend == "torch" else f"|{self.backend}")
         )
+
+    def _disparity(self, pixel_values: Any, half: bool) -> Any:
+        """The network's disparity for ``pixel_values``, on the backend asked for."""
+        import torch
+
+        least, _usual, most = _ENGINE_SIDE
+        fits = all(
+            least <= side <= most and side % _PATCH == 0 for side in pixel_values.shape[-2:]
+        )
+        if self.backend == "torch" or not fits:
+            with torch.autocast(self.device.type, dtype=torch.float16, enabled=half):
+                return self._model(pixel_values=pixel_values).predicted_depth
+        engine = self._engines.get(half)
+        if engine is None:
+            sides = (least, _ENGINE_SIDE[1], most, _PATCH)
+            wide = (least, _ENGINE_USUAL_LONG, most, _PATCH)
+            engine = self._engines[half] = compiled(
+                _for_export(self._model, pixel_values),
+                {"pixel_values": pixel_values},
+                ["predicted_depth"],
+                name="depth",
+                identity={"estimator": type(self).__name__, "model": self.model_name},
+                half=half,
+                dynamic={"pixel_values": {2: sides, 3: wide}},
+            )
+        return engine(pixel_values=pixel_values)["predicted_depth"]
 
     def _model_input_size(self, height: int, width: int) -> tuple[int, int] | None:
         """The size the model's own processor would resize a frame to.
@@ -272,10 +318,8 @@ class DepthAnythingV2Estimator(DepthEstimator):
                 inputs = self._processor(images=image, return_tensors="pt").to(self.device)
                 pixel_values = inputs["pixel_values"]
             half = mode.fast() if self.half_precision is None else self.half_precision
-            with torch.autocast(self.device.type, dtype=torch.float16, enabled=half):
-                # (1, h', w'), larger = closer
-                raw_disparity = self._model(pixel_values=pixel_values).predicted_depth
-            raw_disparity = raw_disparity.float()
+            # (1, h', w'), larger = closer
+            raw_disparity = self._disparity(pixel_values, half).float()
 
             resized = torch.nn.functional.interpolate(
                 raw_disparity.unsqueeze(1),
@@ -312,3 +356,91 @@ class DepthAnythingV2Estimator(DepthEstimator):
         nearest, farthest = 1.0 / (1.0 + offset), 1.0 / offset
         reciprocal = relative_depth.astype(np.float64) * (farthest - nearest) + nearest
         return (1.0 / reciprocal - offset).astype(np.float32)
+
+
+def _for_export(model: Any, example: Any) -> Any:
+    """Depth Anything as a module an export keeps the frame's size free in.
+
+    Two parts are given in other words, computing the same:
+
+    * The head enlarges its features to the frame with
+      ``int(patch_height * patch_size)``, which an export takes as a number:
+      the engine made from it gave every frame the depth of the first one's
+      size. Here the head takes the size from the frame's own tensor.
+    * The patches are cut by a convolution 14 pixels wide with a stride of
+      14, which TensorRT 11 fails to compile in half precision when the
+      frame's size changes. Here it is the matrix product it is: the
+      patches laid out in rows, times the kernel.
+
+    The module is checked against the original on ``example`` before it is
+    used, so that a release of ``transformers`` that changes either part
+    fails here and not in a reading.
+    """
+    import torch
+
+    head = model.head
+    patches = model.backbone.embeddings.patch_embeddings
+    kernel = patches.projection
+
+    def cut(pixel_values: Any) -> Any:
+        """``Dinov2PatchEmbeddings.forward`` as a reshape and a matrix product."""
+        batch, channels, height, width = pixel_values.shape
+        side = kernel.kernel_size[0]
+        rows, columns = height // side, width // side
+        laid = pixel_values.reshape(batch, channels, rows, side, columns, side)
+        laid = laid.permute(0, 2, 4, 1, 3, 5).reshape(batch, rows * columns, channels * side * side)
+        weight = kernel.weight.reshape(kernel.out_channels, channels * side * side)
+        return torch.nn.functional.linear(laid, weight, kernel.bias)
+
+    def head_forward(hidden_states: list[Any], size: Any) -> Any:
+        """``DepthAnythingDepthEstimationHead.forward``, enlarging to ``size``."""
+        predicted = head.conv1(hidden_states[head.head_in_index])
+        predicted = torch.nn.functional.interpolate(
+            predicted, size=size, mode="bilinear", align_corners=True
+        )
+        predicted = head.activation1(head.conv2(predicted))
+        predicted = head.activation2(head.conv3(predicted)) * head.max_depth
+        return predicted.squeeze(dim=1)
+
+    class _Depth(torch.nn.Module):
+        """The model, its head enlarging to the frame's own size."""
+
+        def __init__(self) -> None:
+            """Hold the model."""
+            super().__init__()
+            self.model = model
+
+        def forward(self, pixel_values: Any) -> Any:
+            """The disparity for ``pixel_values``."""
+            size = (pixel_values.shape[-2], pixel_values.shape[-1])
+            original_head, original_cut = head.forward, patches.forward
+            head.forward = lambda hidden, _h, _w: head_forward(hidden, size)
+            patches.forward = cut
+            try:
+                return self.model(pixel_values=pixel_values).predicted_depth
+            finally:
+                head.forward, patches.forward = original_head, original_cut
+
+    wrapped = _Depth().eval()
+    # Checked in single precision, where the two must agree to the last bits
+    # but the order of a sum: in half, twelve layers of rounding in another
+    # order part them by more than any check could tell from a mistake.
+    # And in single precision for both: cuDNN may run the original's
+    # convolution in TensorFloat-32, which torch allows it by default and
+    # does not allow the matrix product, and the two would part by that.
+    tf32 = torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cudnn.allow_tf32 = torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        with torch.inference_mode(False), torch.no_grad():
+            pixels = example.detach().clone().float()
+            ours = wrapped(pixels)
+            theirs = model(pixel_values=pixels).predicted_depth
+    finally:
+        torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32 = tf32
+    if float((ours - theirs).abs().max()) > 1e-4 * max(float(theirs.abs().max()), 1e-6):
+        raise RuntimeError(
+            "Depth Anything is not the model this export was written for; "
+            'use backend="torch"'
+        )
+    return wrapped
+
