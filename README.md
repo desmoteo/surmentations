@@ -239,6 +239,39 @@ What is read is read from the frame a pipeline starts with, whichever
 transform asks first, and never from a frame with weather already drawn
 over it.
 
+**Faster networks: TensorRT.** Each of the three estimators takes
+`backend="tensorrt"` (`pip install "surmentations[tensorrt]"`; TensorRT is
+NVIDIA's, under its own licence). Its network, or for the vehicle reader
+the part that sees the picture, is exported to ONNX under autocast and
+built into a TensorRT engine the first time it runs, about a minute for
+all three, and loaded from `~/.cache/surmentations/engines`
+(`$SURMENTATIONS_ENGINE_CACHE`) after that. A reading made this way has a
+signature of its own, so it is kept apart from one made with torch.
+
+```python
+depth_provider = SharedDepthProvider(
+    DepthAnythingV2Estimator(backend="tensorrt"),
+    labels=SegmentationLabelEstimator(backend="tensorrt"),
+    vehicles=OpenVocabularyVehicleEstimator(backend="tensorrt"),
+)
+```
+
+On 100 val2017 frames, fast mode, a laptop RTX PRO 1000 (Blackwell),
+TensorRT 11.5, one frame at a time:
+
+| Estimator | torch | TensorRT | | What changes |
+| --- | ---: | ---: | ---: | --- |
+| Depth | 15.1 ms | 7.4 ms | 2.0× | correlation with torch's map 0.99999 (least 0.99984) |
+| Scene labels | 39.3 ms | 21.6 ms | 1.8× | 99.95% of pixels the same class (least 99.72%) |
+| Vehicle reader | 39.1 ms | 28.1 ms | 1.4× | the same vehicles, street lamps and signs; 36 lamps for 35, moved 0.09 px at the median |
+| A frame's whole reading | 139.5 ms | 90.3 ms | 1.55× | |
+
+The vehicle reader's network alone goes from 62 to 44 ms a pass: torch
+already runs its attention in fused kernels, and the matrix products are
+at the card's half-precision rate either way. The engine for depth takes
+sides of 126 to 1036 pixels; a frame sized outside them, wider than about
+two to one, is read by torch.
+
 **Labels and geometry.** With labels, a wet road stays off the vehicles on
 it and snow settles by name as well as by shape; the sky is the sky; foliage
 is bright in infrared night whatever colour it photographed as. With a
