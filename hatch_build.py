@@ -48,6 +48,11 @@ LIBRARY_STEM = "_smkernels"
 # in another, four times slower. -funroll-loops is worth 8 to 18% on the
 # colour encode's table lookups and nothing elsewhere, for 40 KB of binary.
 #
+# -O3 is also the last flag of every command (OPTIMISE): GCC and Clang take
+# the last -O they are given, so neither $CC nor extra flags can lower it.
+# On ELF platforms -frecord-gcc-switches keeps the command line in the
+# library (.GCC.command.line), so that a build can be checked afterwards.
+#
 # Tried and left out, with the numbers in docs/native_kernels.md: -Ofast
 # (9% at most, on sprites only, and every tier and compiler then rounds its
 # own way, which is the one thing the build promises not to do), fused
@@ -66,6 +71,11 @@ COMMON_FLAGS = [
     "-Wall",
     "-Wextra",
 ]
+if sys.platform.startswith("linux"):
+    COMMON_FLAGS.append("-frecord-gcc-switches")
+#: The optimisation level, last on every command line: nothing given before
+#: it, by ``$CC`` or by extra flags, can lower it.
+OPTIMISE = "-O3"
 
 
 class NativeBuildError(RuntimeError):
@@ -130,18 +140,21 @@ def build_native(
         for name, tier_flags in built:
             obj = str(Path(scratch) / f"kernels_{name}.o")
             _run(
-                [*compiler, *flags, *tier_flags, f"-DSM_TIER={name}", "-c"]
+                [*compiler, *flags, *tier_flags, f"-DSM_TIER={name}", OPTIMISE, "-c"]
                 + [str(SOURCES / "sm_kernels.c"), "-o", obj]
             )
             objects.append(obj)
         dispatch = str(Path(scratch) / "dispatch.o")
         defines = [f"-DSM_BASE={base}"] + [f"-DSM_HAVE_{name.upper()}" for name, _ in built[1:]]
-        _run([*compiler, *flags, *defines, "-c", str(SOURCES / "sm_dispatch.c"), "-o", dispatch])
+        _run(
+            [*compiler, *flags, *defines, OPTIMISE, "-c", str(SOURCES / "sm_dispatch.c")]
+            + ["-o", dispatch]
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         # Link to a temporary name and rename, so a process that has the old
         # library mapped keeps a whole file.
         staging = str(output) + ".new"
-        _run([*compiler, "-shared", *flags, *objects, dispatch, "-lm", "-o", staging])
+        _run([*compiler, "-shared", *flags, OPTIMISE, *objects, dispatch, "-lm", "-o", staging])
         os.replace(staging, output)
     return output
 

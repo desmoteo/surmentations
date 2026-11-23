@@ -1,4 +1,4 @@
-"""The native kernels are plain C that relies on the compiler to vectorise.
+"""The native kernels are plain C that relies on the compiler to vectorise, at -O3.
 
 That reliance failed twice while the kernels were written: one loop was left
 scalar when inlined into its caller, and again when a test program called it
@@ -78,3 +78,45 @@ def test_the_build_never_enables_fast_math() -> None:
     flags = set(build.COMMON_FLAGS) | {flag for _, extra in build.tiers() for flag in extra}
     assert "-ffp-contract=off" in flags
     assert not flags & {"-ffast-math", "-Ofast", "-funsafe-math-optimizations", "-mfma"}
+
+
+def test_every_command_ends_at_o3_whatever_it_is_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A compiler or extra flags that ask for less are overruled: GCC and Clang
+    take the last -O, and the build puts -O3 last on every command."""
+    build = _hatch_build()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(build, "_run", lambda command: commands.append(command))
+    monkeypatch.setattr(build, "find_compiler", lambda: "cc -O0")
+    monkeypatch.setattr(build.os, "replace", lambda *_args: None)
+    build.build_native(output_dir=tmp_path, extra_flags=["-O1", "-Os"])
+    assert commands, "the build ran no command"
+    for command in commands:
+        levels = [flag for flag in command if re.fullmatch(r"-O\w*", flag)]
+        assert levels[-1] == "-O3", f"ends at {levels[-1]}: {' '.join(command)}"
+
+
+def test_the_built_library_was_compiled_at_o3() -> None:
+    """The library in the package records its command lines (ELF only): every
+    compile in it ended at -O3."""
+    import shutil
+    import sys
+
+    library = ROOT / "src" / "surmentations" / "_native" / build_name()
+    if not library.exists() or not sys.platform.startswith("linux") or not shutil.which("readelf"):
+        pytest.skip("needs the library built on Linux, and readelf")
+    dump = subprocess.run(
+        ["readelf", "-p", ".GCC.command.line", str(library)], capture_output=True, text=True
+    ).stdout
+    lines = [line for line in dump.splitlines() if "-O" in line]
+    if not lines:
+        pytest.skip("this library was built before its command lines were recorded")
+    for line in lines:
+        levels = re.findall(r"(?<!\S)-O\w*", line)
+        assert levels[-1] == "-O3", line
+
+
+def build_name() -> str:
+    """The library's file name on this platform, as the build hook names it."""
+    return _hatch_build().library_name()
