@@ -1066,7 +1066,9 @@ def road_vehicles(
         # Its foot is the lowest of it, and its road is the one most of
         # the ground about its foot belongs to: the one pixel under the
         # middle of its box is as often a kerb, a shadow or another car.
-        low = rows >= top + 0.6 * tall
+        # Never above its bottom row: a sliver a row or two tall, cut by
+        # the frame's edge, has no row as low as the fraction alone asks.
+        low = rows >= min(top + 0.6 * tall, top + tall - 1)
         row = min(top + tall - 1, height - 1)
         column = min(int(np.median(columns[low])), width - 1)
         reach = max(2, tall // 4)

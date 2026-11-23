@@ -934,6 +934,22 @@ def test_spray_goes_with_speed() -> None:
     assert reach[1] < 0.05 * reach[3], "a wake as long at town speed as on a motorway"
 
 
+def test_a_vehicle_a_row_or_two_tall_still_has_a_foot() -> None:
+    """Its foot is found in its lowest rows, and a sliver one or two pixels
+    tall, a vehicle cut by the frame's edge or a scrap of a label, has no
+    row that low by the fraction alone: the median of nothing was a NaN,
+    and taking it for a column failed the frame."""
+    mask, _lanes = _straight_lanes()
+    frame = road_frame(mask)
+    assert frame is not None
+    for tall in (1, 2):
+        vehicles = np.zeros((HEIGHT, WIDTH), dtype=bool)
+        vehicles[150 : 150 + tall, 100:160] = True
+        traffic = road_vehicles(frame, vehicles, np.random.default_rng(0), speed_kmh=80.0)
+        assert len(traffic) == 1
+        assert 100 <= traffic[0].foot[1] < 160
+
+
 def test_speeds_are_spread_about_each_road_s_mean_and_a_lorry_keeps_to_its_limit() -> None:
     """Normal about the road's mean, with a spread of a ninth to a fifth of
     it, and the road's mean a little either side of the frame's."""
