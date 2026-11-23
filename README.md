@@ -608,6 +608,47 @@ two transforms at `p=0.3` fire together or not at all, for ever. These
 containers give each child a seed of its own, drawn from the seed and its
 place, so the same seed still gives the same pictures.
 
+### Labels an effect leaves illegible
+
+Every effect changes the picture and leaves the labels as they were, so a
+box round a car is still there after fog or a night has taken the car.
+`LabelLegibility`, last in a pipeline, judges each labelled object against
+the frame the pipeline was given and deals with the label of one that can
+no longer be made out:
+
+```python
+from surmentations.base import Compose
+from surmentations.legibility import LabelLegibility
+from surmentations.presets import surveillance
+
+pipeline = surveillance(provider)
+transform = Compose(
+    [*pipeline.transforms, LabelLegibility(task="recognise", on_doubt="ignore")],
+    bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+)
+out = transform(image=image, bboxes=boxes, labels=labels)
+out["bboxes"], out["ignore_regions"]   # kept boxes; regions for the loss to leave out
+```
+
+- **Where the object's pixels were replaced** (tape, a cap of snow, a
+  privacy mask, a leaf), its label goes and a semantic mask's pixels become
+  background. The transforms that replace pixels say where, exactly.
+- **Where it can no longer be made out** (fog, the dark, noise, a smear),
+  `on_doubt` decides. `"ignore"`, the default, suppresses the label: it
+  leaves the labels and its region comes back under `ignore_regions`, for a
+  loss to count neither as an object nor as background; a semantic mask's
+  pixels become `ignore_index`. `"drop"` removes it; `"blank"` removes it
+  and paints the object out with its surroundings; `"keep"` keeps it.
+- **How it judges**: the finest detail still resolved across the object,
+  octave by octave, where the clean frame's edges still stand clear of the
+  noise in log light; Johnson's criteria for the task (1, 4 or 6.4 cycles
+  to detect, recognise or identify) give a probability, relative to the
+  clean frame's, and a label is kept from `keep_at` (0.5).
+
+It adds about 13 ms a frame of eight objects on one core.
+[`docs/label_legibility_assessment.md`](docs/label_legibility_assessment.md)
+has the design.
+
 ---
 
 ## Performance
