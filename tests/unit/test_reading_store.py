@@ -14,6 +14,7 @@ from __future__ import annotations
 import pickle
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -328,3 +329,44 @@ def test_the_usual_place_is_the_user_s_cache(
     provider = SharedDepthProvider(_Depth(), disk_cache=True)
     provider.get_depth(_frame())
     assert len(list((tmp_path / "named").rglob("*.npz"))) == 1
+
+
+def test_a_reduced_frame_is_read_from_the_reading_kept_for_its_original(tmp_path: Path) -> None:
+    """A loader that runs the pipeline at the size the network sees: the
+    frame at its own size was read once and kept; its reduction is read from
+    that, with no network run and nothing new kept, every reading at the
+    reduced frame's size."""
+    first, asked = _full(tmp_path)
+    original = _frame()
+    first.get_depth(original)
+    assert _calls(asked) == [1, 1, 1]
+
+    second, asked_again = _full(tmp_path)
+    again = original.copy()
+    small = cv2.resize(again, (WIDTH // 2, HEIGHT // 2), interpolation=cv2.INTER_AREA)
+    second.resized(small, again)
+    assert _calls(asked_again) == [0, 0, 0], "a network ran for the reduced frame"
+    assert second.disk_cache_info() == (1, 0, 0, 0)
+
+    depth = second.get_depth(small)
+    assert depth.shape == small.shape[:2]
+    expected = cv2.resize(
+        first.get_depth(original), (WIDTH // 2, HEIGHT // 2), interpolation=cv2.INTER_AREA
+    )
+    assert np.allclose(depth, expected, atol=1e-6)
+    labels = second.get_labels(small)
+    assert labels is not None and labels.shape == small.shape[:2]
+    assert (labels == int(SceneClass.VEHICLE)).any()
+    views = second.get_vehicles(small)
+    assert views is not None and len(views) == 2
+    assert views[0].box == (5, 15, 10, 5), "the vehicle's box is halved"
+    assert np.allclose(views[0].lamps[:, :4], [[6.0, 18.0, 0.75, 0.5], [13.0, 18.0, 0.75, 0.5]])
+    assert np.allclose(second.get_street_lamps(small)[0, :6], [25.0, 1.0, 26.5, 15.0, 25.5, 1.5])
+    assert np.allclose(second.get_signs(small)[0, :4], [2.5, 3.0, 4.5, 6.0])
+    assert second.disk_cache_info() == (1, 0, 0, 0), "nothing kept for the reduced frame"
+
+
+def test_a_frame_that_is_not_the_original_reduced_is_refused(tmp_path: Path) -> None:
+    provider, _asked = _full(tmp_path)
+    with pytest.raises(ValueError, match="same picture"):
+        provider.resized(np.zeros((HEIGHT // 2, WIDTH, 3), np.uint8), _frame())

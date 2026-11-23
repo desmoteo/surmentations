@@ -794,6 +794,76 @@ class SharedDepthProvider:
                 scene.geometry = geometry
             scene.fov = scene.pitch = scene.metric = None
 
+    def resized(self, image: np.ndarray, original: np.ndarray) -> None:
+        """Read ``image`` as ``original`` at another size, before a pipeline runs on ``image``.
+
+        The original is read as any frame is: found on disk where its
+        reading is kept, else by the networks. Every reading is then brought
+        to ``image``'s size: depth by area, labels by nearest, the vehicles,
+        street lamps and signs scaled, the camera's geometry as it is. Nothing
+        is estimated on ``image``, which is what sets this apart from
+        :meth:`remember` with ``original``: there depth is the reduced frame's
+        own, and a reading kept for the full-size frame is not used.
+
+        For a training loader that runs the pipeline at the size the network
+        sees: a frame of a third of the pixels costs the transforms about a
+        third, and the readings are the ones made for the frames as they
+        were taken. It must be the same picture: the same shape to within a
+        fiftieth.
+
+        Where the original's reading is on disk it is loaded and nothing is
+        made of the original itself: the camera's geometry, which does not
+        depend on the size, is worked out on ``image``, at a fraction of the
+        cost. Otherwise the original is read as a scene of its own first.
+        """
+        frame, source = _reference_frame(image), _reference_frame(original)
+        across, down = frame.shape[1] / source.shape[1], frame.shape[0] / source.shape[0]
+        if abs(across / down - 1.0) > 0.02:
+            raise ValueError(
+                f"original is {source.shape[1]} x {source.shape[0]} and the frame "
+                f"{frame.shape[1]} x {frame.shape[0]}: not the same picture at another size"
+            )
+        with self._lock:
+            key = self._store_key(source, source)
+            kept = None
+            if key is not None and self._store is not None and self._find(original) is None:
+                kept = self._store.load(key, source.shape[:2])
+            read: Any = kept if kept is not None else self._scene_for(original)
+            held = self._find(image)
+            if held is not None:
+                self._scenes.remove(held)
+            size = (frame.shape[1], frame.shape[0])
+            shrink = cv2.INTER_AREA if across < 1.0 else cv2.INTER_LINEAR
+            depth = cv2.resize(
+                read.depth.astype(np.float32, copy=False), size, interpolation=shrink
+            )
+            depth.flags.writeable = False
+            scene = _Scene(depth, image)
+            if read.labels is not None:
+                labels = cv2.resize(read.labels, size, interpolation=cv2.INTER_NEAREST)
+                labels.flags.writeable = False
+                scene.labels = labels
+            scene.disparity = self._estimator.disparity(depth)
+            if kept is None:
+                scene.geometry = read.geometry
+            elif isinstance(self._geometry, GeometryEstimator):
+                scene.geometry = self._geometry.estimate(frame, scene.disparity, scene.labels)
+            else:
+                scene.geometry = self._geometry
+            if read.vehicles is not None:
+                views = [scaled_view(view, across, down, frame.shape[:2]) for view in read.vehicles]
+                scene.vehicles = [view for view in views if view.box[2] > 0 and view.box[3] > 0]
+            if read.street_lamps is not None:
+                scene.street_lamps = read.street_lamps * np.array(
+                    [across, down, across, down, across, down, 1.0], dtype=np.float32
+                )
+            if read.signs is not None:
+                scene.signs = read.signs * np.array(
+                    [across, down, across, down, 1.0], dtype=np.float32
+                )
+            self._scenes.append(scene)
+            self._prune()
+
     def settle_camera(
         self,
         image: np.ndarray,
